@@ -576,38 +576,98 @@ async def websocket_playbook_run(websocket: WebSocket, run_id: str, use_ai: bool
         cleanup_run(run_id)
 
 
-# Server-side install commands — the frontend only sends the tool name
-_INSTALL_COMMANDS: dict[str, str] = {
-    "nmap":         "sudo apt-get install -y nmap",
-    "nikto":        "sudo apt-get install -y nikto",
-    "testssl":      "sudo apt-get install -y testssl.sh",
-    "lynis":        "sudo apt-get install -y lynis",
-    "openscap":     "sudo apt-get install -y openscap-scanner",
-    "masscan":      "sudo apt-get install -y masscan",
-    "gobuster":     "sudo apt-get install -y gobuster",
-    "sqlmap":       "sudo apt-get install -y sqlmap",
-    "hydra":        "sudo apt-get install -y hydra",
-    "whois":        "sudo apt-get install -y whois",
-    "dig":          "sudo apt-get install -y dnsutils",
-    "theHarvester": "sudo apt-get install -y theharvester",
-    "enum4linux":   "sudo apt-get install -y enum4linux",
-    "smbclient":    "sudo apt-get install -y smbclient",
-    "netdiscover":  "sudo apt-get install -y netdiscover",
-    "wfuzz":        "sudo apt-get install -y wfuzz",
-    "xsser":        "sudo apt-get install -y xsser",
-    "weevely":      "sudo apt-get install -y weevely",
-    "searchsploit": "sudo apt-get install -y exploitdb",
-    "aws":          "sudo apt-get install -y awscli",
-    "subfinder":    "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
-    "ffuf":         "go install github.com/ffuf/ffuf/v2@latest",
+# Per-tool package names by package manager.
+# Keys: apt | dnf | pacman | brew | apk | zypper | go (go install path)
+_TOOL_PKGS: dict[str, dict[str, str]] = {
+    "nmap":         {"apt": "nmap",             "dnf": "nmap",           "pacman": "nmap",        "brew": "nmap",          "apk": "nmap",       "zypper": "nmap"},
+    "nikto":        {"apt": "nikto",            "dnf": "nikto",          "pacman": "nikto",       "brew": "nikto",         "apk": "nikto",      "zypper": "nikto"},
+    "testssl":      {"apt": "testssl.sh",       "pacman": "testssl.sh",  "brew": "testssl"},
+    "lynis":        {"apt": "lynis",            "dnf": "lynis",          "pacman": "lynis",       "brew": "lynis",         "zypper": "lynis"},
+    "openscap":     {"apt": "openscap-scanner", "dnf": "openscap-scanner", "zypper": "openscap"},
+    "masscan":      {"apt": "masscan",          "dnf": "masscan",        "pacman": "masscan",     "brew": "masscan"},
+    "gobuster":     {"apt": "gobuster",         "brew": "gobuster",      "go": "github.com/OJ/gobuster/v3@latest"},
+    "sqlmap":       {"apt": "sqlmap",           "dnf": "sqlmap",         "pacman": "sqlmap",      "brew": "sqlmap"},
+    "hydra":        {"apt": "hydra",            "dnf": "hydra",          "pacman": "hydra",       "brew": "hydra"},
+    "whois":        {"apt": "whois",            "dnf": "whois",          "pacman": "whois",       "brew": "whois"},
+    "dig":          {"apt": "dnsutils",         "dnf": "bind-utils",     "pacman": "bind",        "brew": "bind",          "apk": "bind-tools", "zypper": "bind-utils"},
+    "theHarvester": {"apt": "theharvester",     "brew": "theharvester"},
+    "subfinder":    {"brew": "subfinder",       "go": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"},
+    "enum4linux":   {"apt": "enum4linux",       "pacman": "enum4linux"},
+    "smbclient":    {"apt": "smbclient",        "dnf": "samba-client",   "pacman": "smbclient",   "brew": "samba"},
+    "netdiscover":  {"apt": "netdiscover",      "dnf": "netdiscover"},
+    "wfuzz":        {"apt": "wfuzz",            "brew": "wfuzz"},
+    "xsser":        {"apt": "xsser"},
+    "weevely":      {"apt": "weevely"},
+    "searchsploit": {"apt": "exploitdb",        "pacman": "exploitdb",   "brew": "exploitdb"},
+    "aws":          {"apt": "awscli",           "dnf": "awscli",         "pacman": "aws-cli",     "brew": "awscli",        "zypper": "aws-cli"},
+    "hashcat":      {"apt": "hashcat",          "dnf": "hashcat",        "pacman": "hashcat",     "brew": "hashcat"},
+    "john":         {"apt": "john",             "dnf": "john",           "pacman": "john",        "brew": "john"},
+    "ffuf":         {"brew": "ffuf",            "go": "github.com/ffuf/ffuf/v2@latest"},
 }
+
+
+def _detect_pkg_manager() -> str:
+    import shutil as _shutil
+    try:
+        with open("/etc/os-release") as f:
+            content = f.read()
+        import re as _re
+        id_match = _re.search(r'^ID="?([^"\n]+)"?', content, _re.MULTILINE)
+        like_match = _re.search(r'^ID_LIKE="?([^"\n]+)"?', content, _re.MULTILINE)
+        distro_id = (id_match.group(1) if id_match else "").lower()
+        id_like = (like_match.group(1) if like_match else "").lower()
+        if distro_id in ("ubuntu", "debian", "kali", "parrot", "raspbian", "linuxmint") or "debian" in id_like:
+            return "apt"
+        if distro_id in ("fedora", "rhel", "centos", "almalinux", "rocky") or "fedora" in id_like or "rhel" in id_like:
+            return "dnf" if _shutil.which("dnf") else "yum"
+        if distro_id in ("arch", "manjaro", "endeavouros") or "arch" in id_like:
+            return "pacman"
+        if distro_id == "alpine":
+            return "apk"
+        if "suse" in distro_id or "suse" in id_like:
+            return "zypper"
+    except FileNotFoundError:
+        pass
+    import platform as _platform
+    if _platform.system() == "Darwin":
+        return "brew"
+    for mgr in ("apt", "dnf", "yum", "pacman", "apk", "zypper"):
+        if _shutil.which(mgr):
+            return mgr
+    return "apt"
+
+
+def _get_install_command(tool_name: str) -> str | None:
+    pkgs = _TOOL_PKGS.get(tool_name)
+    if not pkgs:
+        return None
+    mgr = _detect_pkg_manager()
+    pkg = pkgs.get(mgr)
+    if pkg:
+        if mgr == "apt":
+            return f"sudo apt-get install -y {pkg}"
+        if mgr in ("dnf", "yum"):
+            return f"sudo {mgr} install -y {pkg}"
+        if mgr == "pacman":
+            return f"sudo pacman -S --noconfirm {pkg}"
+        if mgr == "apk":
+            return f"sudo apk add {pkg}"
+        if mgr == "zypper":
+            return f"sudo zypper install -y {pkg}"
+        if mgr == "brew":
+            return f"brew install {pkg}"
+    # Fall back to go install if available
+    go_path = pkgs.get("go")
+    if go_path:
+        return f"go install {go_path}"
+    return None
 
 
 @router.websocket("/ws/install/{tool_name}")
 async def websocket_install(websocket: WebSocket, tool_name: str):
     """Run the install command for a known tool and stream output."""
     await websocket.accept()
-    command = _INSTALL_COMMANDS.get(tool_name)
+    command = _get_install_command(tool_name)
     if not command:
         await websocket.send_json({"type": "error", "data": f"Unknown tool: {tool_name}"})
         await websocket.close()

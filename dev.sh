@@ -77,8 +77,15 @@ trap cleanup EXIT INT TERM
     python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 2>&1 | prefix "backend" "$CYAN"
 ) &
 
-# Small delay so backend starts first
-sleep 1
+# Wait for backend to be ready before starting frontend
+echo -e "${CYAN}[dev] Waiting for backend...${RESET}"
+for i in $(seq 1 30); do
+    if curl -sf http://127.0.0.1:8000/api/v1/auth/setup-required > /dev/null 2>&1; then
+        echo -e "${GREEN}[dev] Backend ready${RESET}"
+        break
+    fi
+    sleep 1
+done
 
 # Start frontend
 (

@@ -23,24 +23,73 @@ interface Profile {
   created_at: string
 }
 
-const INSTALL_COMMANDS: Record<string, string> = {
-  nmap: 'sudo apt install -y nmap',
-  nikto: 'sudo apt install -y nikto',
-  testssl: 'sudo apt install -y testssl.sh',
-  lynis: 'sudo apt install -y lynis',
-  openscap: 'sudo apt install -y openscap-scanner',
-  masscan: 'sudo apt install -y masscan',
-  gobuster: 'sudo apt install -y gobuster',
-  sqlmap: 'sudo apt install -y sqlmap',
-  hydra: 'sudo apt install -y hydra',
-  whois: 'sudo apt install -y whois',
-  dig: 'sudo apt install -y dnsutils',
-  theHarvester: 'sudo apt install -y theharvester',
-  subfinder: 'go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest',
-  enum4linux: 'sudo apt install -y enum4linux',
-  ffuf: 'go install github.com/ffuf/ffuf/v2@latest',
-  searchsploit: 'sudo apt install -y exploitdb',
-  aws: 'sudo apt install -y awscli',
+interface HostInfo {
+  os: string
+  distro_id: string
+  distro_name: string
+  pkg_manager: string
+}
+
+// Per-tool package names keyed by package manager
+const TOOL_PKGS: Record<string, Partial<Record<string, string>>> = {
+  nmap:         { apt: 'nmap',             dnf: 'nmap',           pacman: 'nmap',        brew: 'nmap',          apk: 'nmap',       zypper: 'nmap' },
+  nikto:        { apt: 'nikto',            dnf: 'nikto',          pacman: 'nikto',       brew: 'nikto',         apk: 'nikto',      zypper: 'nikto' },
+  testssl:      { apt: 'testssl.sh',       pacman: 'testssl.sh',  brew: 'testssl' },
+  lynis:        { apt: 'lynis',            dnf: 'lynis',          pacman: 'lynis',       brew: 'lynis',         zypper: 'lynis' },
+  openscap:     { apt: 'openscap-scanner', dnf: 'openscap-scanner', zypper: 'openscap' },
+  masscan:      { apt: 'masscan',          dnf: 'masscan',        pacman: 'masscan',     brew: 'masscan' },
+  gobuster:     { apt: 'gobuster',         brew: 'gobuster',      go: 'github.com/OJ/gobuster/v3@latest' },
+  sqlmap:       { apt: 'sqlmap',           dnf: 'sqlmap',         pacman: 'sqlmap',      brew: 'sqlmap' },
+  hydra:        { apt: 'hydra',            dnf: 'hydra',          pacman: 'hydra',       brew: 'hydra' },
+  whois:        { apt: 'whois',            dnf: 'whois',          pacman: 'whois',       brew: 'whois' },
+  dig:          { apt: 'dnsutils',         dnf: 'bind-utils',     pacman: 'bind',        brew: 'bind',          apk: 'bind-tools', zypper: 'bind-utils' },
+  theHarvester: { apt: 'theharvester',     brew: 'theharvester' },
+  subfinder:    { brew: 'subfinder',       go: 'github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest' },
+  enum4linux:   { apt: 'enum4linux',       pacman: 'enum4linux' },
+  ffuf:         { brew: 'ffuf',            go: 'github.com/ffuf/ffuf/v2@latest' },
+  searchsploit: { apt: 'exploitdb',        pacman: 'exploitdb',   brew: 'exploitdb' },
+  aws:          { apt: 'awscli',           dnf: 'awscli',         pacman: 'aws-cli',     brew: 'awscli',        zypper: 'aws-cli' },
+  hashcat:      { apt: 'hashcat',          dnf: 'hashcat',        pacman: 'hashcat',     brew: 'hashcat' },
+  john:         { apt: 'john',             dnf: 'john',           pacman: 'john',        brew: 'john' },
+}
+
+function getInstallCmd(toolName: string, hostInfo: HostInfo | null): string {
+  const pkgs = TOOL_PKGS[toolName]
+  if (!pkgs) return ''
+  const mgr = hostInfo?.pkg_manager || 'apt'
+  const pkg = pkgs[mgr]
+  if (pkg) {
+    if (mgr === 'apt') return `sudo apt-get install -y ${pkg}`
+    if (mgr === 'dnf' || mgr === 'yum') return `sudo ${mgr} install -y ${pkg}`
+    if (mgr === 'pacman') return `sudo pacman -S --noconfirm ${pkg}`
+    if (mgr === 'apk') return `sudo apk add ${pkg}`
+    if (mgr === 'zypper') return `sudo zypper install -y ${pkg}`
+    if (mgr === 'brew') return `brew install ${pkg}`
+  }
+  // Fall back to go install
+  const go = pkgs['go']
+  if (go) return `go install ${go}`
+  return ''
+}
+
+function getBulkInstallCmd(toolNames: string[], hostInfo: HostInfo | null): string {
+  const mgr = hostInfo?.pkg_manager || 'apt'
+  const pkgList = toolNames
+    .map(n => TOOL_PKGS[n]?.[mgr])
+    .filter(Boolean) as string[]
+  if (!pkgList.length) return ''
+  if (mgr === 'apt') return `sudo apt-get update && sudo apt-get install -y ${pkgList.join(' ')}`
+  if (mgr === 'dnf' || mgr === 'yum') return `sudo ${mgr} install -y ${pkgList.join(' ')}`
+  if (mgr === 'pacman') return `sudo pacman -S --noconfirm ${pkgList.join(' ')}`
+  if (mgr === 'apk') return `sudo apk add ${pkgList.join(' ')}`
+  if (mgr === 'zypper') return `sudo zypper install -y ${pkgList.join(' ')}`
+  if (mgr === 'brew') return `brew install ${pkgList.join(' ')}`
+  return ''
+}
+
+const PKG_MANAGER_LABELS: Record<string, string> = {
+  apt: 'Debian / Ubuntu', dnf: 'Fedora / RHEL', yum: 'CentOS / RHEL',
+  pacman: 'Arch Linux', apk: 'Alpine', zypper: 'openSUSE', brew: 'macOS (Homebrew)',
 }
 
 interface AIConfig {
@@ -62,6 +111,7 @@ export default function Settings() {
   const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
   const [toolStatus, setToolStatus] = useState<Record<string, ToolInfo>>({})
+  const [hostInfo, setHostInfo] = useState<HostInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState('')
   const [profiles, setProfiles] = useState<Profile[]>([])
@@ -180,8 +230,12 @@ export default function Settings() {
   async function loadTools() {
     setLoading(true)
     try {
-      const res = await fetch('/api/v1/settings/tools')
-      setToolStatus(await res.json())
+      const [toolRes, hostRes] = await Promise.all([
+        fetch('/api/v1/settings/tools'),
+        fetch('/api/v1/settings/host-info'),
+      ])
+      setToolStatus(await toolRes.json())
+      if (hostRes.ok) setHostInfo(await hostRes.json())
     } finally {
       setLoading(false)
     }
@@ -375,16 +429,11 @@ export default function Settings() {
   const available = Object.entries(toolStatus).filter(([, v]) => v.available)
   const missing = Object.entries(toolStatus).filter(([, v]) => !v.available)
 
-  const aptMissing = missing.filter(([name]) => {
-    const cmd = INSTALL_COMMANDS[name] || ''
-    return cmd.startsWith('sudo apt')
-  }).map(([name]) => {
-    const match = INSTALL_COMMANDS[name]?.match(/apt install -y (.+)/)
-    return match?.[1] || name
-  })
-
-  const goMissing = missing.filter(([name]) => INSTALL_COMMANDS[name]?.startsWith('go install'))
-  const aptInstallCmd = aptMissing.length > 0 ? `sudo apt update && sudo apt install -y ${aptMissing.join(' ')}` : ''
+  const mgr = hostInfo?.pkg_manager || 'apt'
+  const missingNames = missing.map(([name]) => name)
+  const pkgMgrMissing = missingNames.filter(n => TOOL_PKGS[n]?.[mgr])
+  const goMissing = missing.filter(([name]) => !TOOL_PKGS[name]?.[mgr] && TOOL_PKGS[name]?.['go'])
+  const bulkInstallCmd = getBulkInstallCmd(pkgMgrMissing, hostInfo)
 
   return (
     <div className="p-8 space-y-6">
@@ -449,25 +498,32 @@ export default function Settings() {
           {/* Quick Install Banner */}
           {missing.length > 0 && (
             <div className="rounded-xl p-5 space-y-4 border border-amber-700/30" style={{ background: 'rgba(120,53,15,0.15)' }}>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Package size={16} className="text-amber-400" />
                 <h3 className="text-sm font-semibold text-amber-300">{missing.length} tools not installed</h3>
+                {hostInfo && (
+                  <span className="ml-auto text-xs text-slate-500 font-mono px-2 py-0.5 rounded border border-slate-700/40" style={{ background: '#0d1520' }}>
+                    {hostInfo.distro_name} · {PKG_MANAGER_LABELS[mgr] || mgr}
+                  </span>
+                )}
               </div>
 
-              {aptInstallCmd && (
+              {bulkInstallCmd && (
                 <div>
-                  <div className="text-xs text-slate-400 mb-2">Install all missing apt tools at once:</div>
+                  <div className="text-xs text-slate-400 mb-2">
+                    Install all {pkgMgrMissing.length} missing tools at once:
+                  </div>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 rounded px-3 py-2 text-xs font-mono text-slate-300 overflow-x-auto border border-cyan-900/20" style={{ background: '#05080d' }}>
-                      {aptInstallCmd}
+                      {bulkInstallCmd}
                     </code>
                     <button
-                      onClick={() => copyText(aptInstallCmd, 'apt-all')}
+                      onClick={() => copyText(bulkInstallCmd, 'bulk-all')}
                       className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded text-xs text-amber-300 transition-colors border border-amber-700/30 hover:border-amber-600/50"
                       style={{ background: 'rgba(120,53,15,0.3)' }}
                     >
-                      {copied === 'apt-all' ? <Check size={12} /> : <Copy size={12} />}
-                      {copied === 'apt-all' ? 'Copied!' : 'Copy'}
+                      {copied === 'bulk-all' ? <Check size={12} /> : <Copy size={12} />}
+                      {copied === 'bulk-all' ? 'Copied!' : 'Copy'}
                     </button>
                   </div>
                 </div>
@@ -475,22 +531,25 @@ export default function Settings() {
 
               {goMissing.length > 0 && (
                 <div>
-                  <div className="text-xs text-slate-400 mb-2">Go-installed tools (requires Go):</div>
+                  <div className="text-xs text-slate-400 mb-2">Install via Go (requires <code className="text-cyan-400">go</code> on PATH):</div>
                   <div className="space-y-1">
-                    {goMissing.map(([name]) => (
-                      <div key={name} className="flex items-center gap-2">
-                        <code className="flex-1 rounded px-3 py-1.5 text-xs font-mono text-slate-300 border border-cyan-900/20" style={{ background: '#05080d' }}>
-                          {INSTALL_COMMANDS[name]}
-                        </code>
-                        <button
-                          onClick={() => copyText(INSTALL_COMMANDS[name] || '', `go-${name}`)}
-                          className="flex-shrink-0 px-2 py-1.5 rounded text-xs text-slate-400 hover:text-slate-200 border border-cyan-900/20 hover:border-cyan-900/40"
-                          style={{ background: '#0d1520' }}
-                        >
-                          {copied === `go-${name}` ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
-                        </button>
-                      </div>
-                    ))}
+                    {goMissing.map(([name]) => {
+                      const cmd = `go install ${TOOL_PKGS[name]?.['go']}`
+                      return (
+                        <div key={name} className="flex items-center gap-2">
+                          <code className="flex-1 rounded px-3 py-1.5 text-xs font-mono text-slate-300 border border-cyan-900/20" style={{ background: '#05080d' }}>
+                            {cmd}
+                          </code>
+                          <button
+                            onClick={() => copyText(cmd, `go-${name}`)}
+                            className="flex-shrink-0 px-2 py-1.5 rounded text-xs text-slate-400 hover:text-slate-200 border border-cyan-900/20 hover:border-cyan-900/40"
+                            style={{ background: '#0d1520' }}
+                          >
+                            {copied === `go-${name}` ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -529,13 +588,13 @@ export default function Settings() {
                   ) : (
                     <div className="space-y-2">
                       <div className="text-xs text-red-400">Not installed</div>
-                      {INSTALL_COMMANDS[name] && (
+                      {getInstallCmd(name, hostInfo) && (
                         <div className="flex items-center gap-2">
                           <code className="flex-1 text-xs font-mono text-slate-400 truncate">
-                            {INSTALL_COMMANDS[name]}
+                            {getInstallCmd(name, hostInfo)}
                           </code>
                           <button
-                            onClick={() => copyText(INSTALL_COMMANDS[name] || '', `tool-${name}`)}
+                            onClick={() => copyText(getInstallCmd(name, hostInfo), `tool-${name}`)}
                             className="flex-shrink-0 text-slate-500 hover:text-slate-300"
                           >
                             {copied === `tool-${name}` ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}

@@ -107,6 +107,59 @@ def get_tool_status():
     return detect_tools()
 
 
+@app.get(f"{API_PREFIX}/settings/host-info")
+def get_host_info():
+    """Return OS type and package manager for the host running Seraph."""
+    import platform as _platform
+    import shutil as _shutil
+
+    system = _platform.system().lower()  # "linux" | "darwin" | "windows"
+
+    if system == "linux":
+        os_release: dict[str, str] = {}
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line:
+                        k, _, v = line.partition("=")
+                        os_release[k] = v.strip('"')
+        except FileNotFoundError:
+            pass
+
+        distro_id = os_release.get("ID", "").lower()
+        id_like = os_release.get("ID_LIKE", "").lower()
+        distro_name = os_release.get("PRETTY_NAME", distro_id or "Linux")
+
+        # Detect package manager from distro identity
+        if distro_id in ("ubuntu", "debian", "linuxmint", "kali", "parrot", "raspbian") or "debian" in id_like:
+            pkg_manager = "apt"
+        elif distro_id in ("fedora", "rhel", "centos", "almalinux", "rocky", "ol") or "fedora" in id_like or "rhel" in id_like:
+            pkg_manager = "dnf" if _shutil.which("dnf") else "yum"
+        elif distro_id in ("arch", "manjaro", "endeavouros", "garuda") or "arch" in id_like:
+            pkg_manager = "pacman"
+        elif distro_id == "alpine" or "alpine" in id_like:
+            pkg_manager = "apk"
+        elif distro_id in ("opensuse", "sles") or "suse" in id_like:
+            pkg_manager = "zypper"
+        else:
+            # Fall back to which-detection
+            for mgr in ("apt", "dnf", "yum", "pacman", "apk", "zypper"):
+                if _shutil.which(mgr):
+                    pkg_manager = mgr
+                    break
+            else:
+                pkg_manager = "unknown"
+
+        return {"os": "linux", "distro_id": distro_id, "distro_name": distro_name, "pkg_manager": pkg_manager}
+
+    elif system == "darwin":
+        return {"os": "macos", "distro_id": "macos", "distro_name": "macOS", "pkg_manager": "brew"}
+
+    else:
+        return {"os": system, "distro_id": system, "distro_name": system.title(), "pkg_manager": "unknown"}
+
+
 @app.get(f"{API_PREFIX}/settings/auto-probe")
 def get_auto_probe_settings(db=None):
     from database import get_db, AppSetting
