@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="Seraph Security Platform" width="100%">
+</p>
+
 # Seraph
 
 A self-hosted security assessment platform combining compliance auditing, penetration testing workflows, credential management, vulnerability tracking, and AI-assisted analysis in a single unified interface.
