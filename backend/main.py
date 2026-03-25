@@ -40,10 +40,27 @@ from services.playbook_runner import seed_builtin_playbooks
 from services.listener_manager import initialize_listeners
 
 
+def _reset_stale_scans():
+    """Mark any scans left in running/pending state as failed — they died with the previous process."""
+    from database import get_db, Scan
+    db = next(get_db())
+    try:
+        stale = db.query(Scan).filter(Scan.status.in_(["running", "pending"])).all()
+        for scan in stale:
+            scan.status = "failed"
+        if stale:
+            db.commit()
+            import logging
+            logging.getLogger(__name__).info("Reset %d stale scans to 'failed' on startup", len(stale))
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     create_tables()
+    _reset_stale_scans()
     initialize_registry()
     initialize_scheduler()
     initialize_listeners()

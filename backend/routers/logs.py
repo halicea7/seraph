@@ -5,7 +5,7 @@ from typing import Optional
 import re
 
 from database import get_db, AppSetting
-from services.ai_client import chat_complete
+from services.ai_client import chat_complete, load_llm_params
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 
@@ -256,7 +256,7 @@ def ai_triage(req: AITriageRequest, db: Session = Depends(get_db)):
     )
 
     try:
-        result = chat_complete(endpoint, model, [{"role": "user", "content": prompt}])
+        result = chat_complete(endpoint, model, [{"role": "user", "content": prompt}], **load_llm_params(db))
         return {"triage": result}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))

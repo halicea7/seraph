@@ -69,6 +69,7 @@ export interface Finding {
   evidence: string | null
   cve_id: string | null
   cvss_score: string | null
+  tags: string | null   // comma-separated, includes OWASP:A05:2021 / MITRE:T1046 / PCI:6 refs
   created_at: string
 }
 

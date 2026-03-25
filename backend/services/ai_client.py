@@ -12,6 +12,34 @@ def _base(endpoint: str) -> str:
     return endpoint.rstrip("/")
 
 
+def load_llm_params(db) -> dict:
+    """Read LLM generation parameters from AppSetting rows.
+
+    Returns a dict of kwargs suitable for passing to chat_complete(**kwargs).
+    Only includes keys whose values are actually stored (non-empty).
+    """
+    from database import AppSetting
+
+    keys = {
+        "temperature": float,
+        "top_p": float,
+        "top_k": int,
+        "min_p": float,
+        "presence_penalty": float,
+        "repetition_penalty": float,
+        "timeout": int,
+    }
+    params: dict = {}
+    for name, cast in keys.items():
+        row = db.query(AppSetting).filter(AppSetting.key == f"ai_{name}").first()
+        if row and row.value != "":
+            try:
+                params[name] = cast(row.value)
+            except (ValueError, TypeError):
+                pass
+    return params
+
+
 def fetch_models(endpoint: str) -> list[str]:
     """Return model IDs from the /v1/models endpoint."""
     url = f"{_base(endpoint)}/v1/models"
@@ -23,10 +51,34 @@ def fetch_models(endpoint: str) -> list[str]:
         raise RuntimeError(f"Cannot reach LLM at {endpoint}: {exc}") from exc
 
 
-def chat_complete(endpoint: str, model: str, messages: list[dict], timeout: int = 120) -> str:
+def chat_complete(
+    endpoint: str,
+    model: str,
+    messages: list[dict],
+    timeout: int = 300,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    min_p: float | None = None,
+    presence_penalty: float | None = None,
+    repetition_penalty: float | None = None,
+) -> str:
     """Synchronous chat completion — returns the assistant message text."""
     url = f"{_base(endpoint)}/v1/chat/completions"
-    payload = json.dumps({"model": model, "messages": messages, "stream": False}).encode()
+    body: dict = {"model": model, "messages": messages, "stream": False}
+    if temperature is not None:
+        body["temperature"] = temperature
+    if top_p is not None:
+        body["top_p"] = top_p
+    if top_k is not None:
+        body["top_k"] = top_k
+    if min_p is not None:
+        body["min_p"] = min_p
+    if presence_penalty is not None:
+        body["presence_penalty"] = presence_penalty
+    if repetition_penalty is not None:
+        body["repetition_penalty"] = repetition_penalty
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(
         url,
         data=payload,

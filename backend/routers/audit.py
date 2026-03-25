@@ -126,6 +126,8 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
 
     created = []
     for pf in parsed:
+        existing_tags = []
+        extra = ",".join(t for t in (pf.extra_tags or []) if t)
         finding = Finding(
             id=str(uuid.uuid4()),
             scan_id=scan_id,
@@ -136,11 +138,38 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
             framework=pf.framework,
             remediation=pf.remediation,
             evidence=pf.evidence,
+            cve_id=pf.cve_id,
+            tags=extra,
         )
         db.add(finding)
         created.append(finding)
 
     db.commit()
+
+    # Auto-enrich findings that already have a CVE ID extracted during parsing
+    findings_with_cve = [f for f in created if f.cve_id]
+    if findings_with_cve:
+        import threading
+        from services.cve_enricher import fetch_cve
+
+        def _enrich_bg():
+            from database import SessionLocal
+            bg_db = SessionLocal()
+            try:
+                for f in findings_with_cve:
+                    data = fetch_cve(f.cve_id)
+                    if data:
+                        row = bg_db.query(Finding).filter(Finding.id == f.id).first()
+                        if row:
+                            row.cvss_score = data.get("cvss_score")
+                            if not row.description and data.get("description"):
+                                row.description = data["description"]
+                bg_db.commit()
+            finally:
+                bg_db.close()
+
+        threading.Thread(target=_enrich_bg, daemon=True).start()
+
     return {"parsed": len(created), "findings": [{"id": f.id, "title": f.title, "severity": f.severity} for f in created]}
 
 

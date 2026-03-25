@@ -1,0 +1,17 @@
+{
+  "version": "PCI DSS v4.0",
+  "requirements": [
+    { "id": "PCI-1", "title": "Install and Maintain Network Security Controls", "description": "Network security controls (NSCs) restrict inbound and outbound network traffic to only that which is necessary.", "family": "Network Security" },
+    { "id": "PCI-2", "title": "Apply Secure Configurations", "description": "Malicious individuals use default passwords and settings of vendor-supplied accounts to compromise systems. Secure configurations must be applied to all system components.", "family": "Configuration" },
+    { "id": "PCI-3", "title": "Protect Stored Account Data", "description": "Protection methods such as encryption, truncation, masking, and hashing are critical components of cardholder data protection.", "family": "Data Protection" },
+    { "id": "PCI-4", "title": "Protect Cardholder Data with Strong Cryptography During Transmission", "description": "Sensitive information must be encrypted during transmission over open, public networks.", "family": "Cryptography" },
+    { "id": "PCI-5", "title": "Protect All Systems and Networks from Malicious Software", "description": "Malicious software (malware) exploits system vulnerabilities after entering the network. Anti-malware solutions must be deployed and maintained.", "family": "Malware Protection" },
+    { "id": "PCI-6", "title": "Develop and Maintain Secure Systems and Software", "description": "Security vulnerabilities in systems and applications may allow malicious individuals to gain privileged access. Patching and secure development practices are required.", "family": "Vulnerability Management" },
+    { "id": "PCI-7", "title": "Restrict Access to System Components and Cardholder Data by Business Need to Know", "description": "Ensure that only authorized personnel can access critical data. Implement role-based access controls.", "family": "Access Control" },
+    { "id": "PCI-8", "title": "Identify Users and Authenticate Access to System Components", "description": "Unique identification of users allows organizations to trace actions. Strong authentication mechanisms must be implemented.", "family": "Authentication" },
+    { "id": "PCI-9", "title": "Restrict Physical Access to Cardholder Data", "description": "Physical access to cardholder data or systems that hold such data provides the opportunity for individuals to access and remove devices.", "family": "Physical Security" },
+    { "id": "PCI-10", "title": "Log and Monitor All Access to System Components and Cardholder Data", "description": "Logging mechanisms and the ability to track user activities are critical to prevent, detect, or minimize the impact of a data compromise.", "family": "Logging and Monitoring" },
+    { "id": "PCI-11", "title": "Test Security of Systems and Networks Regularly", "description": "Vulnerabilities are continuously discovered. Systems, processes, and custom software should be tested frequently to ensure security controls continue to reflect a changing environment.", "family": "Security Testing" },
+    { "id": "PCI-12", "title": "Support Information Security with Organizational Policies and Programs", "description": "A strong security policy sets the security tone for the whole entity and informs personnel of their expected security behaviors.", "family": "Policy" }
+  ]
+}

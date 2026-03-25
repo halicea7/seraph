@@ -1,0 +1,35 @@
+{
+  "version": "MITRE ATT&CK v14 (Enterprise)",
+  "tactics": [
+    { "id": "TA0043", "name": "Reconnaissance", "description": "Gathering information to plan future adversary operations." },
+    { "id": "TA0001", "name": "Initial Access", "description": "Techniques to gain initial foothold within a network." },
+    { "id": "TA0002", "name": "Execution", "description": "Techniques resulting in adversary-controlled code running on a system." },
+    { "id": "TA0003", "name": "Persistence", "description": "Techniques used to keep access to systems across restarts and credential changes." },
+    { "id": "TA0004", "name": "Privilege Escalation", "description": "Techniques to gain higher-level permissions on a system or network." },
+    { "id": "TA0005", "name": "Defense Evasion", "description": "Techniques to avoid detection throughout the compromise." },
+    { "id": "TA0006", "name": "Credential Access", "description": "Stealing credentials such as account names and passwords." },
+    { "id": "TA0007", "name": "Discovery", "description": "Techniques to gain knowledge about the system and internal network." },
+    { "id": "TA0008", "name": "Lateral Movement", "description": "Techniques to enter and control remote systems on a network." },
+    { "id": "TA0011", "name": "Command and Control", "description": "Techniques to communicate with compromised systems within a victim network." },
+    { "id": "TA0010", "name": "Exfiltration", "description": "Techniques to steal data from your network." },
+    { "id": "TA0040", "name": "Impact", "description": "Techniques to disrupt availability or compromise integrity." }
+  ],
+  "techniques": [
+    { "id": "T1046",    "tactic": "TA0007", "name": "Network Service Discovery",               "description": "Adversaries may attempt to get a listing of services running on remote hosts." },
+    { "id": "T1190",    "tactic": "TA0001", "name": "Exploit Public-Facing Application",       "description": "Adversaries may attempt to take advantage of a weakness in an Internet-facing computer or program." },
+    { "id": "T1021.001","tactic": "TA0008", "name": "Remote Services: RDP",                    "description": "Adversaries may use RDP to log into systems." },
+    { "id": "T1021.002","tactic": "TA0008", "name": "Remote Services: SMB/Windows Admin Shares","description": "Adversaries may use SMB to interact with file shares on remote systems." },
+    { "id": "T1021.004","tactic": "TA0008", "name": "Remote Services: SSH",                    "description": "Adversaries may use SSH to log into systems." },
+    { "id": "T1071.001","tactic": "TA0011", "name": "Application Layer Protocol: Web",         "description": "Adversaries may communicate using application layer protocols associated with web traffic." },
+    { "id": "T1071.002","tactic": "TA0011", "name": "Application Layer Protocol: FTP",         "description": "Adversaries may communicate using FTP to avoid detection." },
+    { "id": "T1110",    "tactic": "TA0006", "name": "Brute Force",                             "description": "Adversaries may use brute force techniques to gain access." },
+    { "id": "T1552",    "tactic": "TA0006", "name": "Unsecured Credentials",                   "description": "Adversaries may search compromised systems for credentials in cleartext." },
+    { "id": "T1592",    "tactic": "TA0043", "name": "Gather Victim Host Information",          "description": "Adversaries may gather information about the victim's hosts." },
+    { "id": "T1595",    "tactic": "TA0043", "name": "Active Scanning",                         "description": "Adversaries may execute active reconnaissance scans to gather information." },
+    { "id": "T1133",    "tactic": "TA0001", "name": "External Remote Services",                "description": "Adversaries may use remote services such as VPNs, RDP, and SSH to gain access." },
+    { "id": "T1059",    "tactic": "TA0002", "name": "Command and Scripting Interpreter",       "description": "Adversaries may abuse command and script interpreters to execute commands." },
+    { "id": "T1078",    "tactic": "TA0001", "name": "Valid Accounts",                          "description": "Adversaries may obtain and abuse credentials of existing accounts." },
+    { "id": "T1040",    "tactic": "TA0006", "name": "Network Sniffing",                        "description": "Adversaries may sniff network traffic to capture cleartext credentials." },
+    { "id": "T1210",    "tactic": "TA0008", "name": "Exploitation of Remote Services",         "description": "Adversaries may exploit remote services to gain unauthorized access." }
+  ]
+}

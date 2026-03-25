@@ -19,6 +19,49 @@ class ParsedFinding:
     framework: Optional[str] = None
     remediation: Optional[str] = None
     evidence: Optional[str] = None
+    cve_id: Optional[str] = None
+    extra_tags: list = field(default_factory=list)  # e.g. ["OWASP:A05:2021", "MITRE:T1046", "PCI:11"]
+
+
+# ── Framework mapping tables ────────────────────────────────────────────────────
+
+# OWASP Top 10 2021 tags by finding category
+_OWASP = {
+    "cleartext":    "OWASP:A02:2021",   # Cryptographic Failures
+    "injection":    "OWASP:A03:2021",   # Injection
+    "misconfiguration": "OWASP:A05:2021",  # Security Misconfiguration
+    "outdated":     "OWASP:A06:2021",   # Vulnerable and Outdated Components
+    "auth":         "OWASP:A07:2021",   # Authentication Failures
+    "logging":      "OWASP:A09:2021",   # Logging Failures
+    "access":       "OWASP:A01:2021",   # Broken Access Control
+}
+
+# MITRE ATT&CK technique tags by service/finding type
+_MITRE = {
+    "ftp":      ["MITRE:T1071.002", "MITRE:T1040"],   # FTP C2 + network sniffing
+    "telnet":   ["MITRE:T1040", "MITRE:T1552"],        # Sniffing + unsecured creds
+    "rsh":      ["MITRE:T1021", "MITRE:T1078"],
+    "rlogin":   ["MITRE:T1021", "MITRE:T1078"],
+    "rdp":      ["MITRE:T1021.001", "MITRE:T1133"],
+    "smb":      ["MITRE:T1021.002"],
+    "snmp":     ["MITRE:T1046", "MITRE:T1592"],
+    "port":     ["MITRE:T1046"],                       # generic open port
+    "vuln":     ["MITRE:T1190"],                       # exploit public-facing
+    "web":      ["MITRE:T1190", "MITRE:T1071.001"],
+    "auth":     ["MITRE:T1110", "MITRE:T1078"],
+}
+
+# PCI DSS requirement tags by category
+_PCI = {
+    "cleartext":    "PCI:4",    # Strong cryptography in transit
+    "network":      "PCI:1",    # Network security controls
+    "config":       "PCI:2",    # Secure configurations
+    "vuln":         "PCI:6",    # Vulnerability management
+    "vuln_scan":    "PCI:11",   # Security testing
+    "auth":         "PCI:8",    # Authentication
+    "logging":      "PCI:10",   # Logging and monitoring
+    "access":       "PCI:7",    # Access control
+}
 
 
 def _severity_from_cvss(cvss: float) -> str:
@@ -75,8 +118,8 @@ def parse_nmap_xml(xml_content: str) -> list[ParsedFinding]:
 
                 if any(keyword in script_id.lower() for keyword in ["vuln", "exploit", "cve"]):
                     # Try to extract CVE
-                    cve_match = re.search(r"CVE-\d{4}-\d+", script_output)
-                    cve = cve_match.group(0) if cve_match else None
+                    cve_match = re.search(r"CVE-\d{4}-\d+", script_output, re.IGNORECASE)
+                    cve = cve_match.group(0).upper() if cve_match else None
 
                     # Try to get CVSS score
                     cvss_match = re.search(r"cvss:\s*([\d.]+)", script_output, re.IGNORECASE)
@@ -91,21 +134,23 @@ def parse_nmap_xml(xml_content: str) -> list[ParsedFinding]:
                         framework="NIST_800_53",
                         remediation="Apply vendor patches for identified vulnerabilities. Review service configurations.",
                         evidence=script_output[:1000],
+                        cve_id=cve,
+                        extra_tags=[_OWASP["outdated"], _MITRE["vuln"][0], _PCI["vuln_scan"]],
                     ))
 
-            # Flag notable services
+            # Flag notable services — (label, severity, remediation, nist_ctrl, extra_tags)
             notable_services = {
-                "ftp": ("FTP service exposed", "medium", "FTP transmits credentials in cleartext. Replace with SFTP/SCP.", "SI-2"),
-                "telnet": ("Telnet service exposed", "high", "Telnet transmits all data in cleartext. Replace with SSH.", "SC-8"),
-                "rsh": ("rsh service exposed", "critical", "rsh provides unauthenticated remote access. Disable immediately.", "AC-17"),
-                "rlogin": ("rlogin service exposed", "critical", "rlogin provides unauthenticated remote access. Disable immediately.", "AC-17"),
-                "smtp": ("SMTP service exposed", "low", "Verify SMTP relay is restricted. Enable authentication.", "SC-8"),
-                "snmp": ("SNMP service exposed", "medium", "Use SNMPv3 with authentication. Restrict to management networks.", "SC-7"),
-                "ms-wbt-server": ("RDP exposed", "medium", "Restrict RDP access to VPN/jump hosts only.", "AC-17"),
-                "netbios-ssn": ("NetBIOS/SMB exposed", "medium", "Restrict SMB access. Disable if not needed.", "CM-7"),
+                "ftp":          ("FTP service exposed",      "medium",   "FTP transmits credentials in cleartext. Replace with SFTP/SCP.",              "SI-2",  [_OWASP["cleartext"]] + _MITRE["ftp"]  + [_PCI["cleartext"]]),
+                "telnet":       ("Telnet service exposed",   "high",     "Telnet transmits all data in cleartext. Replace with SSH.",                    "SC-8",  [_OWASP["cleartext"]] + _MITRE["telnet"] + [_PCI["cleartext"]]),
+                "rsh":          ("rsh service exposed",      "critical", "rsh provides unauthenticated remote access. Disable immediately.",             "AC-17", [_OWASP["auth"]]      + _MITRE["rsh"]  + [_PCI["auth"]]),
+                "rlogin":       ("rlogin service exposed",   "critical", "rlogin provides unauthenticated remote access. Disable immediately.",           "AC-17", [_OWASP["auth"]]      + _MITRE["rlogin"] + [_PCI["auth"]]),
+                "smtp":         ("SMTP service exposed",     "low",      "Verify SMTP relay is restricted. Enable authentication.",                       "SC-8",  [_OWASP["misconfiguration"], _PCI["config"]]),
+                "snmp":         ("SNMP service exposed",     "medium",   "Use SNMPv3 with authentication. Restrict to management networks.",              "SC-7",  [_OWASP["misconfiguration"]] + _MITRE["snmp"] + [_PCI["network"]]),
+                "ms-wbt-server":("RDP exposed",              "medium",   "Restrict RDP access to VPN/jump hosts only.",                                  "AC-17", [_OWASP["access"]] + _MITRE["rdp"] + [_PCI["network"]]),
+                "netbios-ssn":  ("NetBIOS/SMB exposed",      "medium",   "Restrict SMB access. Disable if not needed.",                                  "CM-7",  [_OWASP["access"]] + _MITRE["smb"] + [_PCI["network"]]),
             }
             if service_name.lower() in notable_services:
-                label, sev, remediation, ctrl = notable_services[service_name.lower()]
+                label, sev, remediation, ctrl, extra_tags = notable_services[service_name.lower()]
                 findings.append(ParsedFinding(
                     title=f"{label} at {host_addr}:{portid}",
                     description=f"Service '{service_name}' ({service_version}) detected on {host_addr}:{portid}/{protocol}",
@@ -114,6 +159,7 @@ def parse_nmap_xml(xml_content: str) -> list[ParsedFinding]:
                     framework="NIST_800_53",
                     remediation=remediation,
                     evidence=f"Host: {host_addr} Port: {portid}/{protocol} Service: {service_name} {service_version}",
+                    extra_tags=extra_tags,
                 ))
             elif state == "open" and service_name:
                 # Info-level finding for all open ports
@@ -125,6 +171,7 @@ def parse_nmap_xml(xml_content: str) -> list[ParsedFinding]:
                     framework="NIST_800_53",
                     remediation="Verify this service is required. Close unnecessary ports.",
                     evidence=f"Host: {host_addr} Port: {portid}/{protocol} Service: {service_name} {service_version}",
+                    extra_tags=_MITRE["port"] + [_PCI["vuln_scan"]],
                 ))
 
     return findings
@@ -154,9 +201,22 @@ def parse_nikto_output(raw_output: str) -> list[ParsedFinding]:
             severity = "low"
 
         # Extract CVE if present
-        cve_match = re.search(r"CVE-\d{4}-\d+", line)
-        ctrl = "RA-5"
-        framework = "NIST_800_53"
+        cve_match = re.search(r"CVE-\d{4}-\d+", line, re.IGNORECASE)
+        cve = cve_match.group(0).upper() if cve_match else None
+
+        # Build extra framework tags based on content
+        extra_tags = list(_MITRE["web"])
+        line_lower = line.lower()
+        if any(k in line_lower for k in ["cve-", "outdated", "obsolete", "version"]):
+            extra_tags += [_OWASP["outdated"], _PCI["vuln"]]
+        elif any(k in line_lower for k in ["xss", "injection", "sql"]):
+            extra_tags += [_OWASP["injection"], _PCI["vuln"]]
+        elif any(k in line_lower for k in ["header", "cookie", "config", "disclosure"]):
+            extra_tags += [_OWASP["misconfiguration"], _PCI["config"]]
+        elif any(k in line_lower for k in ["auth", "password", "login"]):
+            extra_tags += [_OWASP["auth"], _PCI["auth"]]
+        else:
+            extra_tags += [_OWASP["misconfiguration"], _PCI["vuln_scan"]]
 
         # Strip the leading "+ "
         description = line.lstrip("+ ").strip()
@@ -166,10 +226,12 @@ def parse_nikto_output(raw_output: str) -> list[ParsedFinding]:
             title=f"Nikto: {title}",
             description=description,
             severity=severity,
-            control_id=ctrl,
-            framework=framework,
+            control_id="RA-5",
+            framework="NIST_800_53",
             remediation="Review and address the identified web server misconfiguration or vulnerability.",
             evidence=line,
+            cve_id=cve,
+            extra_tags=extra_tags,
         ))
 
     return findings
@@ -183,24 +245,24 @@ def parse_lynis_output(raw_output: str) -> list[ParsedFinding]:
     suggestion_pattern = re.compile(r"Suggestion\s*\[(\w+)\]:\s*(.+)")
     warning_pattern = re.compile(r"Warning\s*\[(\w+)\]:\s*(.+)")
 
-    # LYNIS test ID to CIS/NIST mapping (partial)
+    # LYNIS test ID → (NIST control, extra OWASP tag, PCI tag)
     test_mappings = {
-        "AUTH": ("AC-2", "NIST_800_53"),
-        "BOOT": ("CM-6", "NIST_800_53"),
-        "CRYP": ("SC-8", "NIST_800_53"),
-        "FILE": ("AU-9", "NIST_800_53"),
-        "FIRE": ("SC-7", "NIST_800_53"),
-        "KRNL": ("CM-6", "NIST_800_53"),
-        "LOGG": ("AU-2", "NIST_800_53"),
-        "NETW": ("SC-7", "NIST_800_53"),
-        "PKGS": ("SI-2", "NIST_800_53"),
-        "PRNT": ("CM-7", "NIST_800_53"),
-        "PROC": ("CM-7", "NIST_800_53"),
-        "SCHD": ("CM-7", "NIST_800_53"),
-        "SSHD": ("AC-17", "NIST_800_53"),
-        "STRG": ("MP-2", "NIST_800_53"),
-        "TIME": ("AU-8", "NIST_800_53"),
-        "USB": ("MP-7", "NIST_800_53"),
+        "AUTH": ("AC-2",  _OWASP["auth"],            _PCI["auth"]),
+        "BOOT": ("CM-6",  _OWASP["misconfiguration"], _PCI["config"]),
+        "CRYP": ("SC-8",  _OWASP["cleartext"],        _PCI["cleartext"]),
+        "FILE": ("AU-9",  _OWASP["access"],            _PCI["access"]),
+        "FIRE": ("SC-7",  _OWASP["misconfiguration"], _PCI["network"]),
+        "KRNL": ("CM-6",  _OWASP["misconfiguration"], _PCI["config"]),
+        "LOGG": ("AU-2",  _OWASP["logging"],           _PCI["logging"]),
+        "NETW": ("SC-7",  _OWASP["misconfiguration"], _PCI["network"]),
+        "PKGS": ("SI-2",  _OWASP["outdated"],          _PCI["vuln"]),
+        "PRNT": ("CM-7",  _OWASP["misconfiguration"], _PCI["config"]),
+        "PROC": ("CM-7",  _OWASP["misconfiguration"], _PCI["config"]),
+        "SCHD": ("CM-7",  _OWASP["misconfiguration"], _PCI["config"]),
+        "SSHD": ("AC-17", _OWASP["auth"],             _PCI["auth"]),
+        "STRG": ("MP-2",  _OWASP["access"],            _PCI["access"]),
+        "TIME": ("AU-8",  _OWASP["logging"],           _PCI["logging"]),
+        "USB":  ("MP-7",  _OWASP["access"],            _PCI["access"]),
     }
 
     for line in lines:
@@ -210,15 +272,16 @@ def parse_lynis_output(raw_output: str) -> list[ParsedFinding]:
             test_id = w_match.group(1)
             message = w_match.group(2).strip()
             prefix = test_id[:4].upper()
-            ctrl, framework = test_mappings.get(prefix, ("CM-6", "NIST_800_53"))
+            ctrl, owasp_tag, pci_tag = test_mappings.get(prefix, ("CM-6", _OWASP["misconfiguration"], _PCI["config"]))
             findings.append(ParsedFinding(
                 title=f"Lynis Warning [{test_id}]: {message[:60]}",
                 description=message,
                 severity="high",
                 control_id=ctrl,
-                framework=framework,
+                framework="NIST_800_53",
                 remediation=f"Address Lynis warning {test_id}. Consult `lynis show details {test_id}` for guidance.",
                 evidence=line.strip(),
+                extra_tags=[owasp_tag, pci_tag],
             ))
             continue
 
@@ -228,15 +291,16 @@ def parse_lynis_output(raw_output: str) -> list[ParsedFinding]:
             test_id = s_match.group(1)
             message = s_match.group(2).strip()
             prefix = test_id[:4].upper()
-            ctrl, framework = test_mappings.get(prefix, ("CM-6", "NIST_800_53"))
+            ctrl, owasp_tag, pci_tag = test_mappings.get(prefix, ("CM-6", _OWASP["misconfiguration"], _PCI["config"]))
             findings.append(ParsedFinding(
                 title=f"Lynis Suggestion [{test_id}]: {message[:60]}",
                 description=message,
                 severity="low",
                 control_id=ctrl,
-                framework=framework,
+                framework="NIST_800_53",
                 remediation=f"Consider implementing: {message}. Run `lynis show details {test_id}` for details.",
                 evidence=line.strip(),
+                extra_tags=[owasp_tag, pci_tag],
             ))
 
     return findings
@@ -246,15 +310,15 @@ def parse_nmap_text(raw_output: str) -> list[ParsedFinding]:
     """Parse Nmap plain-text output (no -oX / -oA required)."""
     findings = []
     notable_services = {
-        "ftp": ("FTP service exposed", "medium", "FTP transmits credentials in cleartext. Replace with SFTP/SCP.", "SI-2"),
-        "telnet": ("Telnet service exposed", "high", "Telnet transmits all data in cleartext. Replace with SSH.", "SC-8"),
-        "rsh": ("rsh service exposed", "critical", "rsh provides unauthenticated remote access. Disable immediately.", "AC-17"),
-        "rlogin": ("rlogin service exposed", "critical", "rlogin provides unauthenticated remote access. Disable immediately.", "AC-17"),
-        "smtp": ("SMTP service exposed", "low", "Verify SMTP relay is restricted. Enable authentication.", "SC-8"),
-        "snmp": ("SNMP service exposed", "medium", "Use SNMPv3 with authentication. Restrict to management networks.", "SC-7"),
-        "ms-wbt-server": ("RDP exposed", "medium", "Restrict RDP access to VPN/jump hosts only.", "AC-17"),
-        "netbios-ssn": ("NetBIOS/SMB exposed", "medium", "Restrict SMB access. Disable if not needed.", "CM-7"),
-        "microsoft-ds": ("SMB/CIFS exposed", "medium", "Restrict SMB access. Disable if not needed.", "CM-7"),
+        "ftp":          ("FTP service exposed",      "medium",   "FTP transmits credentials in cleartext. Replace with SFTP/SCP.",    "SI-2",  [_OWASP["cleartext"]] + _MITRE["ftp"]  + [_PCI["cleartext"]]),
+        "telnet":       ("Telnet service exposed",   "high",     "Telnet transmits all data in cleartext. Replace with SSH.",          "SC-8",  [_OWASP["cleartext"]] + _MITRE["telnet"] + [_PCI["cleartext"]]),
+        "rsh":          ("rsh service exposed",      "critical", "rsh provides unauthenticated remote access. Disable immediately.",   "AC-17", [_OWASP["auth"]] + _MITRE["rsh"] + [_PCI["auth"]]),
+        "rlogin":       ("rlogin service exposed",   "critical", "rlogin provides unauthenticated remote access. Disable immediately.", "AC-17", [_OWASP["auth"]] + _MITRE["rlogin"] + [_PCI["auth"]]),
+        "smtp":         ("SMTP service exposed",     "low",      "Verify SMTP relay is restricted. Enable authentication.",            "SC-8",  [_OWASP["misconfiguration"], _PCI["config"]]),
+        "snmp":         ("SNMP service exposed",     "medium",   "Use SNMPv3 with authentication. Restrict to management networks.",   "SC-7",  [_OWASP["misconfiguration"]] + _MITRE["snmp"] + [_PCI["network"]]),
+        "ms-wbt-server":("RDP exposed",              "medium",   "Restrict RDP access to VPN/jump hosts only.",                       "AC-17", [_OWASP["access"]] + _MITRE["rdp"] + [_PCI["network"]]),
+        "netbios-ssn":  ("NetBIOS/SMB exposed",      "medium",   "Restrict SMB access. Disable if not needed.",                       "CM-7",  [_OWASP["access"]] + _MITRE["smb"] + [_PCI["network"]]),
+        "microsoft-ds": ("SMB/CIFS exposed",         "medium",   "Restrict SMB access. Disable if not needed.",                       "CM-7",  [_OWASP["access"]] + _MITRE["smb"] + [_PCI["network"]]),
     }
 
     current_host = "unknown"
@@ -278,7 +342,7 @@ def parse_nmap_text(raw_output: str) -> list[ParsedFinding]:
         version_str = (version_str or "").strip()
 
         if service_name.lower() in notable_services:
-            label, sev, remediation, ctrl = notable_services[service_name.lower()]
+            label, sev, remediation, ctrl, extra_tags = notable_services[service_name.lower()]
             findings.append(ParsedFinding(
                 title=f"{label} at {current_host}:{portid}",
                 description=f"Service '{service_name}' ({version_str}) detected on {current_host}:{portid}/{protocol}",
@@ -287,6 +351,7 @@ def parse_nmap_text(raw_output: str) -> list[ParsedFinding]:
                 framework="NIST_800_53",
                 remediation=remediation,
                 evidence=f"Host: {current_host}  Port: {portid}/{protocol}  Service: {service_name}  Version: {version_str}",
+                extra_tags=extra_tags,
             ))
         else:
             findings.append(ParsedFinding(
@@ -297,6 +362,7 @@ def parse_nmap_text(raw_output: str) -> list[ParsedFinding]:
                 framework="NIST_800_53",
                 remediation="Verify this service is required. Close unnecessary ports.",
                 evidence=f"Host: {current_host}  Port: {portid}/{protocol}  Service: {service_name}  Version: {version_str}",
+                extra_tags=_MITRE["port"] + [_PCI["vuln_scan"]],
             ))
 
     return findings

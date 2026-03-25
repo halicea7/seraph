@@ -96,6 +96,13 @@ interface AIConfig {
   endpoint: string
   model: string
   provider: string
+  temperature: number | null
+  top_p: number | null
+  top_k: number | null
+  min_p: number | null
+  presence_penalty: number | null
+  repetition_penalty: number | null
+  timeout: number | null
 }
 
 interface AIStatus {
@@ -183,7 +190,7 @@ export default function Settings() {
   const [demoError, setDemoError] = useState('')
 
   // AI config state
-  const [aiConfig, setAiConfig] = useState<AIConfig>({ endpoint: 'http://localhost:11434', model: '', provider: 'ollama' })
+  const [aiConfig, setAiConfig] = useState<AIConfig>({ endpoint: 'http://localhost:11434', model: '', provider: 'ollama', temperature: null, top_p: null, top_k: null, min_p: null, presence_penalty: null, repetition_penalty: null, timeout: null })
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null)
   const [aiModels, setAiModels] = useState<string[]>([])
   const [aiSaving, setAiSaving] = useState(false)
@@ -819,6 +826,48 @@ export default function Settings() {
               <p className="text-xs text-slate-500">Click "Test Connection" to auto-populate models from the endpoint.</p>
             </div>
           )}
+
+          {/* Generation parameters */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Generation Parameters</label>
+              <span className="text-xs text-slate-500">Leave blank to use model defaults</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {([
+                { key: 'temperature', label: 'Temperature', min: 0, max: 2, step: 0.01, placeholder: 'e.g. 1.0' },
+                { key: 'top_p', label: 'Top P', min: 0, max: 1, step: 0.01, placeholder: 'e.g. 0.95' },
+                { key: 'top_k', label: 'Top K', min: 0, max: 200, step: 1, placeholder: 'e.g. 20' },
+                { key: 'min_p', label: 'Min P', min: 0, max: 1, step: 0.01, placeholder: 'e.g. 0.0' },
+                { key: 'presence_penalty', label: 'Presence Penalty', min: -2, max: 2, step: 0.1, placeholder: 'e.g. 1.5' },
+                { key: 'repetition_penalty', label: 'Repetition Penalty', min: 0.1, max: 2, step: 0.01, placeholder: 'e.g. 1.0' },
+                { key: 'timeout', label: 'Timeout (seconds)', min: 30, max: 1800, step: 30, placeholder: 'default: 300' },
+              ] as { key: keyof AIConfig; label: string; min: number; max: number; step: number; placeholder: string }[]).map(({ key, label, min, max, step, placeholder }) => (
+                <div key={key} className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-slate-400">{label}</label>
+                    {aiConfig[key] !== null && (
+                      <button
+                        onClick={() => setAiConfig(c => ({ ...c, [key]: null }))}
+                        className="text-[10px] text-slate-500 hover:text-red-400 transition-colors"
+                      >reset</button>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={aiConfig[key] ?? ''}
+                    onChange={e => setAiConfig(c => ({ ...c, [key]: e.target.value === '' ? null : Number(e.target.value) }))}
+                    placeholder={placeholder}
+                    className="w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none font-mono"
+                    style={{ background: '#090d14' }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
 
           {/* Save */}
           <button

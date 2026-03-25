@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from database import get_db, AppSetting, Project, Target, Scan, Finding
-from services.ai_client import fetch_models, chat_complete
+from services.ai_client import fetch_models, chat_complete, load_llm_params
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -28,10 +28,31 @@ def _set(db: Session, key: str, value: str):
 
 @router.get("/config")
 def get_ai_config(db: Session = Depends(get_db)):
+    def _getf(key, default):
+        v = _get(db, key, "")
+        try:
+            return float(v) if v != "" else default
+        except ValueError:
+            return default
+
+    def _geti(key, default):
+        v = _get(db, key, "")
+        try:
+            return int(v) if v != "" else default
+        except ValueError:
+            return default
+
     return {
         "endpoint": _get(db, "ai_endpoint", DEFAULT_ENDPOINT),
         "model": _get(db, "ai_model", DEFAULT_MODEL),
         "provider": _get(db, "ai_provider", "ollama"),
+        "temperature": _getf("ai_temperature", None),
+        "top_p": _getf("ai_top_p", None),
+        "top_k": _geti("ai_top_k", None),
+        "min_p": _getf("ai_min_p", None),
+        "presence_penalty": _getf("ai_presence_penalty", None),
+        "repetition_penalty": _getf("ai_repetition_penalty", None),
+        "timeout": _geti("ai_timeout", None),
     }
 
 
@@ -39,6 +60,13 @@ class AIConfigRequest(BaseModel):
     endpoint: str
     model: str
     provider: str = "ollama"
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    min_p: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    repetition_penalty: Optional[float] = None
+    timeout: Optional[int] = None
 
 
 @router.put("/config")
@@ -46,6 +74,17 @@ def save_ai_config(req: AIConfigRequest, db: Session = Depends(get_db)):
     _set(db, "ai_endpoint", req.endpoint.strip())
     _set(db, "ai_model", req.model.strip())
     _set(db, "ai_provider", req.provider.strip())
+
+    def _save_optional(key, val):
+        _set(db, key, "" if val is None else str(val))
+
+    _save_optional("ai_temperature", req.temperature)
+    _save_optional("ai_top_p", req.top_p)
+    _save_optional("ai_top_k", req.top_k)
+    _save_optional("ai_min_p", req.min_p)
+    _save_optional("ai_presence_penalty", req.presence_penalty)
+    _save_optional("ai_repetition_penalty", req.repetition_penalty)
+    _save_optional("ai_timeout", req.timeout)
     return {"ok": True}
 
 
@@ -136,7 +175,7 @@ def narrate_report(req: NarrateRequest, db: Session = Depends(get_db)):
 
     messages = [{"role": "user", "content": prompt}]
     try:
-        narrative = chat_complete(endpoint, model, messages)
+        narrative = chat_complete(endpoint, model, messages, **load_llm_params(db))
         return {"narrative": narrative}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))

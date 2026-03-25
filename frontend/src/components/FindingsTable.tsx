@@ -215,13 +215,35 @@ export default function FindingsTable({ findings, loading }: FindingsTableProps)
                     <div className="text-xs text-slate-400 truncate mt-0.5">{finding.description}</div>
                   )}
                 </div>
-                <div className="px-4 py-3">
+                <div className="px-4 py-3 space-y-1">
                   {finding.framework && (
                     <div className="text-xs text-slate-300">{finding.framework.replace(/_/g, ' ')}</div>
                   )}
                   {finding.control_id && (
                     <div className="text-xs font-mono text-cyan-400">{finding.control_id}</div>
                   )}
+                  {/* Extra framework tags (OWASP / MITRE / PCI) */}
+                  {finding.tags && (() => {
+                    const frameworkTags = finding.tags.split(',').filter(t => t.startsWith('OWASP:') || t.startsWith('MITRE:') || t.startsWith('PCI:'))
+                    if (!frameworkTags.length) return null
+                    return (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {frameworkTags.map(tag => {
+                          const [ns] = tag.split(':')
+                          const colors: Record<string, string> = {
+                            OWASP: 'text-orange-400 border-orange-700/40 bg-orange-950/30',
+                            MITRE: 'text-red-400 border-red-700/40 bg-red-950/20',
+                            PCI:   'text-violet-400 border-violet-700/40 bg-violet-950/20',
+                          }
+                          return (
+                            <span key={tag} className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${colors[ns] || 'text-slate-400 border-slate-700/30'}`}>
+                              {tag}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    )
+                  })()}
                 </div>
                 <div className="px-4 py-3 flex items-center justify-end">
                   {expandedId === finding.id
@@ -241,7 +263,12 @@ export default function FindingsTable({ findings, loading }: FindingsTableProps)
                     const hasCveInText = /CVE-\d{4}-\d{4,7}/i.test(`${finding.title} ${finding.description || ''}`)
                     return (
                       <div className="flex items-center gap-3 flex-wrap">
-                        {cveId && <span className="text-xs font-mono text-cyan-400">{cveId}</span>}
+                        {cveId && (
+                          <a href={`https://nvd.nist.gov/vuln/detail/${cveId}`} target="_blank" rel="noopener noreferrer"
+                             className="text-xs font-mono text-cyan-400 hover:text-cyan-300 underline decoration-dotted">
+                            {cveId}
+                          </a>
+                        )}
                         {cvssScore && (
                           <span className={`text-xs px-2 py-0.5 rounded-full border font-bold ${parseFloat(cvssScore) >= 9 ? 'bg-red-950/60 text-red-400 border-red-500/50' : parseFloat(cvssScore) >= 7 ? 'bg-orange-950/60 text-orange-400 border-orange-500/40' : parseFloat(cvssScore) >= 4 ? 'bg-amber-950/40 text-amber-400 border-amber-500/30' : 'bg-green-950/40 text-green-400 border-green-500/30'}`}>
                             CVSS {cvssScore}

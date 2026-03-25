@@ -6,7 +6,7 @@ from datetime import datetime
 import uuid
 
 from database import get_db, VulnerabilityRecord, Finding, AppSetting
-from services.ai_client import chat_complete
+from services.ai_client import chat_complete, load_llm_params
 
 router = APIRouter(prefix="/vulns", tags=["vulns"])
 
@@ -220,7 +220,7 @@ def ai_remediate(vuln_id: str, db: Session = Depends(get_db)):
     )
 
     try:
-        result = chat_complete(endpoint, model, [{"role": "user", "content": prompt}])
+        result = chat_complete(endpoint, model, [{"role": "user", "content": prompt}], **load_llm_params(db))
         vuln.ai_remediation = result
         vuln.updated_at = datetime.utcnow()
         db.commit()
