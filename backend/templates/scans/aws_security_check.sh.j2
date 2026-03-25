@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# ============================================================
+# Seraph — Audit Script: AWS Security Check
+# Project: {{ project_name }}
+# Generated: {{ timestamp }}
+# Framework Mapping: NIST 800-53 AC-2, AU-2 | CIS Control 2.1
+# ============================================================
+
+set -euo pipefail
+
+OUTDIR="./seraph_results/{{ project_name | replace(' ', '_') }}/{{ timestamp_short }}"
+mkdir -p "$OUTDIR"
+
+AWS_PROFILE="{{ aws_profile }}"
+AWS_REGION="{{ aws_region }}"
+AWS="aws --profile $AWS_PROFILE --region $AWS_REGION"
+
+echo "============================================================"
+echo " Seraph AWS Security Audit"
+echo " Profile: $AWS_PROFILE | Region: $AWS_REGION"
+echo "============================================================"
+
+if ! command -v aws &> /dev/null; then
+    echo "[ERROR] AWS CLI not found. Install: sudo apt install awscli"
+    exit 1
+fi
+
+# Verify credentials
+echo "[*] Verifying AWS credentials..."
+$AWS sts get-caller-identity --output json | tee "$OUTDIR/identity.json"
+
+{% if 's3_buckets' in checks %}
+# S3 Bucket Audit (NIST AC-2 — Account Management)
+echo ""
+echo "[*] Auditing S3 buckets — NIST AC-2, CIS 2.1"
+$AWS s3api list-buckets --output json | tee "$OUTDIR/s3_buckets.json"
+for bucket in $($AWS s3api list-buckets --query 'Buckets[].Name' --output text); do
+    echo "  Checking bucket: $bucket"
+    $AWS s3api get-bucket-acl --bucket "$bucket" --output json >> "$OUTDIR/s3_acls.json" 2>&1 || true
+    $AWS s3api get-bucket-policy-status --bucket "$bucket" --output json >> "$OUTDIR/s3_policy_status.json" 2>&1 || true
+done
+{% endif %}
+
+{% if 'iam_users' in checks %}
+# IAM User Audit (NIST AC-2 — Account Management)
+echo ""
+echo "[*] Auditing IAM users — NIST AC-2"
+$AWS iam list-users --output json | tee "$OUTDIR/iam_users.json"
+$AWS iam get-account-password-policy --output json | tee "$OUTDIR/iam_password_policy.json" 2>&1 || echo "[WARNING] No password policy set"
+{% endif %}
+
+{% if 'cloudtrail' in checks %}
+# CloudTrail Audit (NIST AU-2 — Event Logging)
+echo ""
+echo "[*] Auditing CloudTrail — NIST AU-2"
+$AWS cloudtrail describe-trails --output json | tee "$OUTDIR/cloudtrail_trails.json"
+$AWS cloudtrail get-trail-status --name default --output json | tee "$OUTDIR/cloudtrail_status.json" 2>&1 || true
+{% endif %}
+
+{% if 'security_groups' in checks %}
+# Security Group Audit
+echo ""
+echo "[*] Auditing security groups..."
+$AWS ec2 describe-security-groups --output json | tee "$OUTDIR/security_groups.json"
+{% endif %}
+
+echo ""
+echo "[+] AWS security audit complete. Results in: $OUTDIR/"

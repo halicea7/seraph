@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# ============================================================
+# Seraph — Audit Script: Network Discovery
+# Project: {{ project_name }}
+# Target:  {{ target }}
+# Generated: {{ timestamp }}
+# Framework Mapping: NIST 800-53 CM-8, RA-5 | CIS Control 1.1
+# ============================================================
+
+set -euo pipefail
+
+# Privilege check — nmap raw-socket scans need root.
+# Prefer: sudo setcap cap_net_raw,cap_net_admin+eip $(which nmap)
+# Otherwise add nmap to /etc/sudoers NOPASSWD.
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+
+OUTDIR="./seraph_results/{{ project_name | replace(' ', '_') }}/{{ timestamp_short }}"
+mkdir -p "$OUTDIR"
+
+echo "============================================================"
+echo " Seraph Network Discovery Audit"
+echo " Target: {{ target }}"
+echo " Output: $OUTDIR"
+echo "============================================================"
+
+# Tool check
+if ! command -v nmap &> /dev/null; then
+    echo "[ERROR] nmap not found. Install with: sudo apt install nmap"
+    exit 1
+fi
+
+# Host Discovery (NIST CM-8 — Information System Component Inventory)
+echo ""
+echo "[*] Phase 1: Host Discovery — NIST CM-8"
+$SUDO nmap -sn {{ target }}/{{ subnet_mask }} \
+    -oA "$OUTDIR/host_discovery" \
+    --stats-every 10s \
+    2>&1 | tee "$OUTDIR/host_discovery.log"
+echo "[+] Host discovery complete."
+
+# Port Scan + Service Detection (NIST CM-8, RA-5)
+echo ""
+echo "[*] Phase 2: Port Scan + Service Detection — NIST RA-5"
+$SUDO nmap {{ scan_flags }} \
+    -p {{ port_range }} \
+    {% if service_detection %}-sV --version-intensity 5 \{% endif %}
+    {% if os_detection %}-O \{% endif %}
+    --timing {{ timing }} \
+    --open \
+    -oA "$OUTDIR/port_scan" \
+    -oX "$OUTDIR/port_scan.xml" \
+    {{ target }} \
+    2>&1 | tee "$OUTDIR/port_scan.log"
+
+echo ""
+echo "[+] Port scan complete."
+echo "[*] Results saved to: $OUTDIR/"
+echo "[*] XML output for parsing: $OUTDIR/port_scan.xml"

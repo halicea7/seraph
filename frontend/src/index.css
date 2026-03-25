@@ -1,0 +1,434 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ══════════════════════════════════════════════════════════════════
+   Theme variables
+   The [data-theme="blue"] values are the default Cyber Blue palette.
+   The [data-theme="mono"] values override them for Monochrome mode.
+   Functional colors (green/red/amber/orange/purple) are never overridden —
+   they carry semantic meaning (severity, status, AI insights) in both themes.
+   ══════════════════════════════════════════════════════════════════ */
+
+:root,
+[data-theme="blue"] {
+  /* Backgrounds */
+  --bg-base:      #05080d;
+  --bg-surface:   #090d14;
+  --bg-surface-2: #0d1520;
+  --bg-terminal:  #030508;
+
+  /* Accent (cyan) */
+  --accent:        #06b6d4;
+  --accent-subtle: rgba(6, 182, 212, 0.08);
+  --accent-soft:   rgba(6, 182, 212, 0.10);
+  --accent-mid:    rgba(6, 182, 212, 0.15);
+  --accent-border: rgba(6, 182, 212, 0.20);
+  --accent-dim:    rgba(6, 182, 212, 0.04);
+
+  /* Buttons */
+  --btn-bg:    #2563eb;
+  --btn-hover: #3b82f6;
+
+  /* Sidebar */
+  --sidebar-bg: linear-gradient(180deg, #090d14 0%, #05080d 100%);
+
+  /* Scrollbar */
+  --scrollbar-thumb: #1a2540;
+  --scrollbar-hover: #06b6d4;
+
+  /* Dot grid & glow */
+  --dot-color:    rgba(6, 182, 212, 0.06);
+  --glow-accent:  rgba(6, 182, 212, 0.30);
+
+  /* Legacy (kept for existing code) */
+  --bg-deep:     #05080d;
+  --bg-card:     #090d14;
+  --bg-elevated: #0d1520;
+  --border-dim:  rgba(6, 182, 212, 0.08);
+  --border-glow: rgba(6, 182, 212, 0.25);
+  --glow-green:  rgba(34, 197, 94, 0.4);
+  --glow-blue:   rgba(59, 130, 246, 0.4);
+  --glow-red:    rgba(239, 68, 68, 0.4);
+  --glow-cyan:   rgba(6, 182, 212, 0.3);
+}
+
+[data-theme="mono"] {
+  /* Backgrounds — pure blacks / dark grays */
+  --bg-base:      #080808;
+  --bg-surface:   #111111;
+  --bg-surface-2: #1a1a1a;
+  --bg-terminal:  #050505;
+
+  /* Accent — neutral white/zinc instead of cyan */
+  --accent:        #d4d4d8;
+  --accent-subtle: rgba(255, 255, 255, 0.05);
+  --accent-soft:   rgba(255, 255, 255, 0.06);
+  --accent-mid:    rgba(255, 255, 255, 0.08);
+  --accent-border: rgba(255, 255, 255, 0.10);
+  --accent-dim:    rgba(255, 255, 255, 0.02);
+
+  /* Buttons — dark gray, white text */
+  --btn-bg:    #1c1c1c;
+  --btn-hover: #282828;
+
+  /* Sidebar */
+  --sidebar-bg: linear-gradient(180deg, #111111 0%, #080808 100%);
+
+  /* Scrollbar */
+  --scrollbar-thumb: #2a2a2a;
+  --scrollbar-hover: #d4d4d8;
+
+  /* Dot grid & glow */
+  --dot-color:   rgba(255, 255, 255, 0.025);
+  --glow-accent: rgba(255, 255, 255, 0.08);
+
+  /* Legacy */
+  --bg-deep:     #080808;
+  --bg-card:     #111111;
+  --bg-elevated: #1a1a1a;
+  --border-dim:  rgba(255, 255, 255, 0.05);
+  --border-glow: rgba(255, 255, 255, 0.15);
+  --glow-green:  rgba(34, 197, 94, 0.4);   /* kept */
+  --glow-blue:   rgba(255, 255, 255, 0.15);
+  --glow-red:    rgba(239, 68, 68, 0.4);   /* kept */
+  --glow-cyan:   rgba(255, 255, 255, 0.10);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Base
+   ══════════════════════════════════════════════════════════════════ */
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg-base);
+  color: #e2e8f0;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scanline overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.04) 2px,
+    rgba(0, 0, 0, 0.04) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+
+/* ══════════════════════════════════════════════════════════════════
+   Custom component classes
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Dot grid background */
+.dot-grid {
+  background-image: radial-gradient(var(--dot-color) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Glow utilities */
+.glow-green { box-shadow: 0 0 12px var(--glow-green), 0 0 30px rgba(34,197,94,0.1); }
+.glow-blue  { box-shadow: 0 0 12px var(--glow-blue),  0 0 30px rgba(59,130,246,0.1); }
+.glow-red   { box-shadow: 0 0 12px var(--glow-red),   0 0 30px rgba(239,68,68,0.1); }
+.glow-cyan  { box-shadow: 0 0 12px var(--glow-accent), 0 0 30px rgba(6,182,212,0.1); }
+
+/* Glass card */
+.glass {
+  background: rgba(9, 13, 20, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--accent-subtle);
+}
+.glass-hover { transition: border-color 0.2s, box-shadow 0.2s; }
+.glass-hover:hover {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 20px var(--accent-dim);
+}
+
+/* Gradient brand text */
+.gradient-text {
+  background: linear-gradient(135deg, var(--accent), #3b82f6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.gradient-text-green {
+  background: linear-gradient(135deg, #22c55e, var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Active nav item */
+@keyframes borderGlow {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1; }
+}
+.nav-active {
+  position: relative;
+  background: linear-gradient(135deg, var(--accent-soft), var(--accent-subtle));
+  border: 1px solid var(--accent-border) !important;
+  animation: borderGlow 2.5s ease-in-out infinite;
+}
+
+/* Severity pulse animations */
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 4px rgba(239,68,68,0.6); }
+  50%       { box-shadow: 0 0 12px rgba(239,68,68,0.9), 0 0 20px rgba(239,68,68,0.4); }
+}
+@keyframes pulse-orange {
+  0%, 100% { box-shadow: 0 0 4px rgba(249,115,22,0.5); }
+  50%       { box-shadow: 0 0 12px rgba(249,115,22,0.8); }
+}
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.severity-critical { animation: pulse-red 2s ease-in-out infinite; }
+.severity-high     { animation: pulse-orange 2.5s ease-in-out infinite; }
+.fade-in-up        { animation: fadeInUp 0.3s ease-out forwards; }
+
+/* Typewriter cursor */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.cursor-blink { animation: blink 1s step-end infinite; }
+
+/* Shimmer loading */
+.shimmer {
+  background: linear-gradient(90deg, transparent 0%, var(--accent-soft) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Page transition */
+.page-enter { animation: fadeInUp 0.25s ease-out; }
+
+/* ══════════════════════════════════════════════════════════════════
+   Mono theme — Tailwind utility overrides
+   Only overrides structural/accent colors. Functional colors
+   (green/red/amber/orange/purple) are intentionally left untouched.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Glass */
+[data-theme="mono"] .glass {
+  background: rgba(17, 17, 17, 0.88) !important;
+  border-color: rgba(255, 255, 255, 0.07) !important;
+}
+[data-theme="mono"] .glass-hover:hover {
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.02) !important;
+}
+
+/* Gradient text */
+[data-theme="mono"] .gradient-text {
+  background: linear-gradient(135deg, #ffffff 0%, #a1a1aa 100%) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+}
+
+/* Active nav */
+[data-theme="mono"] .nav-active {
+  background: linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03)) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+/* Dot grid */
+[data-theme="mono"] .dot-grid {
+  background-image: radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px) !important;
+}
+
+/* Shimmer */
+[data-theme="mono"] .shimmer {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.04) 50%, transparent 100%) !important;
+}
+
+/* ── Cyan text ── */
+[data-theme="mono"] .text-cyan-400 { color: #d4d4d8 !important; }
+[data-theme="mono"] .text-cyan-300 { color: #f4f4f5 !important; }
+[data-theme="mono"] .text-cyan-500 { color: #a1a1aa !important; }
+[data-theme="mono"] .text-cyan-600 { color: #71717a !important; }
+
+/* ── Blue text ── */
+[data-theme="mono"] .text-blue-400 { color: #a1a1aa !important; }
+[data-theme="mono"] .text-blue-300 { color: #d4d4d8 !important; }
+
+/* ── Blue backgrounds (primary buttons) ── */
+[data-theme="mono"] .bg-blue-600,
+[data-theme="mono"] .bg-blue-500      { background-color: #1c1c1c !important; }
+[data-theme="mono"] .hover\:bg-blue-600:hover,
+[data-theme="mono"] .hover\:bg-blue-500:hover,
+[data-theme="mono"] .hover\:bg-blue-400:hover { background-color: #2a2a2a !important; }
+
+/* ── Cyan/blue tinted backgrounds ── */
+[data-theme="mono"] .bg-cyan-500\/10,
+[data-theme="mono"] .bg-blue-500\/10  { background-color: rgba(255,255,255,0.04) !important; }
+[data-theme="mono"] .bg-cyan-950\/10  { background-color: rgba(255,255,255,0.02) !important; }
+[data-theme="mono"] .bg-\[\#0d1520\]  { background-color: #1a1a1a !important; }
+[data-theme="mono"] .bg-\[\#05080d\]  { background-color: #111111 !important; }
+[data-theme="mono"] .bg-cyan-700      { background-color: #2a2a2a !important; }
+[data-theme="mono"] .hover\:bg-cyan-700:hover { background-color: #333333 !important; }
+
+/* ── Cyan borders ── */
+[data-theme="mono"] .border-cyan-900\/20,
+[data-theme="mono"] .border-cyan-900\/30 { border-color: rgba(255,255,255,0.09) !important; }
+[data-theme="mono"] .border-cyan-900\/10 { border-color: rgba(255,255,255,0.05) !important; }
+[data-theme="mono"] .border-cyan-900\/40 { border-color: rgba(255,255,255,0.16) !important; }
+[data-theme="mono"] .border-cyan-500\/50 { border-color: rgba(255,255,255,0.28) !important; }
+[data-theme="mono"] .border-cyan-500\/30 { border-color: rgba(255,255,255,0.18) !important; }
+[data-theme="mono"] .border-cyan-500\/20 { border-color: rgba(255,255,255,0.10) !important; }
+[data-theme="mono"] .border-cyan-700\/40 { border-color: rgba(255,255,255,0.14) !important; }
+[data-theme="mono"] .border-cyan-700\/30 { border-color: rgba(255,255,255,0.10) !important; }
+
+/* ── Blue borders ── */
+[data-theme="mono"] .border-blue-500\/30 { border-color: rgba(255,255,255,0.15) !important; }
+
+/* ── Hover/focus state overrides ── */
+[data-theme="mono"] .hover\:bg-\[\#0d1520\]:hover      { background-color: #1a1a1a !important; }
+[data-theme="mono"] .hover\:bg-cyan-950\/10:hover      { background-color: rgba(255,255,255,0.02) !important; }
+[data-theme="mono"] .hover\:border-cyan-500\/50:hover  { border-color: rgba(255,255,255,0.28) !important; }
+[data-theme="mono"] .hover\:border-cyan-700\/40:hover  { border-color: rgba(255,255,255,0.18) !important; }
+[data-theme="mono"] .hover\:text-cyan-400:hover        { color: #f4f4f5 !important; }
+[data-theme="mono"] .focus\:border-cyan-500\/50:focus  { border-color: rgba(255,255,255,0.28) !important; }
+
+/* ── Shadow glows ── */
+[data-theme="mono"] .shadow-glow-blue { box-shadow: 0 0 10px rgba(255,255,255,0.06) !important; }
+[data-theme="mono"] .shadow-glow-cyan { box-shadow: 0 0 10px rgba(255,255,255,0.05) !important; }
+
+/* ══════════════════════════════════════════════════════════════════
+   Mono theme — inline style overrides via attribute selectors
+   These catch style="background: #090d14" without touching each
+   component. !important is required to beat inline specificity.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Page / layout backgrounds */
+[data-theme="mono"] [style*="#05080d"] { background: var(--bg-base) !important; }
+[data-theme="mono"] [style*="#030508"] { background: var(--bg-terminal) !important; }
+[data-theme="mono"] [style*="#0a1018"] { background: var(--bg-surface) !important; }
+
+/* Surface backgrounds (inputs, cards, sidebars) —
+   careful ordering: match longer strings first */
+[data-theme="mono"] [style*="background: #090d14"],
+[data-theme="mono"] [style*="background:#090d14"]  { background: var(--bg-surface) !important; }
+[data-theme="mono"] [style*="background: #0d1520"],
+[data-theme="mono"] [style*="background:#0d1520"]  { background: var(--bg-surface-2) !important; }
+
+/* Cyan accent backgrounds and borders */
+[data-theme="mono"] [style*="rgba(6,182,212"] {
+  background-color: var(--accent-soft) !important;
+  border-color: var(--accent-border) !important;
+}
+[data-theme="mono"] [style*="rgba(6, 182, 212"] {
+  background-color: var(--accent-soft) !important;
+  border-color: var(--accent-border) !important;
+}
+
+/* Input / select / textarea: catch any remaining hardcoded bg */
+[data-theme="mono"] input,
+[data-theme="mono"] select,
+[data-theme="mono"] textarea {
+  background: var(--bg-surface) !important;
+  border-color: rgba(255,255,255,0.09) !important;
+}
+[data-theme="mono"] input:focus,
+[data-theme="mono"] select:focus,
+[data-theme="mono"] textarea:focus {
+  border-color: rgba(255,255,255,0.28) !important;
+  outline: none;
+}
+
+/* ── Green glow (Run/action buttons, completed scan borders) ── */
+[data-theme="mono"] .shadow-glow-green       { box-shadow: 0 0 10px rgba(255,255,255,0.06) !important; }
+[data-theme="mono"] .hover\:shadow-glow-green:hover { box-shadow: 0 0 14px rgba(255,255,255,0.09) !important; }
+
+/* ── Cyan-600 solid (active tabs, selected states) ── */
+[data-theme="mono"] .bg-cyan-600             { background-color: #1c1c1c !important; }
+[data-theme="mono"] .hover\:bg-cyan-600:hover { background-color: #282828 !important; }
+
+/* ── Cyan-600 with opacity (action buttons: Parse Findings, Install, etc.) ── */
+[data-theme="mono"] .bg-cyan-600\/20         { background-color: rgba(255,255,255,0.05) !important; }
+[data-theme="mono"] .bg-cyan-600\/15         { background-color: rgba(255,255,255,0.04) !important; }
+[data-theme="mono"] .bg-cyan-600\/10         { background-color: rgba(255,255,255,0.03) !important; }
+[data-theme="mono"] .hover\:bg-cyan-600\/30:hover { background-color: rgba(255,255,255,0.08) !important; }
+[data-theme="mono"] .hover\:bg-cyan-600\/25:hover { background-color: rgba(255,255,255,0.07) !important; }
+
+/* ── Cyan-600 borders ── */
+[data-theme="mono"] .border-cyan-600\/40     { border-color: rgba(255,255,255,0.18) !important; }
+[data-theme="mono"] .border-cyan-600\/30     { border-color: rgba(255,255,255,0.14) !important; }
+[data-theme="mono"] .border-cyan-600\/25     { border-color: rgba(255,255,255,0.12) !important; }
+[data-theme="mono"] .border-cyan-600\/20     { border-color: rgba(255,255,255,0.09) !important; }
+
+/* ── Subtle divider borders ── */
+[data-theme="mono"] .border-cyan-900\/15     { border-color: rgba(255,255,255,0.06) !important; }
+
+/* ── Row hover / selection (tables, lists) ── */
+[data-theme="mono"] .bg-cyan-950\/25         { background-color: rgba(255,255,255,0.04) !important; }
+[data-theme="mono"] .bg-cyan-950\/20         { background-color: rgba(255,255,255,0.03) !important; }
+[data-theme="mono"] .hover\:bg-cyan-950\/25:hover { background-color: rgba(255,255,255,0.04) !important; }
+[data-theme="mono"] .hover\:bg-cyan-950\/20:hover { background-color: rgba(255,255,255,0.03) !important; }
+[data-theme="mono"] .hover\:bg-cyan-950\/10:hover { background-color: rgba(255,255,255,0.02) !important; }
+
+/* ── Text hover ── */
+[data-theme="mono"] .hover\:text-cyan-300:hover { color: #ffffff !important; }
+[data-theme="mono"] .hover\:text-cyan-400:hover { color: #f4f4f5 !important; }
+
+/* ── Inline style backgrounds not yet covered ── */
+[data-theme="mono"] [style*="#070d17"]  { background: var(--bg-surface)   !important; }
+[data-theme="mono"] [style*="#07080d"]  { background: var(--bg-base)      !important; }
+[data-theme="mono"] .bg-\[\#070d17\]   { background-color: var(--bg-surface) !important; }
+
+/* ── Sidebar nav-group section labels only (not global — preserves severity colors) ── */
+[data-theme="mono"] aside .text-red-400,
+[data-theme="mono"] aside .text-amber-400,
+[data-theme="mono"] aside .text-green-400 { color: #52525b !important; }
+
+/* ── ToolCard border-l status accents in mono ── */
+[data-theme="mono"] .border-l-blue-500  { border-left-color: #3f3f46 !important; }
+[data-theme="mono"] .border-l-green-500 { border-left-color: #3f3f46 !important; }
+
+/* ── xterm.js terminal ── */
+/* xterm sets .xterm-viewport background-color via JS; override with CSS */
+[data-theme="mono"] .xterm-viewport {
+  background-color: var(--bg-terminal) !important;
+}
+/* xterm wrapper container */
+[data-theme="mono"] .xterm {
+  background-color: var(--bg-terminal) !important;
+}

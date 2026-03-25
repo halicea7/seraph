@@ -1,0 +1,70 @@
+{
+  "publication": "NIST SP 800-53 Rev 5",
+  "title": "Security and Privacy Controls for Information Systems and Organizations",
+  "controls": [
+    {
+      "id": "AC-1",
+      "family": "Access Control",
+      "title": "Policy and Procedures",
+      "description": "Develop, document, and disseminate an access control policy that addresses purpose, scope, roles, responsibilities, management commitment, coordination among organizational entities, and compliance.",
+      "priority": "P1",
+      "baseline": ["LOW", "MODERATE", "HIGH"]
+    },
+    {
+      "id": "AC-2",
+      "family": "Access Control",
+      "title": "Account Management",
+      "description": "Define and document the types of accounts allowed and specifically prohibited for use within the system. Assign account managers. Require approvals for requests to create accounts. Create, enable, modify, disable, and remove accounts in accordance with established policy.",
+      "priority": "P1",
+      "baseline": ["LOW", "MODERATE", "HIGH"]
+    },
+    {
+      "id": "AU-2",
+      "family": "Audit and Accountability",
+      "title": "Event Logging",
+      "description": "Identify the types of events that the system is capable of logging in support of the audit function. Coordinate the event logging function with other organizations requiring audit-related information.",
+      "priority": "P1",
+      "baseline": ["LOW", "MODERATE", "HIGH"]
+    },
+    {
+      "id": "CM-6",
+      "family": "Configuration Management",
+      "title": "Configuration Settings",
+      "description": "Establish and document configuration settings for technology products employed within the system that reflect the most restrictive mode consistent with operational requirements. Implement the configuration settings. Identify, document, and approve any deviations from established configuration settings.",
+      "priority": "P1",
+      "baseline": ["LOW", "MODERATE", "HIGH"]
+    },
+    {
+      "id": "IA-2",
+      "family": "Identification and Authentication",
+      "title": "Identification and Authentication (Organizational Users)",
+      "description": "Uniquely identify and authenticate organizational users and associate that unique identification with processes acting on behalf of those users. Implement multi-factor authentication for access to privileged accounts.",
+      "priority": "P1",
+      "baseline": ["LOW", "MODERATE", "HIGH"]
+    },
+    {
+      "id": "RA-5",
+      "family": "Risk Assessment",
+      "title": "Vulnerability Monitoring and Scanning",
+      "description": "Monitor and scan for vulnerabilities in the system and hosted applications periodically and when new vulnerabilities potentially affecting the system are identified and reported. Employ vulnerability monitoring tools and techniques that facilitate interoperability among tools.",
+      "priority": "P1",
+      "baseline": ["LOW", "MODERATE", "HIGH"]
+    },
+    {
+      "id": "SC-7",
+      "family": "System and Communications Protection",
+      "title": "Boundary Protection",
+      "description": "Monitor and control communications at the external boundary of the system and at key internal boundaries within the system. Implement subnetworks for publicly accessible system components that are physically or logically separated from internal networks.",
+      "priority": "P1",
+      "baseline": ["LOW", "MODERATE", "HIGH"]
+    },
+    {
+      "id": "SI-2",
+      "family": "System and Information Integrity",
+      "title": "Flaw Remediation",
+      "description": "Identify, report, and correct system flaws. Test software and firmware updates related to flaw remediation for effectiveness and potential side effects before installation. Install security-relevant software updates within an organizationally defined time period.",
+      "priority": "P1",
+      "baseline": ["LOW", "MODERATE", "HIGH"]
+    }
+  ]
+}

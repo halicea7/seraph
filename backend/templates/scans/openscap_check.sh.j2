@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# ============================================================
+# Seraph — Audit Script: OpenSCAP Compliance Check
+# Project: {{ project_name }}
+# Generated: {{ timestamp }}
+# Framework Mapping: NIST 800-53 CM-6 | CIS Control 4.1
+# ============================================================
+
+set -euo pipefail
+
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+
+OUTDIR="./seraph_results/{{ project_name | replace(' ', '_') }}/{{ timestamp_short }}"
+mkdir -p "$OUTDIR"
+
+DATASTREAM="{{ datastream }}"
+PROFILE="{{ profile }}"
+
+echo "============================================================"
+echo " Seraph OpenSCAP Compliance Check"
+echo " Profile: $PROFILE"
+echo " Run this script ON the target host"
+echo "============================================================"
+
+if ! command -v oscap &> /dev/null; then
+    echo "[ERROR] openscap not found."
+    echo "  Install: sudo apt install openscap-scanner ssg-debian-content"
+    exit 1
+fi
+
+if [ ! -f "$DATASTREAM" ]; then
+    echo "[ERROR] SCAP datastream not found: $DATASTREAM"
+    echo "  Install content: sudo apt install ssg-ubuntu-content"
+    exit 1
+fi
+
+# SCAP Compliance Evaluation (NIST CM-6 — Configuration Settings)
+echo ""
+echo "[*] Running OpenSCAP evaluation — NIST CM-6, CIS 4.1"
+$SUDO oscap xccdf eval \
+    --profile "$PROFILE" \
+    --results "$OUTDIR/oscap_results.xml" \
+    --report "$OUTDIR/oscap_report.html" \
+    --oval-results \
+    "$DATASTREAM" \
+    2>&1 | tee "$OUTDIR/oscap.log" || true  # oscap returns non-zero if findings exist
+
+echo ""
+echo "[+] OpenSCAP evaluation complete."
+echo "[*] HTML Report: $OUTDIR/oscap_report.html"
+echo "[*] XML Results: $OUTDIR/oscap_results.xml"

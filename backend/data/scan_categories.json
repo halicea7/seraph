@@ -1,0 +1,122 @@
+{
+  "network_discovery": {
+    "id": "network_discovery",
+    "name": "Network Discovery",
+    "description": "Nmap host discovery, port scan, service/version detection",
+    "icon": "network",
+    "tools": ["nmap"],
+    "control_mappings": [
+      {"framework": "NIST_800_53", "control_id": "CM-8", "title": "Information System Component Inventory"},
+      {"framework": "NIST_800_53", "control_id": "RA-5", "title": "Vulnerability Monitoring and Scanning"},
+      {"framework": "CIS", "control_id": "1.1", "title": "Inventory of Enterprise Assets"}
+    ],
+    "config_schema": {
+      "scan_type": {"type": "select", "options": ["SYN (-sS)", "TCP Connect (-sT)", "UDP (-sU)"], "default": "SYN (-sS)"},
+      "port_range": {"type": "text", "default": "1-65535", "placeholder": "e.g. 1-1024 or 22,80,443"},
+      "timing": {"type": "select", "options": ["T0 (Paranoid)", "T1 (Sneaky)", "T2 (Polite)", "T3 (Normal)", "T4 (Aggressive)", "T5 (Insane)"], "default": "T3 (Normal)"},
+      "os_detection": {"type": "boolean", "default": true},
+      "service_detection": {"type": "boolean", "default": true},
+      "subnet_mask": {"type": "text", "default": "24", "placeholder": "CIDR mask (e.g. 24)"}
+    }
+  },
+  "vulnerability_scan": {
+    "id": "vulnerability_scan",
+    "name": "Vulnerability Scan",
+    "description": "Nmap scripting engine (NSE) vulnerability scripts",
+    "icon": "shield-alert",
+    "tools": ["nmap"],
+    "control_mappings": [
+      {"framework": "NIST_800_53", "control_id": "RA-5", "title": "Vulnerability Monitoring and Scanning"},
+      {"framework": "CIS", "control_id": "7.1", "title": "Perform Automated Vulnerability Scans"}
+    ],
+    "config_schema": {
+      "script_categories": {"type": "multiselect", "options": ["vuln", "exploit", "auth", "default", "discovery", "safe"], "default": ["vuln", "safe"]},
+      "port_range": {"type": "text", "default": "1-65535"},
+      "timing": {"type": "select", "options": ["T2 (Polite)", "T3 (Normal)", "T4 (Aggressive)"], "default": "T3 (Normal)"}
+    }
+  },
+  "web_audit": {
+    "id": "web_audit",
+    "name": "Web Server Audit",
+    "description": "Nikto web vulnerability scan + TLS analysis via testssl.sh",
+    "icon": "globe",
+    "tools": ["nikto", "testssl"],
+    "control_mappings": [
+      {"framework": "NIST_800_53", "control_id": "RA-5", "title": "Vulnerability Monitoring and Scanning"},
+      {"framework": "NIST_800_53", "control_id": "SC-8", "title": "Transmission Confidentiality and Integrity"},
+      {"framework": "CIS", "control_id": "16.3", "title": "Verify Managed Service Provider (MSP) meets security requirements"}
+    ],
+    "config_schema": {
+      "target_url": {"type": "text", "placeholder": "http://target or https://target"},
+      "nikto_tuning": {"type": "multiselect", "options": ["1-File Upload", "2-Misconfiguration", "3-Information Disclosure", "4-Injection", "5-Remote File Retrieval", "6-DoS", "7-Remote Source Inclusion", "8-Command Execution", "9-SQL Injection"], "default": ["2", "3", "4", "9"]},
+      "check_ssl": {"type": "boolean", "default": true},
+      "ssl_port": {"type": "text", "default": "443"}
+    }
+  },
+  "host_hardening": {
+    "id": "host_hardening",
+    "name": "Host Hardening",
+    "description": "Lynis system audit for Linux hardening assessment",
+    "icon": "server",
+    "tools": ["lynis"],
+    "control_mappings": [
+      {"framework": "NIST_800_53", "control_id": "CM-6", "title": "Configuration Settings"},
+      {"framework": "NIST_800_53", "control_id": "CM-7", "title": "Least Functionality"},
+      {"framework": "CIS", "control_id": "4.1", "title": "Establish and Maintain a Secure Configuration Process"}
+    ],
+    "config_schema": {
+      "profile": {"type": "select", "options": ["default", "developer", "server"], "default": "default"},
+      "auditor_name": {"type": "text", "default": "Seraph Audit", "placeholder": "Auditor identifier"},
+      "skip_tests": {"type": "text", "default": "", "placeholder": "Comma-separated test IDs to skip"}
+    }
+  },
+  "openscap": {
+    "id": "openscap",
+    "name": "OpenSCAP Compliance",
+    "description": "SCAP-based compliance check against security benchmarks",
+    "icon": "clipboard-check",
+    "tools": ["openscap"],
+    "control_mappings": [
+      {"framework": "NIST_800_53", "control_id": "CM-6", "title": "Configuration Settings"},
+      {"framework": "CIS", "control_id": "4.1", "title": "Establish and Maintain a Secure Configuration Process"}
+    ],
+    "config_schema": {
+      "profile": {"type": "select", "options": ["xccdf_org.ssgproject.content_profile_cis", "xccdf_org.ssgproject.content_profile_pci-dss", "xccdf_org.ssgproject.content_profile_stig"], "default": "xccdf_org.ssgproject.content_profile_cis"},
+      "datastream": {"type": "text", "default": "/usr/share/xml/scap/ssg/content/ssg-ubuntu2204-ds.xml", "placeholder": "Path to SCAP datastream XML"}
+    }
+  },
+  "cloud_aws": {
+    "id": "cloud_aws",
+    "name": "Cloud Security (AWS)",
+    "description": "S3 bucket policy review, IAM audit, CloudTrail, Security Hub status",
+    "icon": "cloud",
+    "tools": ["aws"],
+    "control_mappings": [
+      {"framework": "NIST_800_53", "control_id": "AC-2", "title": "Account Management"},
+      {"framework": "NIST_800_53", "control_id": "AU-2", "title": "Event Logging"},
+      {"framework": "CIS", "control_id": "2.1", "title": "Establish and Maintain a Data Management Process"}
+    ],
+    "config_schema": {
+      "aws_profile": {"type": "text", "default": "default", "placeholder": "AWS CLI profile name"},
+      "aws_region": {"type": "text", "default": "us-east-1", "placeholder": "AWS region"},
+      "checks": {"type": "multiselect", "options": ["s3_buckets", "iam_users", "iam_roles", "cloudtrail", "security_groups", "security_hub"], "default": ["s3_buckets", "iam_users", "cloudtrail"]}
+    }
+  },
+  "log_monitoring": {
+    "id": "log_monitoring",
+    "name": "Log & Monitoring",
+    "description": "Check auditd status, log forwarding, retention policies",
+    "icon": "activity",
+    "tools": [],
+    "control_mappings": [
+      {"framework": "NIST_800_53", "control_id": "AU-2", "title": "Event Logging"},
+      {"framework": "NIST_800_53", "control_id": "AU-9", "title": "Protection of Audit Information"},
+      {"framework": "CIS", "control_id": "8.2", "title": "Collect Audit Logs"}
+    ],
+    "config_schema": {
+      "check_auditd": {"type": "boolean", "default": true},
+      "check_syslog": {"type": "boolean", "default": true},
+      "check_journald": {"type": "boolean", "default": true}
+    }
+  }
+}

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ============================================================
+# Seraph — Audit Script: Vulnerability Scan (NSE)
+# Project: {{ project_name }}
+# Target:  {{ target }}
+# Generated: {{ timestamp }}
+# Framework Mapping: NIST 800-53 RA-5 | CIS Control 7.1
+# ============================================================
+
+set -euo pipefail
+
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+
+OUTDIR="./seraph_results/{{ project_name | replace(' ', '_') }}/{{ timestamp_short }}"
+mkdir -p "$OUTDIR"
+
+echo "============================================================"
+echo " Seraph Vulnerability Scan (Nmap NSE)"
+echo " Target: {{ target }}"
+echo " Scripts: {{ script_categories }}"
+echo "============================================================"
+
+if ! command -v nmap &> /dev/null; then
+    echo "[ERROR] nmap not found. Install with: sudo apt install nmap"
+    exit 1
+fi
+
+# Vulnerability Scanning with NSE (NIST RA-5 — Vulnerability Monitoring and Scanning)
+echo ""
+echo "[*] Running NSE vulnerability scripts — NIST RA-5, CIS 7.1"
+$SUDO nmap --script="{{ script_categories }}" \
+    -p {{ port_range }} \
+    --timing {{ timing }} \
+    --open \
+    -oA "$OUTDIR/vuln_scan" \
+    -oX "$OUTDIR/vuln_scan.xml" \
+    {{ target }} \
+    2>&1 | tee "$OUTDIR/vuln_scan.log"
+
+echo ""
+echo "[+] Vulnerability scan complete."
+echo "[*] Results: $OUTDIR/vuln_scan.*"

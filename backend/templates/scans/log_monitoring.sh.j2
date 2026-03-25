@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# ============================================================
+# Seraph — Audit Script: Log & Monitoring Check
+# Project: {{ project_name }}
+# Generated: {{ timestamp }}
+# Framework Mapping: NIST 800-53 AU-2, AU-9 | CIS Control 8.2
+# ============================================================
+
+set -euo pipefail
+
+OUTDIR="./seraph_results/{{ project_name | replace(' ', '_') }}/{{ timestamp_short }}"
+mkdir -p "$OUTDIR"
+
+echo "============================================================"
+echo " Seraph Log & Monitoring Audit"
+echo " Run ON the target host"
+echo "============================================================"
+
+{% if check_auditd %}
+# Auditd Status (NIST AU-2 — Event Logging)
+echo ""
+echo "[*] Checking auditd — NIST AU-2, CIS 8.2"
+systemctl status auditd 2>&1 | tee "$OUTDIR/auditd_status.log" || echo "[WARNING] auditd not running"
+auditctl -l 2>&1 | tee "$OUTDIR/audit_rules.log" || echo "[WARNING] Cannot list audit rules"
+{% endif %}
+
+{% if check_syslog %}
+# Syslog/Rsyslog Status
+echo ""
+echo "[*] Checking syslog..."
+systemctl status rsyslog 2>&1 | tee "$OUTDIR/rsyslog_status.log" || \
+    systemctl status syslog 2>&1 | tee "$OUTDIR/syslog_status.log" || \
+    echo "[WARNING] No syslog service found"
+{% endif %}
+
+{% if check_journald %}
+# Journald Configuration
+echo ""
+echo "[*] Checking journald..."
+journalctl --disk-usage 2>&1 | tee "$OUTDIR/journald_disk.log"
+cat /etc/systemd/journald.conf 2>/dev/null | tee "$OUTDIR/journald_conf.log" || echo "[WARNING] journald.conf not found"
+{% endif %}
+
+echo ""
+echo "[+] Log & monitoring audit complete. Results in: $OUTDIR/"

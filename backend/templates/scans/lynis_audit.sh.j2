@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# ============================================================
+# Seraph — Audit Script: Host Hardening (Lynis)
+# Project: {{ project_name }}
+# Target:  localhost (run on the target host)
+# Generated: {{ timestamp }}
+# Framework Mapping: NIST 800-53 CM-6, CM-7 | CIS Control 4.1
+# ============================================================
+
+set -euo pipefail
+
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+
+OUTDIR="./seraph_results/{{ project_name | replace(' ', '_') }}/{{ timestamp_short }}"
+mkdir -p "$OUTDIR"
+
+echo "============================================================"
+echo " Seraph Host Hardening Audit (Lynis)"
+echo " Run this script ON the target host as root or with sudo"
+echo "============================================================"
+
+if ! command -v lynis &> /dev/null; then
+    echo "[ERROR] lynis not found. Install: sudo apt install lynis"
+    exit 1
+fi
+
+LYNIS_OPTS="--profile {{ profile }} --auditor '{{ auditor_name }}' --report-file $OUTDIR/lynis_report.dat --log-file $OUTDIR/lynis.log"
+{% if skip_tests %}
+LYNIS_OPTS="$LYNIS_OPTS --skip-test {{ skip_tests }}"
+{% endif %}
+
+# System Hardening Audit (NIST CM-6, CM-7 — Configuration Settings, Least Functionality)
+echo ""
+echo "[*] Running Lynis system audit — NIST CM-6, CM-7, CIS 4.1"
+$SUDO lynis audit system $LYNIS_OPTS 2>&1 | tee "$OUTDIR/lynis_output.log"
+
+echo ""
+echo "[+] Lynis audit complete."
+echo "[*] Report: $OUTDIR/lynis_report.dat"
+echo "[*] Log:    $OUTDIR/lynis.log"
+echo ""
+echo "[*] Hardening index:"
+grep "Hardening index" "$OUTDIR/lynis_report.dat" 2>/dev/null || echo "  (see report file)"

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# ============================================================
+# Seraph — Audit Script: Web Server Audit
+# Project: {{ project_name }}
+# Target:  {{ target }}
+# Generated: {{ timestamp }}
+# Framework Mapping: NIST 800-53 RA-5, SC-8 | CIS Control 16.3
+# ============================================================
+
+set -euo pipefail
+
+OUTDIR="./seraph_results/{{ project_name | replace(' ', '_') }}/{{ timestamp_short }}"
+mkdir -p "$OUTDIR"
+
+TARGET_URL="{{ target_url if target_url else 'http://' + target }}"
+
+echo "============================================================"
+echo " Seraph Web Server Audit"
+echo " Target URL: $TARGET_URL"
+echo "============================================================"
+
+# Nikto Web Vulnerability Scanner (NIST RA-5)
+if command -v nikto &> /dev/null; then
+    echo ""
+    echo "[*] Running Nikto web vulnerability scan — NIST RA-5"
+    nikto -h "$TARGET_URL" \
+        -Tuning "{{ nikto_tuning }}" \
+        -o "$OUTDIR/nikto_results.html" \
+        -Format html \
+        2>&1 | tee "$OUTDIR/nikto.log"
+    echo "[+] Nikto scan complete: $OUTDIR/nikto_results.html"
+else
+    echo "[WARNING] nikto not found. Install: sudo apt install nikto"
+fi
+
+{% if check_ssl %}
+# TLS/SSL Analysis (NIST SC-8 — Transmission Confidentiality and Integrity)
+if command -v testssl.sh &> /dev/null; then
+    echo ""
+    echo "[*] Running testssl.sh TLS analysis — NIST SC-8"
+    testssl.sh --severity HIGH \
+        --logfile "$OUTDIR/testssl.log" \
+        --jsonfile "$OUTDIR/testssl.json" \
+        {{ target }}:{{ ssl_port }} \
+        2>&1 | tee -a "$OUTDIR/testssl.log"
+    echo "[+] TLS analysis complete: $OUTDIR/testssl.*"
+elif command -v testssl &> /dev/null; then
+    testssl --severity HIGH \
+        --logfile "$OUTDIR/testssl.log" \
+        --jsonfile "$OUTDIR/testssl.json" \
+        {{ target }}:{{ ssl_port }} \
+        2>&1 | tee -a "$OUTDIR/testssl.log"
+else
+    echo "[WARNING] testssl.sh not found. Install: apt install testssl.sh"
+fi
+{% endif %}
+
+echo ""
+echo "[+] Web audit complete. Results in: $OUTDIR/"
