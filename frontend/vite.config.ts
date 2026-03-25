@@ -23,6 +23,11 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
+      '/a': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
   build: {

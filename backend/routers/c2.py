@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response as FastAPIResponse
+from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from sqlalchemy.orm import Session as DBSession
 from pydantic import BaseModel
 from typing import Optional
@@ -24,9 +24,9 @@ class ConnectRequest(BaseModel):
 
 @router.post("/connect")
 def connect_msf(req: ConnectRequest):
-    ok = msf.connect(host=req.host, port=req.port, password=req.password, ssl=req.ssl)
+    ok, err = msf.connect(host=req.host, port=req.port, password=req.password, ssl=req.ssl)
     if not ok:
-        raise HTTPException(503, "Could not connect to Metasploit RPC daemon. Ensure msfrpcd is running.")
+        raise HTTPException(503, f"Could not connect to Metasploit RPC: {err}")
     return msf.get_status()
 
 
@@ -251,13 +251,61 @@ def run_post_module(req: RunPostModuleRequest, db: DBSession = Depends(get_db)):
     if not re.match(r'^post/[\w/]+$', req.module_name):
         raise HTTPException(400, "Invalid module name")
 
-    opts = {"SESSION": session.msf_session_id}
+    opts = {"SESSION": int(session.msf_session_id)}
     for k, v in req.options.items():
         if re.match(r'^\w+$', str(k)):
             opts[k] = v
 
-    result = msf.run_module("post", req.module_name.replace("post/", "", 1), opts)
-    return result
+    def stream():
+        import time
+        client = msf.get_client()
+        if not client:
+            yield "data: [Error] Not connected to Metasploit\n\n"
+            return
+
+        sessions_before = set(client.sessions.list.keys()) if isinstance(client.sessions.list, dict) else set()
+        con = None
+        try:
+            con = client.consoles.console()
+            time.sleep(0.5)
+            con.read()
+
+            con.write(f"use {req.module_name}\n")
+            time.sleep(0.3); con.read()
+            con.write(f"set SESSION {int(session.msf_session_id)}\n")
+            time.sleep(0.1); con.read()
+            con.write("run\n")
+
+            deadline = time.time() + 600  # 10 min max
+            idle = 0
+            while time.time() < deadline:
+                time.sleep(0.8)
+                chunk = con.read()
+                data = chunk.get("data", "") if isinstance(chunk, dict) else ""
+                if data:
+                    for line in data.splitlines():
+                        if line.strip():
+                            yield f"data: {line}\n\n"
+                    idle = 0
+                else:
+                    idle += 1
+                    if not chunk.get("busy", True) and idle >= 2:
+                        break
+
+            # Check for new sessions
+            new_sids = [sid for sid in (client.sessions.list or {}) if sid not in sessions_before]
+            if new_sids:
+                yield f"data: [+] New session opened: #{new_sids[0]}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: [Error] {e}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            if con:
+                try: con.destroy()
+                except Exception: pass
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 # ── Loot ──────────────────────────────────────────────────────────
@@ -373,6 +421,22 @@ def stop_listener(job_id: str):
     return {"stopped": job_id}
 
 
+@router.delete("/jobs/all")
+def stop_all_jobs():
+    client = msf.get_client()
+    if not client:
+        raise HTTPException(503, "Not connected to Metasploit")
+    jobs = client.jobs.list or {}
+    stopped, failed = [], []
+    for jid in list(jobs.keys()):
+        try:
+            client.jobs.stop(str(jid))
+            stopped.append(str(jid))
+        except Exception:
+            failed.append(str(jid))
+    return {"stopped": stopped, "failed": failed}
+
+
 # ── Payload generation ────────────────────────────────────────────
 
 COMMON_PAYLOADS = [
@@ -436,3 +500,91 @@ def generate_payload(req: GeneratePayloadRequest):
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="payload_{payload_slug}.{ext}"'},
     )
+
+
+# ── Run module ────────────────────────────────────────────────────────────────
+
+class RunModuleRequest(BaseModel):
+    module: str
+    options: dict = {}
+    payload: str = ""
+    project_id: str = ""
+
+
+@router.post("/run-module")
+def run_module(req: RunModuleRequest, db: DBSession = Depends(get_db)):
+    if not msf.get_client():
+        raise HTTPException(503, "Not connected to Metasploit")
+
+    result = msf.run_module(req.module, req.options, req.payload)
+
+    if "error" in result:
+        raise HTTPException(500, result["error"])
+
+    # If a new session appeared and we have a project, persist it
+    if result.get("new_session_id") and req.project_id:
+        from database import C2Session
+        sid = result["new_session_id"]
+        info = result.get("new_session") or {}
+        existing = db.query(C2Session).filter(C2Session.msf_session_id == str(sid)).first()
+        if not existing:
+            tunnel = info.get("tunnel_peer", "")
+            remote_host = tunnel.split(":")[0] if ":" in tunnel else tunnel
+            db.add(C2Session(
+                id=str(uuid.uuid4()),
+                msf_session_id=str(sid),
+                project_id=req.project_id,
+                session_type=info.get("type", "shell"),
+                platform=info.get("platform", ""),
+                arch=info.get("arch", ""),
+                remote_host=remote_host,
+                remote_port=tunnel.split(":")[1] if ":" in tunnel else "",
+                tunnel_peer=tunnel,
+                via_exploit=info.get("via_exploit", req.module),
+                via_payload=info.get("via_payload", req.payload),
+                status="active",
+                established_at=datetime.utcnow(),
+                last_seen=datetime.utcnow(),
+            ))
+            db.commit()
+
+    return result
+
+
+# ── Attack Plan (rule-based) ───────────────────────────────────────────────────
+
+class AttackPlanRequest(BaseModel):
+    project_id: str
+    lhost: str = ""
+
+
+def _detect_lhost(target_ip: str = "") -> str:
+    """Return the local IP that routes toward target_ip, or best-guess outbound IP."""
+    import socket
+    try:
+        probe = target_ip or "8.8.8.8"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect((probe, 80))
+            return s.getsockname()[0]
+    except Exception:
+        return ""
+
+
+@router.post("/attack-plan")
+def generate_attack_plan(req: AttackPlanRequest, db: DBSession = Depends(get_db)):
+    from database import Scan, Finding
+    from services.attack_planner import plan
+
+    project = db.query(Project).filter(Project.id == req.project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    targets = db.query(Target).filter(Target.project_id == req.project_id).all()
+    target_ids = [t.id for t in targets]
+    scans = db.query(Scan).filter(Scan.target_id.in_(target_ids)).all() if target_ids else []
+    scan_ids = [s.id for s in scans]
+    findings = db.query(Finding).filter(Finding.scan_id.in_(scan_ids)).all() if scan_ids else []
+
+    lhost = req.lhost or _detect_lhost(targets[0].hostname_or_ip if targets else "")
+
+    return plan(targets, findings, lhost=lhost)

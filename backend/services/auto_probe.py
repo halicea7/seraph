@@ -89,6 +89,9 @@ async def _run_step(scan_id: str, cmd: str, scan_type: str, timeout: int) -> str
     finally:
         db.close()
 
+    from routers.ws import broadcast_event as _broadcast
+    asyncio.create_task(_broadcast({"type": "scan_update", "scan_id": scan_id, "status": "running"}))
+
     try:
         proc = await asyncio.create_subprocess_shell(
             cmd,
@@ -107,6 +110,8 @@ async def _run_step(scan_id: str, cmd: str, scan_type: str, timeout: int) -> str
         return None
 
     output = "".join(chunks)
+    status = "completed"
+    finding_count = 0
 
     db = SessionLocal()
     try:
@@ -141,8 +146,15 @@ async def _run_step(scan_id: str, cmd: str, scan_type: str, timeout: int) -> str
                     scan_id=scan_id,
                 ))
             db.commit()
+            status = scan.status
+            finding_count = len(parsed) if parsed else 0
     finally:
         db.close()
+
+    asyncio.create_task(_broadcast({
+        "type": "scan_update", "scan_id": scan_id, "status": status,
+        "findings": finding_count,
+    }))
 
     return output
 

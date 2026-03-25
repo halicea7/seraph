@@ -3,7 +3,7 @@ import {
   Terminal as TerminalIcon, Package, Radio, Database,
   Wifi, WifiOff, RefreshCw, Trash2, Play,
   Copy, Check, Download, ChevronRight,
-  Shield, Zap, Eye, EyeOff, X
+  Shield, Zap, Eye, EyeOff, X, Crosshair
 } from 'lucide-react'
 import Terminal, { TerminalHandle } from '../components/Terminal'
 import type { Project } from '../types'
@@ -104,7 +104,7 @@ function SessionStatusBadge({ status, live }: { status: string; live: boolean })
 // ── Main component ─────────────────────────────────────────────────
 
 export default function C2Console() {
-  const [activeTab, setActiveTab] = useState<'sessions' | 'payloads' | 'listeners' | 'loot'>('sessions')
+  const [activeTab, setActiveTab] = useState<'sessions' | 'payloads' | 'listeners' | 'attack' | 'loot'>('sessions')
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProject, setSelectedProject] = useState('')
   const [msfStatus, setMsfStatus] = useState<MsfStatus>({ connected: false })
@@ -114,12 +114,15 @@ export default function C2Console() {
   const [payloads, setPayloads] = useState<PayloadDef[]>([])
   const [listeners, setListeners] = useState<Listener[]>([])
   const [postModules, setPostModules] = useState<PostModule[]>([])
+  const [postHistory, setPostHistory] = useState<Array<{id: string; label: string; ts: Date; output: string | null; error: string | null; running: boolean}>>([])
+  const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState('')
   const [showLootContent, setShowLootContent] = useState<string | null>(null)
   const terminalRef = useRef<TerminalHandle>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // MSF connect form
   const [msfHost, setMsfHost] = useState('127.0.0.1')
@@ -141,6 +144,39 @@ export default function C2Console() {
   const [listenerLhost, setListenerLhost] = useState('0.0.0.0')
   const [listenerLport, setListenerLport] = useState('4444')
   const [startingListener, setStartingListener] = useState(false)
+
+  // Module run state per card index
+  const [runningModule, setRunningModule] = useState<number | null>(null)
+  const [moduleResults, setModuleResults] = useState<Record<number, ModuleRunResult>>({})
+
+  // Attack plan
+  interface AttackRec {
+    module: string
+    payload: string
+    options: Record<string, string>
+    description: string
+    confidence: 'high' | 'medium' | 'low'
+    match_reason: string
+    finding_title: string
+    finding_severity: string
+    post_modules: string[]
+  }
+  interface ModuleRunResult {
+    error?: string
+    job_id?: string | null
+    new_session_id?: string | null
+    msf_result?: Record<string, unknown>
+  }
+  interface AttackPlanResult {
+    recommendations: AttackRec[]
+    unmatched_findings: { title: string; severity: string; cve_id: string | null }[]
+    target_count: number
+    finding_count: number
+    matched_count: number
+  }
+  const [attackPlan, setAttackPlan] = useState<AttackPlanResult | null>(null)
+  const [attackPlanError, setAttackPlanError] = useState('')
+  const [generatingAttack, setGeneratingAttack] = useState(false)
 
   // Terminal input
   const [termInput, setTermInput] = useState('')
@@ -168,9 +204,15 @@ export default function C2Console() {
     if (activeSession) {
       loadPostModules(activeSession.platform)
       connectTerminal(activeSession)
+      setPostHistory([])
+      setExpandedHistory(new Set())
     }
     return () => { wsRef.current?.close() }
   }, [activeSession?.id])
+
+  useEffect(() => {
+    if (activeTab === 'listeners') loadListeners()
+  }, [activeTab])
 
   async function loadProjects() {
     const res = await fetch('/api/v1/projects')
@@ -327,16 +369,106 @@ export default function C2Console() {
     loadListeners()
   }
 
+  async function handleGenerateAttackPlan() {
+    if (!selectedProject) return
+    setGeneratingAttack(true)
+    setAttackPlanError('')
+    setAttackPlan(null)
+    try {
+      const res = await fetch('/api/v1/c2/attack-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: selectedProject, lhost }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setAttackPlanError(data.detail || 'Failed to generate plan'); return }
+      setAttackPlan(data)
+    } catch (e: unknown) {
+      setAttackPlanError(e instanceof Error ? e.message : 'Unknown error')
+    } finally {
+      setGeneratingAttack(false)
+    }
+  }
+
+  function startSessionPolling() {
+    if (sessionPollRef.current) clearInterval(sessionPollRef.current)
+    const deadline = Date.now() + 60_000
+    sessionPollRef.current = setInterval(async () => {
+      await handleSync()
+      if (Date.now() >= deadline) {
+        clearInterval(sessionPollRef.current!)
+        sessionPollRef.current = null
+      }
+    }, 3000)
+  }
+
+  async function handleRunModule(rec: AttackRec, idx: number) {
+    if (!msfStatus.connected) return
+    setRunningModule(idx)
+    setModuleResults(prev => { const n = { ...prev }; delete n[idx]; return n })
+    try {
+      const res = await fetch('/api/v1/c2/run-module', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          module: rec.module,
+          options: rec.options,
+          payload: rec.payload,
+          project_id: selectedProject,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setModuleResults(prev => ({ ...prev, [idx]: { error: data.detail || 'Failed' } }))
+      } else {
+        setModuleResults(prev => ({ ...prev, [idx]: data }))
+        await handleSync()
+        // Keep polling for 60s in case reverse shell stages slowly
+        if (!data.new_session_id) startSessionPolling()
+      }
+    } catch (e: unknown) {
+      setModuleResults(prev => ({ ...prev, [idx]: { error: e instanceof Error ? e.message : 'Unknown error' } }))
+    } finally {
+      setRunningModule(null)
+    }
+  }
+
   async function handleRunPostModule(mod: PostModule) {
     if (!activeSession) return
-    const res = await fetch('/api/v1/c2/post-modules/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: activeSession.id, module_name: mod.name }),
-    })
-    const data = await res.json()
-    terminalRef.current?.writeln(`\x1b[33m[*] Ran ${mod.name}\x1b[0m`)
-    terminalRef.current?.writeln(JSON.stringify(data.result || data, null, 2))
+    const entryId = `${mod.name}-${Date.now()}`
+    const entry = { id: entryId, label: mod.label, ts: new Date(), output: null, error: null, running: true }
+    setPostHistory(prev => [entry, ...prev])
+    setExpandedHistory(prev => new Set(prev).add(entryId))
+    terminalRef.current?.writeln(`\x1b[33m[*] ${mod.label}\x1b[0m`)
+    try {
+      const res = await fetch('/api/v1/c2/post-modules/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: activeSession.id, module_name: mod.name }),
+      })
+      if (!res.body) throw new Error('No stream body')
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let accumulated = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const text = decoder.decode(value, { stream: true })
+        for (const raw of text.split('\n')) {
+          const line = raw.startsWith('data: ') ? raw.slice(6) : raw
+          if (!line) continue
+          if (line === '[DONE]') break
+          accumulated += (accumulated ? '\n' : '') + line
+          setPostHistory(prev => prev.map(e => e.id === entryId ? { ...e, output: accumulated } : e))
+          terminalRef.current?.writeln(line)
+          if (line.startsWith('[+] New session')) loadSessions()
+        }
+      }
+      setPostHistory(prev => prev.map(e => e.id === entryId ? { ...e, running: false } : e))
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Unknown error'
+      setPostHistory(prev => prev.map(e => e.id === entryId ? { ...e, running: false, error: msg } : e))
+    }
   }
 
   function connectTerminal(session: C2Session) {
@@ -473,8 +605,20 @@ export default function C2Console() {
                 <TerminalIcon size={14} className={`mt-0.5 flex-shrink-0 ${s.status === 'active' && s.live ? 'text-green-400' : s.status === 'lost' ? 'text-red-400' : 'text-slate-600'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-mono text-slate-200 truncate">{s.remote_host || 'unknown'}</span>
-                    <SessionStatusBadge status={s.status} live={s.live} />
+                    <span className="text-xs font-mono text-slate-200 truncate">
+                      {s.remote_host || 'unknown'}
+                      {s.msf_session_id && <span className="text-slate-600 ml-1">#{s.msf_session_id}</span>}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <SessionStatusBadge status={s.status} live={s.live} />
+                      <button
+                        onClick={e => { e.stopPropagation(); handleKillSession(s) }}
+                        className="text-slate-600 hover:text-red-400 transition-colors"
+                        title="Kill & delete session"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
                   </div>
                   <div className="text-[10px] text-slate-500 mt-0.5">{s.session_type} · {s.platform || '?'} · {s.arch || '?'}</div>
                   {s.via_exploit && <div className="text-[10px] text-slate-600 truncate">{s.via_exploit}</div>}
@@ -494,6 +638,7 @@ export default function C2Console() {
               { id: 'sessions', icon: <TerminalIcon size={13} />, label: 'Console' },
               { id: 'payloads', icon: <Package size={13} />, label: 'Payloads' },
               { id: 'listeners', icon: <Radio size={13} />, label: 'Listeners' },
+              { id: 'attack', icon: <Crosshair size={13} />, label: 'Attack Plan' },
               { id: 'loot', icon: <Database size={13} />, label: `Loot (${loot.length})` },
             ] as const).map(tab => (
               <button
@@ -559,25 +704,114 @@ export default function C2Console() {
 
             {/* Post-exploitation sidebar */}
             {activeSession && (
-              <div className="w-60 flex-shrink-0 flex flex-col gap-2">
-                <div className="glass rounded-xl overflow-hidden flex-1 flex flex-col min-h-0">
+              <div className="w-64 flex-shrink-0 flex flex-col gap-2 min-h-0">
+                {/* Module buttons */}
+                <div className="glass rounded-xl overflow-hidden flex flex-col" style={{ maxHeight: '240px' }}>
                   <div className="px-3 py-2 border-b border-cyan-900/20 flex-shrink-0">
                     <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Post Modules</span>
                   </div>
-                  <div className="overflow-y-auto flex-1 p-2 space-y-1">
-                    {postModules.map(mod => (
-                      <button
-                        key={mod.name}
-                        onClick={() => handleRunPostModule(mod)}
-                        title={mod.description}
-                        className="w-full text-left px-3 py-2 rounded-lg text-xs text-slate-300 hover:bg-cyan-950/20 hover:text-cyan-300 border border-transparent hover:border-cyan-900/30 transition-all flex items-center gap-2 group"
-                      >
-                        <Zap size={11} className="text-slate-600 group-hover:text-cyan-500 flex-shrink-0" />
-                        <span className="truncate">{mod.label}</span>
-                      </button>
-                    ))}
+                  <div className="overflow-y-auto p-2 space-y-1">
+                    {postModules.map(mod => {
+                      const isRunning = postHistory.some(e => e.label === mod.label && e.running)
+                      return (
+                        <button
+                          key={mod.name}
+                          onClick={() => handleRunPostModule(mod)}
+                          disabled={isRunning}
+                          title={mod.description}
+                          className="w-full text-left px-3 py-2 rounded-lg text-xs text-slate-300 hover:bg-cyan-950/20 hover:text-cyan-300 border border-transparent hover:border-cyan-900/30 transition-all flex items-center gap-2 group disabled:opacity-50"
+                        >
+                          {isRunning
+                            ? <RefreshCw size={11} className="text-cyan-500 animate-spin flex-shrink-0" />
+                            : <Zap size={11} className="text-slate-600 group-hover:text-cyan-500 flex-shrink-0" />}
+                          <span className="truncate">{mod.label}</span>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
+
+                {/* Run history */}
+                {postHistory.length > 0 && (
+                  <div className="glass rounded-xl overflow-hidden flex flex-col flex-1 min-h-0">
+                    <div className="px-3 py-2 border-b border-cyan-900/20 flex-shrink-0 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Results</span>
+                      <button onClick={() => setPostHistory([])} className="text-slate-600 hover:text-red-400 transition-colors" title="Clear history">
+                        <X size={11} />
+                      </button>
+                    </div>
+                    <div className="overflow-y-auto flex-1 divide-y divide-cyan-900/10">
+                      {postHistory.map(entry => (
+                        <div key={entry.id} className="text-xs">
+                          <button
+                            onClick={() => setExpandedHistory(prev => {
+                              const n = new Set(prev)
+                              n.has(entry.id) ? n.delete(entry.id) : n.add(entry.id)
+                              return n
+                            })}
+                            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-cyan-950/10 transition-colors text-left"
+                          >
+                            {entry.running
+                              ? <RefreshCw size={10} className="text-cyan-400 animate-spin flex-shrink-0" />
+                              : entry.error
+                                ? <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+                                : <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />}
+                            <span className="flex-1 truncate text-slate-300">{entry.label}</span>
+                            <span className="text-slate-600 flex-shrink-0">{entry.ts.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+                          </button>
+                          {expandedHistory.has(entry.id) && (
+                            <div className="px-3 pb-2 space-y-2">
+                              {(() => {
+                                const leads = entry.output
+                                  ? entry.output.split('\n').filter(l => l.startsWith('[+]'))
+                                  : []
+                                return leads.length > 0 && !entry.running ? (
+                                  <div className="rounded-lg border border-green-800/40 bg-green-950/20 p-2 space-y-1">
+                                    <div className="text-[10px] font-semibold text-green-400 uppercase tracking-wider mb-1">
+                                      {leads.length} Lead{leads.length !== 1 ? 's' : ''}
+                                    </div>
+                                    {leads.map((l, i) => {
+                                      const match = l.match(/exploit\/[\w/]+/)
+                                      const module = match ? match[0] : null
+                                      const desc = l.replace(/\[\+\]\s*[\d\.]+\s*-\s*(exploit\/[\w/]+)?\s*:?\s*/, '').trim()
+                                      return (
+                                        <div key={i} className="flex items-start gap-1.5">
+                                          <span className="text-green-500 flex-shrink-0 mt-0.5">›</span>
+                                          <div className="min-w-0">
+                                            {module && (
+                                              <div className="flex items-center gap-1">
+                                                <span className="text-[10px] font-mono text-green-300 truncate">{module}</span>
+                                                <button
+                                                  onClick={() => { navigator.clipboard.writeText(module); setCopied(module) }}
+                                                  className="text-slate-600 hover:text-green-400 flex-shrink-0 transition-colors"
+                                                  title="Copy module path"
+                                                >
+                                                  {copied === module ? <span className="text-[9px] text-green-400">✓</span> : <Copy size={9} />}
+                                                </button>
+                                              </div>
+                                            )}
+                                            <span className="text-[9px] text-slate-400">{desc}</span>
+                                          </div>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                ) : null
+                              })()}
+                              {entry.running
+                                ? <span className="text-slate-500 italic">Running…</span>
+                                : entry.error
+                                  ? <span className="text-red-400">{entry.error}</span>
+                                  : entry.output
+                                    ? <pre className="text-[10px] text-slate-300 whitespace-pre-wrap break-all max-h-48 overflow-y-auto font-mono leading-relaxed">{entry.output}</pre>
+                                    : <span className="text-slate-600 italic">No output</span>}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -702,10 +936,26 @@ export default function C2Console() {
             {/* Active listeners */}
             <div className="glass rounded-xl overflow-hidden border border-cyan-900/20">
               <div className="px-4 py-3 border-b border-cyan-900/20 flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Listeners</span>
-                <button onClick={loadListeners} className="text-slate-600 hover:text-cyan-400 transition-colors">
-                  <RefreshCw size={13} />
-                </button>
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  Active Jobs & Listeners {listeners.length > 0 && <span className="text-cyan-400 ml-1">({listeners.length})</span>}
+                </span>
+                <div className="flex items-center gap-3">
+                  {msfStatus.connected && (
+                    <button
+                      onClick={async () => {
+                        await fetch('/api/v1/c2/jobs/all', { method: 'DELETE' })
+                        loadListeners()
+                      }}
+                      className="text-[11px] text-red-500 hover:text-red-300 transition-colors flex items-center gap-1"
+                      title="Kill all MSF jobs"
+                    >
+                      <X size={11} /> Kill All
+                    </button>
+                  )}
+                  <button onClick={loadListeners} className="text-slate-600 hover:text-cyan-400 transition-colors">
+                    <RefreshCw size={13} />
+                  </button>
+                </div>
               </div>
               {listeners.length === 0 ? (
                 <div className="text-center text-slate-600 py-8 text-xs">No active listeners</div>
@@ -728,6 +978,203 @@ export default function C2Console() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Attack Plan tab */}
+        {activeTab === 'attack' && (
+          <div className="flex-1 flex flex-col min-h-0 gap-3 overflow-y-auto">
+            {/* Header */}
+            <div className="glass rounded-xl p-4 border border-cyan-900/20 flex items-center justify-between gap-4 flex-shrink-0">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                  <Crosshair size={14} className="text-red-400" /> Attack Plan
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Maps scan findings to Metasploit modules using CVE lookups and service fingerprinting.
+                </p>
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0">
+                {attackPlan && (
+                  <span className="text-xs text-slate-500">
+                    {attackPlan.matched_count} match{attackPlan.matched_count !== 1 ? 'es' : ''} from {attackPlan.finding_count} findings
+                  </span>
+                )}
+                <button
+                  onClick={handleGenerateAttackPlan}
+                  disabled={generatingAttack || !selectedProject}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-700/80 hover:bg-red-600 disabled:opacity-40 text-sm text-white font-medium transition-all"
+                  style={{ boxShadow: '0 0 10px rgba(239,68,68,0.2)' }}
+                >
+                  {generatingAttack
+                    ? <><RefreshCw size={13} className="animate-spin" /> Scanning...</>
+                    : <><Crosshair size={13} /> {attackPlan ? 'Refresh' : 'Analyze'}</>
+                  }
+                </button>
+              </div>
+            </div>
+
+            {attackPlanError && (
+              <p className="text-xs text-red-400 bg-red-950/30 border border-red-500/20 rounded-lg px-3 py-2 flex-shrink-0">{attackPlanError}</p>
+            )}
+
+            {attackPlan && attackPlan.recommendations.length === 0 && (
+              <div className="glass rounded-xl border border-cyan-900/20 flex flex-col items-center justify-center py-12 text-slate-600">
+                <Shield size={36} className="mb-3 opacity-20" />
+                <p className="text-sm">No matching modules found</p>
+                <p className="text-xs mt-1 text-slate-700">Run nmap/nikto scans to discover services and vulnerabilities first</p>
+              </div>
+            )}
+
+            {attackPlan && attackPlan.recommendations.map((rec, i) => {
+              const confColor = rec.confidence === 'high' ? 'text-red-400 border-red-500/30 bg-red-950/20'
+                : rec.confidence === 'medium' ? 'text-amber-400 border-amber-500/30 bg-amber-950/20'
+                : 'text-slate-400 border-slate-500/30 bg-slate-900/20'
+              const sevColor = rec.finding_severity === 'critical' ? 'text-red-400'
+                : rec.finding_severity === 'high' ? 'text-orange-400'
+                : rec.finding_severity === 'medium' ? 'text-amber-400'
+                : 'text-slate-500'
+              return (
+                <div key={i} className="glass rounded-xl border border-cyan-900/20 p-4 flex-shrink-0">
+                  <div className="flex items-start gap-3 mb-3">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase flex-shrink-0 mt-0.5 ${confColor}`}>
+                      {rec.confidence}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <code className="text-sm font-mono text-cyan-300">{rec.module}</code>
+                      {rec.finding_title && (
+                        <p className="text-xs text-slate-500 mt-0.5 truncate">
+                          via <span className={`font-medium ${sevColor}`}>{rec.finding_title}</span>
+                          <span className="text-slate-700 mx-1">·</span>
+                          <span className="text-slate-600">{rec.match_reason}</span>
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => copyText(rec.module, `mod-${i}`)}
+                      className="text-slate-600 hover:text-cyan-400 transition-colors flex-shrink-0"
+                      title="Copy module path"
+                    >
+                      {copied === `mod-${i}` ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-slate-400 mb-3">{rec.description}</p>
+
+                  {/* Options — editable */}
+                  {Object.keys(rec.options).length > 0 && (
+                    <div className="bg-[#05080d] rounded-lg p-3 border border-cyan-900/20 mb-3 font-mono text-xs space-y-1.5">
+                      <div className="text-slate-600 text-[10px] uppercase tracking-wider mb-2">msf options</div>
+                      {Object.entries(rec.options).map(([k, v]) => (
+                        <div key={k} className="flex items-center gap-3">
+                          <span className="text-cyan-600 w-24 flex-shrink-0">set {k}</span>
+                          <input
+                            className="flex-1 bg-transparent border-b border-cyan-900/40 focus:border-cyan-500/60 outline-none text-slate-300 py-0.5"
+                            defaultValue={v}
+                            onChange={e => { rec.options[k] = e.target.value }}
+                          />
+                        </div>
+                      ))}
+                      {rec.payload && (
+                        <div className="flex items-center gap-3">
+                          <span className="text-cyan-600 w-24 flex-shrink-0">set PAYLOAD</span>
+                          <input
+                            className="flex-1 bg-transparent border-b border-cyan-900/40 focus:border-cyan-500/60 outline-none text-slate-300 py-0.5"
+                            defaultValue={rec.payload}
+                            onChange={e => { rec.payload = e.target.value }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Post modules */}
+                  {rec.post_modules.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-3">
+                      <span className="text-[10px] text-slate-600 self-center">post:</span>
+                      {rec.post_modules.map(pm => (
+                        <span key={pm} className="text-[10px] font-mono text-purple-400 bg-purple-950/30 border border-purple-500/20 px-2 py-0.5 rounded">
+                          {pm}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Run button + result */}
+                  {!rec.module.startsWith('—') && (
+                    <div className="flex flex-col gap-2 pt-1 border-t border-cyan-900/10">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => handleRunModule(rec, i)}
+                        disabled={!msfStatus.connected || runningModule === i}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-40
+                          bg-red-900/40 hover:bg-red-800/60 text-red-300 border border-red-700/30 hover:border-red-600/50"
+                        title={!msfStatus.connected ? 'Connect to Metasploit first' : 'Run this module'}
+                      >
+                        {runningModule === i
+                          ? <><RefreshCw size={11} className="animate-spin" /> Running...</>
+                          : <><Play size={11} /> Run</>
+                        }
+                      </button>
+                      {moduleResults[i] && (
+                        moduleResults[i].error ? (
+                          <span className="text-xs text-red-400">{moduleResults[i].error}</span>
+                        ) : moduleResults[i].new_session_id ? (
+                          <span className="text-xs text-green-400 flex items-center gap-1">
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                            </span>
+                            Session opened (MSF #{moduleResults[i].new_session_id})
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs text-amber-400">
+                              Job started{moduleResults[i].job_id ? ` (#${moduleResults[i].job_id})` : ''} — waiting for callback
+                            </span>
+                            <button
+                              onClick={handleSync}
+                              className="text-[10px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
+                            >
+                              Sync sessions
+                            </button>
+                          </span>
+                        )
+                      )}
+                    </div>
+                    {moduleResults[i]?.msf_result && (
+                      <pre className="text-[10px] font-mono text-slate-500 bg-[#05080d] rounded px-2 py-1.5 border border-cyan-900/20 overflow-x-auto">
+                        {JSON.stringify(moduleResults[i].msf_result, null, 2)}
+                      </pre>
+                    )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {attackPlan && attackPlan.unmatched_findings.length > 0 && (
+              <div className="glass rounded-xl border border-cyan-900/10 p-4 flex-shrink-0">
+                <p className="text-[10px] text-slate-600 uppercase tracking-wider mb-2">No module match found for:</p>
+                <div className="space-y-1">
+                  {attackPlan.unmatched_findings.map((f, i) => (
+                    <div key={i} className="text-xs text-slate-600 flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-700 flex-shrink-0" />
+                      {f.title}
+                      {f.cve_id && <span className="font-mono text-slate-700">{f.cve_id}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!attackPlan && !generatingAttack && (
+              <div className="flex-1 glass rounded-xl border border-cyan-900/20 flex flex-col items-center justify-center text-slate-600 py-16">
+                <Crosshair size={40} className="mb-3 opacity-20 text-red-600" />
+                <p className="text-sm">Select a project and click Analyze</p>
+                <p className="text-xs mt-1 text-slate-700">Works best after running nmap and nikto scans</p>
+              </div>
+            )}
           </div>
         )}
 

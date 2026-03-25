@@ -19,7 +19,7 @@ def get_client():
     return _client if _connected else None
 
 
-def connect(host: str = "127.0.0.1", port: int = 55553, password: str = "", ssl: bool = False) -> bool:
+def connect(host: str = "127.0.0.1", port: int = 55553, password: str = "", ssl: bool = False) -> tuple[bool, str]:
     import os
     password = password or os.getenv("MSF_RPC_PASSWORD", "")
     global _client, _connected
@@ -28,12 +28,12 @@ def connect(host: str = "127.0.0.1", port: int = 55553, password: str = "", ssl:
         _client = MsfRpcClient(password, server=host, port=port, ssl=ssl)
         _connected = True
         logger.info(f"Connected to Metasploit RPC at {host}:{port}")
-        return True
+        return True, ""
     except Exception as e:
         logger.warning(f"Could not connect to Metasploit RPC: {e}")
         _connected = False
         _client = None
-        return False
+        return False, str(e)
 
 
 def disconnect():
@@ -47,15 +47,15 @@ def get_status() -> dict:
     if not client:
         return {"connected": False, "version": None, "sessions": 0, "jobs": 0}
     try:
-        version = client.core.version()
-        sessions = len(client.sessions.list)
-        jobs = len(client.jobs.list)
+        version = client.core.version
+        sessions = client.sessions.list
+        jobs = client.jobs.list
         return {
             "connected": True,
-            "version": version.get("version", "unknown"),
-            "ruby_version": version.get("ruby", "unknown"),
-            "sessions": sessions,
-            "jobs": jobs,
+            "version": version.get("version", "unknown") if isinstance(version, dict) else str(version),
+            "ruby_version": version.get("ruby", "unknown") if isinstance(version, dict) else "unknown",
+            "sessions": len(sessions) if isinstance(sessions, dict) else 0,
+            "jobs": len(jobs) if isinstance(jobs, dict) else 0,
         }
     except Exception as e:
         logger.warning(f"MSF status error: {e}")
@@ -121,26 +121,151 @@ def stop_job(job_id: str) -> bool:
         return False
 
 
-def run_module(module_type: str, module_name: str, options: dict) -> dict:
-    """Run a MSF module (exploit, auxiliary, post) and return job/result info."""
+def run_module(module_path: str, options: dict, payload: str = "") -> dict:
+    """Run an exploit/auxiliary/post module and return job_id + any new session."""
+    import time, threading
     client = get_client()
     if not client:
         return {"error": "Not connected to Metasploit"}
     try:
-        if module_type == "exploit":
-            mod = client.modules.use("exploit", module_name)
-        elif module_type == "auxiliary":
-            mod = client.modules.use("auxiliary", module_name)
-        elif module_type == "post":
-            mod = client.modules.use("post", module_name)
+        # Infer type from path prefix
+        if module_path.startswith("exploit/"):
+            mod_type, mod_name = "exploit", module_path[len("exploit/"):]
+        elif module_path.startswith("auxiliary/"):
+            mod_type, mod_name = "auxiliary", module_path[len("auxiliary/"):]
+        elif module_path.startswith("post/"):
+            mod_type, mod_name = "post", module_path[len("post/"):]
         else:
-            return {"error": f"Unknown module type: {module_type}"}
+            return {"error": f"Cannot determine module type from path: {module_path}"}
 
+        mod = client.modules.use(mod_type, mod_name)
+
+        # Payload options cannot be set on the module object — pass them to execute() as kwargs
+        _PAYLOAD_OPTIONS = {"LHOST", "LPORT", "LURI", "EXITFUNC", "RHOST"}
+        module_opts = {}
+        execute_opts = {}
         for key, val in options.items():
+            if isinstance(val, str) and val.lower() in ("true", "false"):
+                val = val.lower() == "true"
+            if key in _PAYLOAD_OPTIONS:
+                execute_opts[key] = val
+            else:
+                module_opts[key] = val
+
+        for key, val in module_opts.items():
+            if key == "SESSION" and isinstance(val, str):
+                val = int(val)
             mod[key] = val
 
-        result = mod.execute()
-        return {"result": result}
+        sessions_before = set(client.sessions.list.keys()) if isinstance(client.sessions.list, dict) else set()
+
+        if payload and mod_type == "exploit":
+            result = mod.execute(payload=payload, **execute_opts)
+        else:
+            result = mod.execute(**execute_opts)
+
+        logger.info(f"MSF execute result for {module_path}: {result}")
+
+        if isinstance(result, dict) and result.get("error"):
+            return {"error": result.get("error_message") or result.get("error_string") or str(result)}
+
+        job_id = result.get("job_id") if isinstance(result, dict) else None
+        uuid = result.get("uuid") if isinstance(result, dict) else None
+
+        # Post modules: run via MSF console to reliably capture output
+        if mod_type == "post":
+            # Stop the background job we just started — we'll re-run via console
+            if job_id is not None:
+                try:
+                    client.jobs.stop(str(job_id))
+                except Exception:
+                    pass
+
+            output = ""
+            con = None
+            try:
+                con = client.consoles.console()
+                time.sleep(0.5)
+                con.read()  # flush banner
+
+                session_id = options.get("SESSION", "")
+                con.write(f"use {module_path}\n")
+                time.sleep(0.3)
+                con.read()
+
+                for k, v in options.items():
+                    con.write(f"set {k} {v}\n")
+                    time.sleep(0.1)
+                con.read()
+
+                con.write("run\n")
+
+                # Read until prompt returns (module finished) — up to 5 min
+                buf = ""
+                deadline = time.time() + 300
+                idle_ticks = 0
+                while time.time() < deadline:
+                    time.sleep(1)
+                    chunk = con.read()
+                    data = chunk.get("data", "") if isinstance(chunk, dict) else ""
+                    buf += data
+                    busy = chunk.get("busy", True) if isinstance(chunk, dict) else True
+                    if not busy:
+                        idle_ticks += 1
+                        if idle_ticks >= 2:
+                            break
+                    else:
+                        idle_ticks = 0
+                output = buf.strip()
+            except Exception as e:
+                logger.warning(f"Console run error for {module_path}: {e}")
+            finally:
+                if con is not None:
+                    try:
+                        con.destroy()
+                    except Exception:
+                        pass
+
+            new_sids = [sid for sid in (client.sessions.list or {}) if sid not in sessions_before]
+            return {
+                "job_id": None,
+                "output": output or None,
+                "new_session_id": str(new_sids[0]) if new_sids else None,
+                "msf_result": result,
+            }
+
+        # Exploit/auxiliary: poll for new sessions
+        new_sids_list: list = []
+        done = threading.Event()
+
+        def _poll():
+            deadline = time.time() + 4
+            while time.time() < deadline:
+                time.sleep(0.3)
+                try:
+                    after = client.sessions.list
+                    if isinstance(after, dict):
+                        found = [sid for sid in after if sid not in sessions_before]
+                        if found:
+                            new_sids_list.extend(found)
+                            break
+                except Exception:
+                    pass
+            done.set()
+
+        threading.Thread(target=_poll, daemon=True).start()
+        done.wait(timeout=5)
+
+        sessions_after = client.sessions.list if isinstance(client.sessions.list, dict) else {}
+        new_session = sessions_after.get(new_sids_list[0]) if new_sids_list else None
+        logger.info(f"MSF run complete — new sessions: {new_sids_list}")
+
+        return {
+            "job_id": str(job_id) if job_id is not None else None,
+            "new_session_id": str(new_sids_list[0]) if new_sids_list else None,
+            "new_session": new_session,
+            "msf_result": result,
+        }
     except Exception as e:
         logger.warning(f"MSF run_module error: {e}")
         return {"error": str(e)}
@@ -158,16 +283,26 @@ def session_run_command(msf_session_id: str, command: str, timeout: int = 30) ->
         return ""
 
     try:
+        import time
         session = client.sessions.session(msf_session_id)
-        if hasattr(session, 'run_with_output'):
-            # Meterpreter session
+        if type(session).__name__ == 'MeterpreterSession':
             output = session.run_with_output(command, timeout=timeout)
         else:
-            # Shell session
+            # Shell session — write command, then read with retries
             session.write(command + "\n")
-            import time
-            time.sleep(2)
-            output = session.read()
+            output = ""
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                time.sleep(0.4)
+                chunk = session.read()
+                if chunk:
+                    output += chunk
+                    # Keep reading briefly to catch remaining output
+                    time.sleep(0.3)
+                    tail = session.read()
+                    if tail:
+                        output += tail
+                    break
         return output or ""
     except Exception as e:
         logger.warning(f"MSF session_run_command error: {e}")

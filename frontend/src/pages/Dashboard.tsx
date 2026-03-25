@@ -97,6 +97,32 @@ function StatCard({ label, value, icon, accent, borderColor }: {
   )
 }
 
+function ScanStatusDot({ scans }: { scans: Array<{ status: string; scan_type: string; target: string; auto_probe?: boolean }> }) {
+  const running = scans.filter(s => s.status === 'running' || s.status === 'pending')
+  const isRunning = running.length > 0
+  const label = isRunning
+    ? `${running[0].scan_type} · ${running[0].target}`
+    : null
+
+  if (scans.length === 0) return null
+
+  return (
+    <div className="ml-auto flex items-center gap-1.5">
+      {isRunning ? (
+        <>
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+          </span>
+          <span className="text-[10px] text-green-400 font-mono truncate max-w-[180px]">{label}</span>
+        </>
+      ) : (
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500/40 shrink-0" />
+      )}
+    </div>
+  )
+}
+
 function DonutChart({ counts }: { counts: Record<string, number> }) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   if (total === 0) return <div className="text-slate-500 text-sm text-center py-8">No findings yet</div>
@@ -169,6 +195,8 @@ export default function Dashboard() {
   const [probeToastFading, setProbeToastFading] = useState(false)
   const wasProbing = useRef(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   function showProbeToast() {
     if (toastTimer.current) clearTimeout(toastTimer.current)
@@ -202,7 +230,36 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData()
-    return () => { if (toastTimer.current) clearTimeout(toastTimer.current) }
+
+    let delay = 1000
+    function connect() {
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+      const ws = new WebSocket(`${proto}://${window.location.host}/ws/events`)
+      wsRef.current = ws
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.type === 'scan_update') {
+            loadData()
+            delay = 1000
+          }
+        } catch { /* ignore */ }
+      }
+
+      ws.onclose = () => {
+        delay = Math.min(delay * 2, 30000)
+        reconnectTimer.current = setTimeout(connect, delay)
+      }
+    }
+
+    connect()
+
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current)
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+      wsRef.current?.close()
+    }
   }, [setProjects])  // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleDeleteProject(id: string) {
@@ -360,6 +417,7 @@ export default function Dashboard() {
             <h2 className="text-sm font-semibold text-white uppercase tracking-wider">
               Findings by Severity
             </h2>
+            <ScanStatusDot scans={stats?.recent_scans ?? []} />
           </div>
           <DonutChart counts={severityCounts} />
         </div>

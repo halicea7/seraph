@@ -63,11 +63,32 @@ else
     echo -e "${GREEN}[msf] msfrpcd already running${RESET}"
 fi
 
-# Kill all child processes on exit
+BACKEND_PID=""
+FRONTEND_PID=""
+
 cleanup() {
     echo ""
     echo -e "${YELLOW}[dev] Shutting down...${RESET}"
-    kill 0
+
+    # Stop frontend
+    if [ -n "$FRONTEND_PID" ] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
+        echo -e "${YELLOW}[dev] Stopping frontend (pid $FRONTEND_PID)...${RESET}"
+        kill "$FRONTEND_PID" 2>/dev/null
+        wait "$FRONTEND_PID" 2>/dev/null
+    fi
+
+    # Stop backend and any child reloader processes
+    if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+        echo -e "${YELLOW}[dev] Stopping backend (pid $BACKEND_PID)...${RESET}"
+        kill "$BACKEND_PID" 2>/dev/null
+        wait "$BACKEND_PID" 2>/dev/null
+    fi
+
+    # Release ports in case anything is still holding them
+    fuser -k 8000/tcp 2>/dev/null || true
+    fuser -k 22123/tcp 2>/dev/null || true
+
+    echo -e "${GREEN}[dev] Done.${RESET}"
 }
 trap cleanup EXIT INT TERM
 
@@ -76,6 +97,7 @@ trap cleanup EXIT INT TERM
     cd "$BACKEND_DIR"
     python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 2>&1 | prefix "backend" "$CYAN"
 ) &
+BACKEND_PID=$!
 
 # Wait for backend to be ready before starting frontend
 echo -e "${CYAN}[dev] Waiting for backend...${RESET}"
@@ -92,6 +114,7 @@ done
     cd "$FRONTEND_DIR"
     npm run dev 2>&1 | prefix "frontend" "$GREEN"
 ) &
+FRONTEND_PID=$!
 
 # Wait for both
 wait

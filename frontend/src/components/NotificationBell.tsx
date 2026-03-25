@@ -50,8 +50,28 @@ export default function NotificationBell() {
 
   useEffect(() => {
     load()
-    const interval = setInterval(load, 30000)
-    return () => clearInterval(interval)
+
+    let delay = 1000
+    let ws: WebSocket
+    let reconnectTimer: ReturnType<typeof setTimeout>
+
+    function connect() {
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+      ws = new WebSocket(`${proto}://${window.location.host}/ws/events`)
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.type === 'scan_update') { load(); delay = 1000 }
+        } catch { /* ignore */ }
+      }
+      ws.onclose = () => {
+        delay = Math.min(delay * 2, 30000)
+        reconnectTimer = setTimeout(connect, delay)
+      }
+    }
+
+    connect()
+    return () => { clearTimeout(reconnectTimer); ws?.close() }
   }, [])
 
   useEffect(() => {

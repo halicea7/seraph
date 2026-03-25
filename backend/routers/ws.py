@@ -17,6 +17,40 @@ from services.ssh_executor import run_script_over_ssh, REMOTE_CATEGORIES
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
 
+# ── Global event broadcast ────────────────────────────────────────────────────
+
+_event_clients: set[asyncio.Queue] = set()
+
+
+async def broadcast_event(event: dict) -> None:
+    """Push an event to all connected /ws/events clients."""
+    dead = set()
+    for q in _event_clients:
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            dead.add(q)
+    _event_clients.difference_update(dead)
+
+
+@router.websocket("/ws/events")
+async def websocket_events(websocket: WebSocket):
+    """Lightweight event stream — clients reconnect on disconnect."""
+    await websocket.accept()
+    q: asyncio.Queue = asyncio.Queue(maxsize=100)
+    _event_clients.add(q)
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=25.0)
+                await websocket.send_json(event)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        _event_clients.discard(q)
+
 
 def _save_and_parse(db, scan, full_output: list[str], exit_code: int) -> None:
     """Persist scan output and auto-generate findings from parsed results."""
