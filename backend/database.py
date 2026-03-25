@@ -329,6 +329,7 @@ class Agent(Base):
     name = Column(String, nullable=False)
     target_id = Column(String, ForeignKey("targets.id", ondelete="SET NULL"), nullable=True)
     token = Column(String, unique=True, nullable=False)
+    short_code = Column(String, unique=True, nullable=True)  # short install URL key
     hostname = Column(String, nullable=True)
     platform = Column(String, nullable=True)
     status = Column(String, default="offline")   # online | offline
@@ -392,6 +393,7 @@ def _migrate():
         "ALTER TABLE scan_profiles ADD COLUMN next_run DATETIME",
         "ALTER TABLE notifications ADD COLUMN scan_id VARCHAR",
         "ALTER TABLE users ADD COLUMN full_name VARCHAR",
+        "ALTER TABLE agents ADD COLUMN short_code VARCHAR",
     ]
     with engine.connect() as conn:
         for sql in migrations:

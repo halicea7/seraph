@@ -12,6 +12,7 @@ interface AgentRecord {
   target_id: string | null
   target_hostname: string | null
   token: string
+  short_code: string | null
   hostname: string | null
   platform: string | null
   status: 'online' | 'offline'
@@ -154,16 +155,42 @@ function NewAgentModal({
 
 // ── Deploy Modal ───────────────────────────────────────────────────────────────
 
-function DeployModal({ agent, onClose }: { agent: AgentRecord; onClose: () => void }) {
-  const oneLinер = `curl -sL ${window.location.origin}/api/v1/agents/${agent.id}/install-script | sudo bash`
+function CmdBlock({ cmd, label }: { cmd: string; label: string }) {
   const [copied, setCopied] = useState(false)
-
   function copy() {
-    navigator.clipboard.writeText(oneLinер).then(() => {
+    navigator.clipboard.writeText(cmd).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     })
   }
+  return (
+    <div className="space-y-1">
+      <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
+      <div className="relative">
+        <pre
+          className="rounded-lg border border-cyan-900/20 px-4 py-3 text-xs font-mono text-cyan-300 overflow-x-auto pr-12"
+          style={{ background: '#05080d' }}
+        >
+          {cmd}
+        </pre>
+        <button
+          onClick={copy}
+          title="Copy"
+          className="absolute right-2 top-2 p-1.5 rounded text-slate-500 hover:text-cyan-400 transition-colors"
+        >
+          {copied ? <CheckCircle size={14} className="text-green-400" /> : <Copy size={14} />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function DeployModal({ agent, onClose }: { agent: AgentRecord; onClose: () => void }) {
+  const shortUrl = agent.short_code
+    ? `${window.location.origin}/a/${agent.short_code}`
+    : `${window.location.origin}/api/v1/agents/${agent.id}/install-script`
+  const installCmd = `curl -sSL ${shortUrl} | sudo bash`
+  const uninstallCmd = `curl -sSL ${window.location.origin}/api/v1/agents/uninstall-script | sudo bash`
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(5,8,13,0.85)' }}>
@@ -173,24 +200,11 @@ function DeployModal({ agent, onClose }: { agent: AgentRecord; onClose: () => vo
           <h2 className="text-base font-bold text-white">Deploy Agent: {agent.name}</h2>
         </div>
         <p className="text-xs text-slate-400">
-          Run this one-liner on the target host as root. The installer will set up a systemd service that calls home every 60s.
+          Run the install command on the target host as root. Sets up a systemd service that calls home every 60s.
         </p>
 
-        <div className="relative">
-          <pre
-            className="rounded-lg border border-cyan-900/20 px-4 py-3 text-xs font-mono text-cyan-300 overflow-x-auto pr-12"
-            style={{ background: '#05080d' }}
-          >
-            {oneLinер}
-          </pre>
-          <button
-            onClick={copy}
-            title="Copy"
-            className="absolute right-2 top-2 p-1.5 rounded text-slate-500 hover:text-cyan-400 transition-colors"
-          >
-            {copied ? <CheckCircle size={14} className="text-green-400" /> : <Copy size={14} />}
-          </button>
-        </div>
+        <CmdBlock cmd={installCmd} label="Install" />
+        <CmdBlock cmd={uninstallCmd} label="Uninstall" />
 
         <div className="text-[11px] text-slate-500 space-y-0.5">
           <p>• Requires: python3, systemd, sudo/root access</p>

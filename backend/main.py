@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
@@ -218,6 +218,23 @@ def save_auto_probe_settings(req: AutoProbeConfig):
         _set("auto_probe_intensity", req.intensity)
         db.commit()
         return {"ok": True}
+    finally:
+        db.close()
+
+
+# ── Short agent install URL (/a/<code>) ───────────────────────────────────────
+
+@app.get("/a/{short_code}", response_class=Response, include_in_schema=False)
+async def short_agent_install(short_code: str, request: Request):
+    """Short-form install script URL: curl -sSL http://HOST:8000/a/abc12345 | bash"""
+    from database import get_db, Agent
+    from routers.agents import get_install_script as _get_install_script
+    db = next(get_db())
+    try:
+        agent = db.query(Agent).filter(Agent.short_code == short_code).first()
+        if not agent:
+            return Response(content="# Unknown short code\n", media_type="text/plain", status_code=404)
+        return _get_install_script(agent.id, request, db)
     finally:
         db.close()
 

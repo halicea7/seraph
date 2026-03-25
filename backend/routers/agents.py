@@ -56,6 +56,7 @@ def _agent_dict(agent: Agent, db: Session) -> dict:
         "target_id": agent.target_id,
         "target_hostname": target.hostname_or_ip if target else None,
         "token": agent.token,
+        "short_code": agent.short_code,
         "hostname": agent.hostname,
         "platform": agent.platform,
         "status": agent.status,
@@ -186,6 +187,17 @@ def agent_result(token: str, job_id: str, body: JobResult, db: Session = Depends
 # ── Agent CRUD ─────────────────────────────────────────────────────────────────
 
 
+def _unique_short_code(db: Session) -> str:
+    import secrets
+    import string
+    chars = string.ascii_lowercase + string.digits
+    for _ in range(20):
+        code = "".join(secrets.choice(chars) for _ in range(8))
+        if not db.query(Agent).filter(Agent.short_code == code).first():
+            return code
+    return str(uuid.uuid4())[:8]
+
+
 @router.post("")
 def create_agent(body: AgentCreate, db: Session = Depends(get_db)):
     if body.target_id:
@@ -197,6 +209,7 @@ def create_agent(body: AgentCreate, db: Session = Depends(get_db)):
         name=body.name,
         target_id=body.target_id or None,
         token=str(uuid.uuid4()),
+        short_code=_unique_short_code(db),
         status="offline",
     )
     db.add(agent)
@@ -371,6 +384,35 @@ echo "[seraph] View logs:    journalctl -u seraph-agent -f"
         content=bash_script,
         media_type="text/x-shellscript",
         headers={"Content-Disposition": f'attachment; filename="seraph-agent-install-{agent_id[:8]}.sh"'},
+    )
+
+
+# ── Uninstall script ───────────────────────────────────────────────────────────
+
+_UNINSTALL_SCRIPT = """\
+#!/usr/bin/env bash
+# Seraph Agent Uninstaller
+set -e
+
+echo "[seraph] Stopping and removing Seraph agent..."
+
+systemctl stop seraph-agent 2>/dev/null || true
+systemctl disable seraph-agent 2>/dev/null || true
+rm -f /etc/systemd/system/seraph-agent.service
+systemctl daemon-reload
+
+rm -rf /opt/seraph-agent
+
+echo "[seraph] Agent uninstalled."
+"""
+
+
+@router.get("/uninstall-script", response_class=PlainTextResponse)
+def get_uninstall_script():
+    return PlainTextResponse(
+        content=_UNINSTALL_SCRIPT,
+        media_type="text/x-shellscript",
+        headers={"Content-Disposition": 'attachment; filename="seraph-agent-uninstall.sh"'},
     )
 
 
