@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
-import { FileText, Download, RefreshCw, Brain, Loader, FileDown } from 'lucide-react'
+import { FileText, Download, RefreshCw, Brain, Loader, FileDown, BookmarkCheck } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import FindingsTable from '../components/FindingsTable'
 import type { Project, Finding } from '../types'
 import { getProjects, getFindings, generateReport, getStats, type PlatformStats } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+import { useAINarrative } from '../contexts/AINarrativeContext'
 
 const SEVERITY_COLORS: Record<string, string> = {
   critical: '#ef4444',
@@ -25,6 +27,7 @@ const BASE_URL = '/api/v1'
 
 export default function Reports() {
   const { user } = useAuth()
+  const { generating: generatingNarrative, progress: narrativeProgress, generate } = useAINarrative()
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProject, setSelectedProject] = useState<string>('')
   const [findings, setFindings] = useState<Finding[]>([])
@@ -34,9 +37,9 @@ export default function Reports() {
   const [activeTab, setActiveTab] = useState<'findings' | 'report' | 'narrative'>('findings')
   const [reportPreview, setReportPreview] = useState<string>('')
   const [narrative, setNarrative] = useState<string>('')
+  const [narrativeSavedAt, setNarrativeSavedAt] = useState<string>('')
   const [narrativeStyle, setNarrativeStyle] = useState<'executive' | 'technical'>('executive')
   const [template, setTemplate] = useState<'executive' | 'technical'>('technical')
-  const [generatingNarrative, setGeneratingNarrative] = useState(false)
   const [narrativeError, setNarrativeError] = useState<string>('')
   const [auditor, setAuditor] = useState<string>(user?.full_name || user?.username || '')
 
@@ -50,8 +53,15 @@ export default function Reports() {
   }, [user])
 
   useEffect(() => {
-    if (selectedProject) loadFindings(selectedProject)
+    if (selectedProject) {
+      loadFindings(selectedProject)
+      loadSavedNarrative(selectedProject, narrativeStyle)
+    }
   }, [selectedProject])
+
+  useEffect(() => {
+    if (selectedProject) loadSavedNarrative(selectedProject, narrativeStyle)
+  }, [narrativeStyle])
 
   async function loadProjects() {
     try {
@@ -72,6 +82,22 @@ export default function Reports() {
     }
   }
 
+  async function loadSavedNarrative(projectId: string, style: string) {
+    try {
+      const res = await fetch(`/api/v1/ai/narrate/${projectId}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const saved = data[style]
+      if (saved) {
+        setNarrative(saved.content)
+        setNarrativeSavedAt(saved.generated_at)
+      } else {
+        setNarrative('')
+        setNarrativeSavedAt('')
+      }
+    } catch { /* ignore */ }
+  }
+
   async function loadFindings(_projectId: string) {
     setLoading(true)
     try {
@@ -86,22 +112,16 @@ export default function Reports() {
 
   async function handleGenerateNarrative() {
     if (!selectedProject) return
-    setGeneratingNarrative(true)
     setNarrativeError('')
     try {
-      const res = await fetch('/api/v1/ai/narrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: selectedProject, style: narrativeStyle }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Narrative generation failed')
-      setNarrative(data.narrative || '')
-      setActiveTab('narrative')
+      const result = await generate(selectedProject, narrativeStyle)
+      if (result) {
+        setNarrative(result.narrative)
+        setNarrativeSavedAt(result.savedAt)
+        setActiveTab('narrative')
+      }
     } catch (err: any) {
       setNarrativeError(err.message || 'Unknown error')
-    } finally {
-      setGeneratingNarrative(false)
     }
   }
 
@@ -168,8 +188,55 @@ export default function Reports() {
     ? findings.filter(f => f.severity === 'critical' || f.severity === 'high')
     : findings
 
+  // Red dot: project has findings newer than the last saved narrative
+  const selectedProj = projects.find(p => p.id === selectedProject)
+  const hasNewFindings = !!(
+    selectedProj?.latest_finding_at &&
+    (!narrativeSavedAt || new Date(selectedProj.latest_finding_at) > new Date(narrativeSavedAt))
+  )
+
   return (
     <div className="p-8 space-y-6">
+
+      {/* AI Narrative progress bar — fixed top-right */}
+      {narrativeProgress !== null && (
+        <div className="fixed top-4 right-4 z-50 w-72 rounded-xl overflow-hidden shadow-2xl border border-purple-500/30"
+          style={{ background: 'rgba(10,5,20,0.92)', backdropFilter: 'blur(8px)', boxShadow: '0 0 24px rgba(168,85,247,0.25)' }}>
+          <div className="flex items-center gap-2 px-3 py-2">
+            <Brain size={13} className="text-purple-400 shrink-0" />
+            <span className="text-xs text-purple-300 font-medium flex-1">Generating narrative…</span>
+            {narrativeProgress >= 0 && (
+              <span className="text-[10px] text-purple-400 font-mono">{Math.round(narrativeProgress)}%</span>
+            )}
+          </div>
+          <div className="h-1.5 w-full" style={{ background: 'rgba(168,85,247,0.15)' }}>
+            {narrativeProgress === -1 ? (
+              /* indeterminate shimmer */
+              <div className="h-full w-full relative overflow-hidden">
+                <div
+                  className="absolute h-full rounded-full"
+                  style={{
+                    width: '40%',
+                    background: 'linear-gradient(90deg, transparent, rgba(168,85,247,0.9), transparent)',
+                    boxShadow: '0 0 10px rgba(168,85,247,0.6)',
+                    animation: 'seraph-shimmer 1.4s ease-in-out infinite',
+                  }}
+                />
+              </div>
+            ) : (
+              <div
+                className="h-full rounded-full transition-all duration-200"
+                style={{
+                  width: `${narrativeProgress}%`,
+                  background: 'linear-gradient(90deg, #7c3aed, #a855f7)',
+                  boxShadow: narrativeProgress > 0 ? '0 0 8px rgba(168,85,247,0.7)' : 'none',
+                }}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Page header */}
       <div className="mb-2">
         <div className="flex items-center gap-3">
@@ -252,11 +319,17 @@ export default function Reports() {
             <button
               onClick={handleGenerateNarrative}
               disabled={generatingNarrative || !selectedProject}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-purple-300 hover:text-purple-200 disabled:opacity-50 transition-colors"
-              title="Generate AI narrative using local LLM"
+              className="relative flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-purple-300 hover:text-purple-200 disabled:opacity-50 transition-colors"
+              title={hasNewFindings ? 'New findings since last narrative — regenerate' : 'Generate AI narrative using local LLM'}
             >
               {generatingNarrative ? <Loader size={13} className="animate-spin" /> : <Brain size={13} />}
               AI Narrative
+              {hasNewFindings && !generatingNarrative && (
+                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]" />
+                </span>
+              )}
             </button>
           </div>
 
@@ -369,6 +442,12 @@ export default function Reports() {
                 <div className="flex items-center gap-2 text-purple-400">
                   <Brain size={16} />
                   <span className="text-sm font-medium capitalize">{narrativeStyle} Narrative</span>
+                  {narrativeSavedAt && (
+                    <span className="flex items-center gap-1 text-[11px] text-green-400 font-normal">
+                      <BookmarkCheck size={11} />
+                      Saved {new Date(narrativeSavedAt).toLocaleDateString()}
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => navigator.clipboard.writeText(narrative)}
@@ -377,8 +456,17 @@ export default function Reports() {
                   Copy
                 </button>
               </div>
-              <div className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap border-l-2 border-purple-700/40 pl-4">
-                {narrative}
+              <div className="border-l-2 border-purple-700/40 pl-4 prose prose-invert prose-sm max-w-none
+                prose-headings:text-purple-200 prose-headings:font-semibold
+                prose-p:text-slate-300 prose-p:leading-relaxed
+                prose-strong:text-slate-100 prose-strong:font-semibold
+                prose-em:text-slate-300
+                prose-ul:text-slate-300 prose-ol:text-slate-300
+                prose-li:marker:text-purple-500
+                prose-code:text-purple-300 prose-code:bg-purple-950/40 prose-code:px-1 prose-code:rounded prose-code:text-xs
+                prose-blockquote:border-purple-600/50 prose-blockquote:text-slate-400
+                prose-hr:border-purple-900/40">
+                <ReactMarkdown>{narrative}</ReactMarkdown>
               </div>
             </>
           ) : (

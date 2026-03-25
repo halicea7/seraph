@@ -146,6 +146,19 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
 
     db.commit()
 
+    # Push a notification so the dashboard dot lights up
+    if created:
+        from routers.notifications import push_notification
+        highs = sum(1 for f in created if f.severity in ("critical", "high"))
+        target = db.query(Target).filter(Target.id == scan.target_id).first()
+        target_label = target.hostname_or_ip if target else "unknown"
+        push_notification(
+            db,
+            title=f"{len(created)} finding(s) parsed — {target_label}",
+            body=(f"{highs} critical/high" if highs else "No critical/high findings") + f" · scan {scan_id[:8]}",
+            type="critical" if highs > 0 else "info",
+        )
+
     # Auto-enrich findings that already have a CVE ID extracted during parsing
     findings_with_cve = [f for f in created if f.cve_id]
     if findings_with_cve:

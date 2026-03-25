@@ -432,3 +432,15 @@ body::after {
 [data-theme="mono"] .xterm {
   background-color: var(--bg-terminal) !important;
 }
+
+/* ── AI narrative shimmer animation ── */
+@keyframes seraph-shimmer {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+
+/* ── AI narrative orb pulse (done state) ── */
+@keyframes seraph-orb-pulse {
+  0%, 100% { box-shadow: 0 0 18px rgba(168,85,247,0.7), 0 0 36px rgba(168,85,247,0.3); }
+  50%       { box-shadow: 0 0 28px rgba(168,85,247,1.0), 0 0 56px rgba(168,85,247,0.5); }
+}

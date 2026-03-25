@@ -21,6 +21,8 @@ export interface Project {
   description: string | null
   created_at: string
   target_count: number
+  finding_count: number
+  latest_finding_at: string | null
 }
 
 export interface ProjectDetail extends Omit<Project, 'target_count'> {

@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -137,45 +138,127 @@ def narrate_report(req: NarrateRequest, db: Session = Depends(get_db)):
     for f in findings:
         sev_counts[f.severity] = sev_counts.get(f.severity, 0) + 1
 
-    def _sev_rank(f: Finding) -> int:
+    def _sev_rank_str(s: str) -> int:
         try:
-            return SEVERITY_ORDER.index(f.severity)
+            return SEVERITY_ORDER.index(s)
         except ValueError:
             return 99
 
-    top = sorted(findings, key=_sev_rank)[:30]
-    findings_summary = "\n".join(
-        f"- [{f.severity.upper()}] {f.title}: {(f.description or '')[:200]}"
-        for f in top
+    def _sev_rank(f: Finding) -> int:
+        return _sev_rank_str(f.severity)
+
+    sorted_findings = sorted(findings, key=_sev_rank)
+
+    def _finding_block(f: Finding) -> str:
+        lines = [f"- [{f.severity.upper()}] {f.title}"]
+        if f.cve_id:
+            lines.append(f"  CVE: {f.cve_id}" + (f" | CVSS: {f.cvss_score}" if f.cvss_score else ""))
+        if f.framework and f.control_id:
+            lines.append(f"  Control: {f.framework} {f.control_id}")
+        if f.tags:
+            fw_tags = [t for t in f.tags.split(",") if t.startswith(("OWASP:", "MITRE:", "PCI:"))]
+            if fw_tags:
+                lines.append(f"  Tags: {', '.join(fw_tags)}")
+        if f.description:
+            lines.append(f"  Description: {f.description[:250]}")
+        if f.remediation:
+            lines.append(f"  Remediation: {f.remediation[:200]}")
+        return "\n".join(lines)
+
+    findings_block = "\n".join(_finding_block(f) for f in sorted_findings[:40]) or "No findings recorded."
+
+    target_lines = "\n".join(
+        f"- {t.hostname_or_ip} [{t.target_type.replace('_', ' ')}]"
+        + (f" ports: {t.ports}" if t.ports else "")
+        for t in targets
     )
 
-    target_names = ", ".join(t.hostname_or_ip for t in targets[:5])
+    scan_types = sorted({s.scan_type for s in scans if s.scan_type})
+    sev_summary = " | ".join(
+        f"{k.upper()}: {v}" for k, v in sorted(sev_counts.items(), key=lambda x: _sev_rank_str(x[0])) if v
+    ) or "none"
+
+    data_block = f"""\
+Project: {project.name}
+Targets ({len(targets)}):
+{target_lines}
+Scans: {len(scans)} completed | Types: {', '.join(scan_types) if scan_types else 'various'}
+Findings: {len(findings)} total | {sev_summary}
+
+{findings_block}"""
 
     if req.style == "executive":
-        prompt = (
-            f"You are a senior cybersecurity analyst writing an executive summary for a security report.\n\n"
-            f"Project: {project.name}\n"
-            f"Targets assessed: {len(targets)} ({target_names})\n"
-            f"Scans completed: {len(scans)}\n"
-            f"Findings: {len(findings)} total — {sev_counts}\n\n"
-            f"Top findings:\n{findings_summary}\n\n"
-            f"Write a clear, professional executive summary (3–5 paragraphs). Start with an overall risk "
-            f"posture, highlight the most critical issues, and close with remediation priority guidance. "
-            f"Do not use bullet points in the summary itself."
-        )
-    else:
-        prompt = (
-            f"You are a penetration tester writing a technical report narrative.\n\n"
-            f"Project: {project.name}\n"
-            f"Targets: {', '.join(t.hostname_or_ip for t in targets[:10])}\n"
-            f"Findings ({len(findings)} total):\n{findings_summary}\n\n"
-            f"Write a detailed technical narrative covering: attack surface overview, key vulnerabilities "
-            f"discovered, exploitation potential, and recommended remediation steps. Be specific and technical."
-        )
+        system_msg = """\
+You are a senior cybersecurity consultant writing a client-facing executive report.
+Your audience is non-technical C-suite leadership.
+Rules:
+- Use ONLY the data provided. Do NOT invent findings, scores, CVEs, or details not in the data.
+- Use Markdown: ## headings, **bold** for emphasis, bullet lists.
+- Write in a professional, measured tone.
+- Output exactly these four sections and nothing else:
 
-    messages = [{"role": "user", "content": prompt}]
+## Executive Summary
+2-3 paragraphs. What was assessed, the headline risk verdict, and why it matters to the business.
+
+## Key Findings
+Bullet list of the most significant issues (critical and high only). One sentence per finding in plain English — what it is and why it matters. If there are no critical/high findings, state that.
+
+## Business Impact
+2-3 sentences on realistic consequences if the findings were exploited (data breach, compliance exposure, downtime). Be factual, not alarmist.
+
+## Recommended Actions
+Three numbered tiers:
+1. **Immediate (48 h)** — urgent mitigations
+2. **Short-term (30 days)** — remediation tasks
+3. **Ongoing** — process improvements"""
+
+        user_msg = f"Write the executive report using this assessment data:\n\n{data_block}"
+
+    else:
+        system_msg = """\
+You are a penetration tester writing the technical narrative for a security assessment report.
+Your audience is the client's security and engineering teams.
+Rules:
+- Use ONLY the data provided. Do NOT invent CVE IDs, CVSS scores, services, or findings not listed below.
+- If a CVE or CVSS is not in the data, do not mention one.
+- Use Markdown: ## headings, ### sub-headings, **bold** for key terms, `code` for CVEs and commands, bullet lists.
+- Output exactly these four sections and nothing else:
+
+## Scope & Targets
+List each assessed target, its type, and the scan types run against it.
+
+## Findings by Severity
+Group under ### Critical / ### High / ### Medium / ### Low / ### Info sub-headings (skip empty groups).
+For each finding: what it is, which target it affects, CVE/CVSS only if provided in the data, any OWASP/MITRE/PCI tags from the data, and a remediation note.
+
+## Attack Chains & Exploitation Potential
+Based strictly on the findings above, describe realistic attack paths an adversary could take. If findings are minor, say so honestly.
+
+## Remediation Roadmap
+- **Immediate** — critical issues to fix within 48 h
+- **Short-term** — high/medium issues within 30 days
+- **Ongoing** — architectural and process improvements"""
+
+        user_msg = f"Write the technical narrative using this assessment data:\n\n{data_block}"
+
+    messages = [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
     try:
         narrative = chat_complete(endpoint, model, messages, **load_llm_params(db))
+        # Auto-save
+        _set(db, f"ai_narrative_{req.project_id}_{req.style}", narrative)
+        _set(db, f"ai_narrative_{req.project_id}_{req.style}_at", datetime.utcnow().isoformat())
         return {"narrative": narrative}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
+
+
+@router.get("/narrate/{project_id}")
+def get_saved_narratives(project_id: str, db: Session = Depends(get_db)):
+    """Return previously saved narratives for a project."""
+    result = {}
+    for style in ("executive", "technical"):
+        content = _get(db, f"ai_narrative_{project_id}_{style}", "")
+        generated_at = _get(db, f"ai_narrative_{project_id}_{style}_at", "")
+        if content:
+            result[style] = {"content": content, "generated_at": generated_at}
+    return result

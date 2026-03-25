@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import CommandPalette from './CommandPalette'
 import NotificationBell from './NotificationBell'
+import { useAINarrative } from '../contexts/AINarrativeContext'
 import {
   LayoutDashboard,
   ShieldCheck,
@@ -143,6 +144,8 @@ function NavItem({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
 export default function Layout() {
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('seraph_nav_collapsed') === 'true')
+  const { generating, progress, done, dismissDone } = useAINarrative()
+  const isOnReports = useLocation().pathname === '/reports'
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -364,6 +367,59 @@ export default function Layout() {
       </main>
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+
+      {/* Floating AI narrative orb — visible while generating or after done (non-Reports pages) */}
+      {(generating || done) && !isOnReports && (
+        <NavLink
+          to="/reports"
+          onClick={done ? dismissDone : undefined}
+          title={done ? 'Narrative ready — click to view' : 'AI Narrative generating… click to go to Reports'}
+          className="fixed bottom-6 right-6 z-50 flex items-center justify-center rounded-full"
+          style={{
+            width: 44, height: 44,
+            background: 'rgba(10,5,20,0.92)',
+            border: `1px solid ${done ? 'rgba(168,85,247,0.6)' : 'rgba(168,85,247,0.35)'}`,
+            boxShadow: done
+              ? '0 0 18px rgba(168,85,247,0.7), 0 0 36px rgba(168,85,247,0.3)'
+              : '0 0 18px rgba(168,85,247,0.5)',
+            animation: done ? 'seraph-orb-pulse 1.8s ease-in-out infinite' : undefined,
+          }}
+        >
+          <svg width="44" height="44" viewBox="0 0 44 44" className="absolute inset-0">
+            <circle cx="22" cy="22" r="18" fill="none" stroke="rgba(168,85,247,0.15)" strokeWidth="3" />
+            {done ? (
+              /* full ring when done */
+              <circle
+                cx="22" cy="22" r="18"
+                fill="none" stroke="#a855f7" strokeWidth="3" strokeLinecap="round"
+                style={{ filter: 'drop-shadow(0 0 5px rgba(168,85,247,0.9))' }}
+              />
+            ) : progress !== null && progress >= 0 ? (
+              /* deterministic fill */
+              <circle
+                cx="22" cy="22" r="18"
+                fill="none" stroke="#a855f7" strokeWidth="3" strokeLinecap="round"
+                strokeDasharray={`${2 * Math.PI * 18}`}
+                strokeDashoffset={`${2 * Math.PI * 18 * (1 - progress / 100)}`}
+                transform="rotate(-90 22 22)"
+                style={{ filter: 'drop-shadow(0 0 4px rgba(168,85,247,0.8))' }}
+              />
+            ) : (
+              /* indeterminate spinning arc */
+              <circle
+                cx="22" cy="22" r="18"
+                fill="none" stroke="#a855f7" strokeWidth="3" strokeLinecap="round"
+                strokeDasharray={`${2 * Math.PI * 18 * 0.3} ${2 * Math.PI * 18 * 0.7}`}
+                style={{ filter: 'drop-shadow(0 0 4px rgba(168,85,247,0.8))', transformOrigin: '22px 22px', animation: 'spin 1s linear infinite' }}
+              />
+            )}
+          </svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={done ? '#e9d5ff' : '#c084fc'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="relative z-10">
+            <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.44-3.14Z"/>
+            <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.44-3.14Z"/>
+          </svg>
+        </NavLink>
+      )}
     </div>
   )
 }

@@ -43,6 +43,8 @@ class ProjectResponse(BaseModel):
     description: Optional[str]
     created_at: datetime
     target_count: int = 0
+    finding_count: int = 0
+    latest_finding_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -154,7 +156,37 @@ class ProjectDetail(BaseModel):
 
 @router.get("", response_model=List[ProjectResponse])
 def list_projects(db: Session = Depends(get_db)):
+    from sqlalchemy import func
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
+
+    # Build target_id → project_id map for a single bulk findings query
+    all_targets = db.query(Target.id, Target.project_id).all()
+    target_to_project = {t.id: t.project_id for t in all_targets}
+
+    # Aggregate finding counts + latest per project via scan → target chain
+    scan_rows = db.query(Scan.id, Scan.target_id).all()
+    scan_to_target = {s.id: s.target_id for s in scan_rows}
+
+    finding_agg = db.query(
+        Finding.scan_id,
+        func.count(Finding.id).label("cnt"),
+        func.max(Finding.created_at).label("latest"),
+    ).group_by(Finding.scan_id).all()
+
+    proj_counts: dict = {}
+    proj_latest: dict = {}
+    for row in finding_agg:
+        target_id = scan_to_target.get(row.scan_id)
+        if not target_id:
+            continue
+        proj_id = target_to_project.get(target_id)
+        if not proj_id:
+            continue
+        proj_counts[proj_id] = proj_counts.get(proj_id, 0) + row.cnt
+        if row.latest:
+            if proj_id not in proj_latest or row.latest > proj_latest[proj_id]:
+                proj_latest[proj_id] = row.latest
+
     result = []
     for p in projects:
         result.append(
@@ -164,6 +196,8 @@ def list_projects(db: Session = Depends(get_db)):
                 description=p.description,
                 created_at=p.created_at,
                 target_count=len(p.targets),
+                finding_count=proj_counts.get(p.id, 0),
+                latest_finding_at=proj_latest.get(p.id),
             )
         )
     return result

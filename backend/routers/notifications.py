@@ -3,11 +3,24 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import Notification, get_db
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+
+class NotificationCreate(BaseModel):
+    title: str
+    body: str = ""
+    type: str = "info"
+
+
+@router.post("", status_code=201)
+def create_notification(payload: NotificationCreate, db: Session = Depends(get_db)):
+    n = push_notification(db, payload.title, payload.body, payload.type)
+    return {"id": n.id}
 
 
 def push_notification(db: Session, title: str, body: str = "", type: str = "info") -> Notification:
