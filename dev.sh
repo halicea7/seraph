@@ -69,11 +69,25 @@ if [ ! -d "$VENV_DIR" ]; then
         exit 1
     fi
     echo -e "${CYAN}[setup] Creating venv with $PYTHON_BIN ($("$PYTHON_BIN" --version))...${RESET}"
-    "$PYTHON_BIN" -m venv "$VENV_DIR"
+    if ! "$PYTHON_BIN" -m venv "$VENV_DIR" 2>/tmp/seraph_venv_err; then
+        echo -e "${YELLOW}[setup] ERROR: Failed to create virtual environment.${RESET}"
+        cat /tmp/seraph_venv_err
+        # Common fix on Debian/Ubuntu
+        if command -v apt-get &>/dev/null; then
+            PY_TAG="$(${PYTHON_BIN} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+            echo -e "${YELLOW}[setup] Try: sudo apt-get install -y python${PY_TAG}-venv${RESET}"
+        fi
+        exit 1
+    fi
     echo -e "${GREEN}[setup] Venv created at .venv${RESET}"
 fi
 
 # Activate venv
+if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo -e "${YELLOW}[setup] ERROR: Venv activation script not found at $VENV_DIR/bin/activate${RESET}"
+    echo -e "${YELLOW}[setup] Delete .venv and re-run dev.sh${RESET}"
+    exit 1
+fi
 source "$VENV_DIR/bin/activate"
 
 # Install Python deps if needed
