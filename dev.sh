@@ -23,6 +23,26 @@ prefix() {
     done
 }
 
+# ── Preflight checks ──────────────────────────────────────────────────────────
+
+# Node.js >= 18 required (Vite uses top-level await)
+if ! command -v node &>/dev/null; then
+    echo -e "${YELLOW}[preflight] ERROR: Node.js not found. Install Node 18+: https://nodejs.org${RESET}"
+    exit 1
+fi
+NODE_MAJOR="$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
+if [ "$NODE_MAJOR" -lt 18 ]; then
+    echo -e "${YELLOW}[preflight] ERROR: Node.js ${NODE_MAJOR} detected — Node 18+ is required.${RESET}"
+    if command -v apt-get &>/dev/null; then
+        echo -e "${YELLOW}[preflight] Install via NodeSource:${RESET}"
+        echo -e "${YELLOW}[preflight]   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -${RESET}"
+        echo -e "${YELLOW}[preflight]   sudo apt-get install -y nodejs${RESET}"
+    else
+        echo -e "${YELLOW}[preflight]   https://nodejs.org/en/download${RESET}"
+    fi
+    exit 1
+fi
+
 echo -e "${GREEN}"
 echo "  ███████╗███████╗██████╗  █████╗ ██████╗ ██╗  ██╗"
 echo "  ██╔════╝██╔════╝██╔══██╗██╔══██╗██╔══██╗██║  ██║"
