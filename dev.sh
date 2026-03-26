@@ -35,27 +35,40 @@ echo -e "  ${CYAN}Backend${RESET}  →  http://localhost:8000"
 echo -e "  ${GREEN}Frontend${RESET} →  http://localhost:22123"
 echo ""
 
-# Create venv if it doesn't exist
-VENV_DIR="$REPO_DIR/.venv"
-if [ ! -d "$VENV_DIR" ]; then
-    echo -e "${YELLOW}[setup] Creating Python virtual environment...${RESET}"
-    # pydantic-core requires Python <= 3.12; prefer 3.12 then 3.11 then system python3
-    PYTHON_BIN=""
-    for candidate in python3.12 python3.11 python3; do
+# Find a compatible Python (pydantic-core requires <= 3.12)
+_find_python() {
+    for candidate in python3.12 python3.11 python3.10 python3; do
         if command -v "$candidate" &>/dev/null; then
-            PY_VER="$("$candidate" -c 'import sys; print(sys.version_info[:2])')"
-            if [[ "$PY_VER" < "(3, 13)" ]]; then
-                PYTHON_BIN="$candidate"
-                break
+            if "$candidate" -c "import sys; exit(0 if sys.version_info < (3, 13) else 1)" 2>/dev/null; then
+                echo "$candidate"
+                return 0
             fi
         fi
     done
-    if [ -z "$PYTHON_BIN" ]; then
-        echo -e "${YELLOW}[setup] Warning: could not find Python 3.12 or earlier. Trying system python3.${RESET}"
-        echo -e "${YELLOW}[setup] If setup fails, install Python 3.12: https://python.org/downloads${RESET}"
-        PYTHON_BIN="python3"
+    return 1
+}
+
+VENV_DIR="$REPO_DIR/.venv"
+
+# If venv exists but was built with an incompatible Python, remove it
+if [ -d "$VENV_DIR" ]; then
+    VENV_PY="$VENV_DIR/bin/python3"
+    if ! "$VENV_PY" -c "import sys; exit(0 if sys.version_info < (3, 13) else 1)" 2>/dev/null; then
+        echo -e "${YELLOW}[setup] Existing venv uses incompatible Python — recreating...${RESET}"
+        rm -rf "$VENV_DIR"
     fi
-    echo -e "${CYAN}[setup] Using $PYTHON_BIN ($("$PYTHON_BIN" --version))${RESET}"
+fi
+
+# Create venv if it doesn't exist
+if [ ! -d "$VENV_DIR" ]; then
+    PYTHON_BIN="$(_find_python || true)"
+    if [ -z "$PYTHON_BIN" ]; then
+        echo -e "${YELLOW}[setup] ERROR: Python 3.12 or earlier is required but not found.${RESET}"
+        echo -e "${YELLOW}[setup] Install it from https://python.org/downloads or via Homebrew:${RESET}"
+        echo -e "${YELLOW}[setup]   brew install python@3.12${RESET}"
+        exit 1
+    fi
+    echo -e "${CYAN}[setup] Creating venv with $PYTHON_BIN ($("$PYTHON_BIN" --version))...${RESET}"
     "$PYTHON_BIN" -m venv "$VENV_DIR"
     echo -e "${GREEN}[setup] Venv created at .venv${RESET}"
 fi
