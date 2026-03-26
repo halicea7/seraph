@@ -35,10 +35,21 @@ echo -e "  ${CYAN}Backend${RESET}  →  http://localhost:8000"
 echo -e "  ${GREEN}Frontend${RESET} →  http://localhost:22123"
 echo ""
 
+# Create venv if it doesn't exist
+VENV_DIR="$REPO_DIR/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+    echo -e "${YELLOW}[setup] Creating Python virtual environment...${RESET}"
+    python3 -m venv "$VENV_DIR"
+    echo -e "${GREEN}[setup] Venv created at .venv${RESET}"
+fi
+
+# Activate venv
+source "$VENV_DIR/bin/activate"
+
 # Install Python deps if needed
 if ! python3 -c "import fastapi" 2>/dev/null; then
     echo -e "${YELLOW}[setup] Installing Python dependencies...${RESET}"
-    pip install -r "$REPO_DIR/requirements.txt" --break-system-packages -q
+    pip install -r "$REPO_DIR/requirements.txt" -q
 fi
 
 # Install Node deps if needed
