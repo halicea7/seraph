@@ -39,7 +39,24 @@ echo ""
 VENV_DIR="$REPO_DIR/.venv"
 if [ ! -d "$VENV_DIR" ]; then
     echo -e "${YELLOW}[setup] Creating Python virtual environment...${RESET}"
-    python3 -m venv "$VENV_DIR"
+    # pydantic-core requires Python <= 3.12; prefer 3.12 then 3.11 then system python3
+    PYTHON_BIN=""
+    for candidate in python3.12 python3.11 python3; do
+        if command -v "$candidate" &>/dev/null; then
+            PY_VER="$("$candidate" -c 'import sys; print(sys.version_info[:2])')"
+            if [[ "$PY_VER" < "(3, 13)" ]]; then
+                PYTHON_BIN="$candidate"
+                break
+            fi
+        fi
+    done
+    if [ -z "$PYTHON_BIN" ]; then
+        echo -e "${YELLOW}[setup] Warning: could not find Python 3.12 or earlier. Trying system python3.${RESET}"
+        echo -e "${YELLOW}[setup] If setup fails, install Python 3.12: https://python.org/downloads${RESET}"
+        PYTHON_BIN="python3"
+    fi
+    echo -e "${CYAN}[setup] Using $PYTHON_BIN ($("$PYTHON_BIN" --version))${RESET}"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
     echo -e "${GREEN}[setup] Venv created at .venv${RESET}"
 fi
 
