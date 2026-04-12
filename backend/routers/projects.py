@@ -8,20 +8,25 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
-from database import Credential, Finding, Project, Scan, Target, VulnerabilityRecord, get_db
+from database import C2Session, Credential, Finding, FPSuppressionRule, Project, Scan, Target, VulnerabilityRecord, get_db
+from services.scope_service import check_scope, scope_summary
+from services.validators import (
+    VALID_TARGET_TYPES,
+    validate_free_text,
+    validate_hostname_or_ip,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
-# Validation pattern: allow valid IPs, hostnames, and domain names
-HOSTNAME_IP_PATTERN = re.compile(
+# Keep local alias for pattern used in existing validators below
+import re as _re
+HOSTNAME_IP_PATTERN = _re.compile(
     r"^(?:"
-    r"(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)"  # IPv4
+    r"(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)"
     r"|"
-    r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"  # hostname/domain
+    r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
     r")$"
 )
-
-VALID_TARGET_TYPES = {"linux_host", "windows_host", "web_app", "cloud_aws", "network"}
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -31,10 +36,41 @@ class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
 
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: str) -> str:
+        return validate_free_text(v.strip(), max_length=256, field_name="name")
+
+    @field_validator("description")
+    @classmethod
+    def _check_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return validate_free_text(v, max_length=2048, field_name="description")
+
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return validate_free_text(v.strip(), max_length=256, field_name="name")
+
+    @field_validator("description")
+    @classmethod
+    def _check_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return validate_free_text(v, max_length=2048, field_name="description")
+
+
+class ScopeUpdate(BaseModel):
+    include: List[str] = []
+    exclude: List[str] = []
 
 
 class ProjectResponse(BaseModel):
@@ -312,6 +348,11 @@ async def create_target(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    in_scope, reason = check_scope(payload.hostname_or_ip, getattr(project, "scope_json", None))
+    if not in_scope:
+        raise HTTPException(status_code=400, detail=f"Target out of scope: {reason}")
+
     target = Target(
         id=str(uuid.uuid4()),
         project_id=project_id,
@@ -334,6 +375,25 @@ async def create_target(
         )
 
     return target
+
+
+@router.get("/{project_id}/scope")
+def get_scope(project_id: str, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return scope_summary(getattr(project, "scope_json", None))
+
+
+@router.put("/{project_id}/scope")
+def update_scope(project_id: str, payload: ScopeUpdate, db: Session = Depends(get_db)):
+    import json as _json
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.scope_json = _json.dumps({"include": payload.include, "exclude": payload.exclude})
+    db.commit()
+    return scope_summary(project.scope_json)
 
 
 @router.get("/{project_id}/targets/{target_id}/probe-status")
@@ -513,6 +573,7 @@ def list_findings(
             "cve_id": f.cve_id,
             "cvss_score": f.cvss_score,
             "status": getattr(f, "status", "open") or "open",
+            "fp_reason": getattr(f, "fp_reason", None),
             "tags": getattr(f, "tags", "") or "",
             "target": target.hostname_or_ip if target else "unknown",
             "project": project.name if project else "unknown",
@@ -524,7 +585,7 @@ def list_findings(
 
 @stats_router.patch("/findings/{finding_id}/status")
 def update_finding_status(finding_id: str, payload: dict, db: Session = Depends(get_db)):
-    valid = {"open", "in-review", "remediated", "accepted"}
+    valid = {"open", "in-review", "remediated", "accepted", "false_positive"}
     new_status = payload.get("status", "")
     if new_status not in valid:
         from fastapi import HTTPException
@@ -538,6 +599,35 @@ def update_finding_status(finding_id: str, payload: dict, db: Session = Depends(
     return {"id": finding_id, "status": new_status}
 
 
+@stats_router.post("/findings/{finding_id}/suppress")
+def suppress_finding(finding_id: str, payload: dict, db: Session = Depends(get_db)):
+    """Mark a finding as a false positive with a mandatory reason."""
+    reason = str(payload.get("reason", "")).strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="A reason is required to suppress a finding as false positive")
+    if len(reason) > 1000:
+        raise HTTPException(status_code=400, detail="Reason too long (max 1000 chars)")
+    f = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    f.status = "false_positive"
+    f.fp_reason = reason
+    db.commit()
+    return {"id": finding_id, "status": "false_positive", "fp_reason": reason}
+
+
+@stats_router.post("/findings/{finding_id}/restore")
+def restore_finding(finding_id: str, db: Session = Depends(get_db)):
+    """Restore a suppressed finding back to 'open' status."""
+    f = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    f.status = "open"
+    f.fp_reason = None
+    db.commit()
+    return {"id": finding_id, "status": "open"}
+
+
 @stats_router.patch("/findings/{finding_id}/tags")
 def update_finding_tags(finding_id: str, payload: dict, db: Session = Depends(get_db)):
     f = db.query(Finding).filter(Finding.id == finding_id).first()
@@ -548,6 +638,75 @@ def update_finding_tags(finding_id: str, payload: dict, db: Session = Depends(ge
     f.tags = ",".join(tags)
     db.commit()
     return {"id": finding_id, "tags": f.tags}
+
+
+@stats_router.get("/findings/{finding_id}/exploit-chain")
+def get_exploit_chain(finding_id: str, db: Session = Depends(get_db)):
+    """Return the exploit chain for a finding (linked sessions + lateral moves)."""
+    import json as _json
+    f = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not f:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Finding not found")
+    chain = _json.loads(f.exploit_chain_json or "[]")
+    # Enrich with session details
+    enriched = []
+    for step in chain:
+        entry = dict(step)
+        if step.get("session_id"):
+            sess = db.query(C2Session).filter(C2Session.id == step["session_id"]).first()
+            if sess:
+                entry["session"] = {
+                    "remote_host": sess.remote_host,
+                    "platform": sess.platform,
+                    "session_type": sess.session_type,
+                    "status": sess.status,
+                }
+        enriched.append(entry)
+    return {"finding_id": finding_id, "chain": enriched}
+
+
+@stats_router.post("/findings/{finding_id}/exploit-chain")
+def add_exploit_chain_step(finding_id: str, payload: dict, db: Session = Depends(get_db)):
+    """Link a C2 session to a finding as an exploit chain step."""
+    import json as _json
+    from datetime import datetime as _dt
+    f = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not f:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Finding not found")
+    session_id = payload.get("session_id")
+    technique = str(payload.get("technique", "exploit"))[:200]
+    notes = str(payload.get("notes", ""))[:500]
+    if session_id:
+        sess = db.query(C2Session).filter(C2Session.id == session_id).first()
+        if not sess:
+            from fastapi import HTTPException
+            raise HTTPException(404, "Session not found")
+        # Back-link the session to this finding
+        sess.finding_id = finding_id
+    chain = _json.loads(f.exploit_chain_json or "[]")
+    chain.append({
+        "session_id": session_id,
+        "technique": technique,
+        "notes": notes,
+        "timestamp": _dt.utcnow().isoformat(),
+    })
+    f.exploit_chain_json = _json.dumps(chain)
+    db.commit()
+    return {"finding_id": finding_id, "chain": chain}
+
+
+@stats_router.delete("/findings/{finding_id}/exploit-chain")
+def clear_exploit_chain(finding_id: str, db: Session = Depends(get_db)):
+    """Clear the exploit chain for a finding."""
+    f = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not f:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Finding not found")
+    f.exploit_chain_json = "[]"
+    db.commit()
+    return {"finding_id": finding_id, "chain": []}
 
 
 @stats_router.get("/scans")
@@ -617,6 +776,43 @@ def list_scans(
     return result
 
 
+@stats_router.delete("/scans/{scan_id}", status_code=204)
+def delete_scan(scan_id: str, db: Session = Depends(get_db)):
+    from fastapi import HTTPException as _HTTPException
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+    if not scan:
+        raise _HTTPException(404, "Scan not found")
+    # Delete findings (and their notes) first
+    from database import FindingNote
+    finding_ids = [f.id for f in db.query(Finding).filter(Finding.scan_id == scan_id).all()]
+    if finding_ids:
+        db.query(FindingNote).filter(FindingNote.finding_id.in_(finding_ids)).delete(synchronize_session=False)
+        db.query(Finding).filter(Finding.scan_id == scan_id).delete(synchronize_session=False)
+    db.delete(scan)
+    db.commit()
+
+
+@stats_router.post("/scans/{scan_id}/cancel", status_code=200)
+def cancel_scan(scan_id: str, db: Session = Depends(get_db)):
+    from fastapi import HTTPException as _HTTPException
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+    if not scan:
+        raise _HTTPException(404, "Scan not found")
+    if scan.status not in ("running", "pending"):
+        raise _HTTPException(400, f"Scan is already {scan.status}")
+    # Terminate the running asyncio task + subprocess (auto-probe scans).
+    try:
+        from services.auto_probe import cancel_probe
+        cancel_probe(scan_id)
+    except Exception:
+        pass
+    from datetime import datetime as _dt
+    scan.status = "cancelled"
+    scan.completed_at = _dt.utcnow()
+    db.commit()
+    return {"status": "cancelled"}
+
+
 @stats_router.get("/scans/diff")
 def diff_scans(a: str, b: str, db: Session = Depends(get_db)):
     """Compare findings between two scans. Returns new, resolved, and unchanged buckets."""
@@ -658,6 +854,160 @@ def diff_scans(a: str, b: str, db: Session = Depends(get_db)):
         "resolved":  [_serialize(map_a[k]) for k in resolved_keys],
         "unchanged": [_serialize(map_a[k]) for k in unchanged_keys],
     }
+
+
+# ── Engagement timeline endpoint ─────────────────────────────────────────────
+
+
+@router.get("/{project_id}/timeline")
+def get_project_timeline(project_id: str, db: Session = Depends(get_db)):
+    """
+    Return a chronological list of engagement events for a project.
+    Each event has: id, kind, title, target, severity (optional), status (optional), ts.
+    """
+    import json as _json
+    from datetime import datetime as _dt
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    targets = db.query(Target).filter(Target.project_id == project_id).all()
+    target_map = {t.id: t.hostname_or_ip for t in targets}
+    target_ids = list(target_map.keys())
+
+    events: list[dict] = []
+
+    # Project created
+    if project.created_at:
+        events.append({
+            "id": f"proj-{project.id}",
+            "kind": "project",
+            "title": f"Project created: {project.name}",
+            "target": None,
+            "severity": None,
+            "status": None,
+            "ts": project.created_at.isoformat(),
+        })
+
+    # Target added events
+    for t in targets:
+        if t.created_at:
+            events.append({
+                "id": f"target-{t.id}",
+                "kind": "target",
+                "title": f"Target added: {t.hostname_or_ip}",
+                "target": t.hostname_or_ip,
+                "severity": None,
+                "status": None,
+                "ts": t.created_at.isoformat(),
+            })
+
+    if target_ids:
+        # Scan start events
+        scans = db.query(Scan).filter(Scan.target_id.in_(target_ids)).all()
+        for s in scans:
+            host = target_map.get(s.target_id, "unknown")
+            if s.started_at:
+                events.append({
+                    "id": f"scan-start-{s.id}",
+                    "kind": "scan_start",
+                    "title": f"Scan started: {s.scan_type}",
+                    "target": host,
+                    "severity": None,
+                    "status": s.status,
+                    "ts": s.started_at.isoformat(),
+                })
+            if s.completed_at:
+                events.append({
+                    "id": f"scan-end-{s.id}",
+                    "kind": "scan_end",
+                    "title": f"Scan completed: {s.scan_type}",
+                    "target": host,
+                    "severity": None,
+                    "status": s.status,
+                    "ts": s.completed_at.isoformat(),
+                })
+
+        # Finding events (use scan's completed_at as proxy when finding has no own timestamp)
+        scan_ids = [s.id for s in scans]
+        findings = db.query(Finding).filter(Finding.scan_id.in_(scan_ids)).all() if scan_ids else []
+        scan_time_map = {
+            s.id: (s.completed_at or s.started_at) for s in scans
+        }
+        for f in findings:
+            ts_raw = scan_time_map.get(f.scan_id)
+            if not ts_raw:
+                continue
+            events.append({
+                "id": f"finding-{f.id}",
+                "kind": "finding",
+                "title": f.title or "Finding",
+                "target": target_map.get(
+                    next((s.target_id for s in scans if s.id == f.scan_id), None), "unknown"
+                ),
+                "severity": f.severity,
+                "status": None,
+                "ts": ts_raw.isoformat(),
+            })
+
+    # Sort by timestamp (oldest first)
+    events.sort(key=lambda e: e["ts"])
+    return events
+
+
+# ── FP Suppression Rule endpoints ────────────────────────────────────────────
+
+
+class FPRuleCreate(BaseModel):
+    tool: Optional[str] = None        # None = any tool
+    title_contains: str
+
+
+@router.get("/{project_id}/fp-rules")
+def list_fp_rules(project_id: str, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    rules = db.query(FPSuppressionRule).filter(FPSuppressionRule.project_id == project_id).all()
+    return [
+        {"id": r.id, "tool": r.tool, "title_contains": r.title_contains, "created_at": str(r.created_at)}
+        for r in rules
+    ]
+
+
+@router.post("/{project_id}/fp-rules", status_code=201)
+def create_fp_rule(project_id: str, payload: FPRuleCreate, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    tc = payload.title_contains.strip()
+    if not tc:
+        raise HTTPException(400, "title_contains must not be empty")
+    if len(tc) > 500:
+        raise HTTPException(400, "title_contains too long (max 500 chars)")
+    rule = FPSuppressionRule(
+        id=str(uuid.uuid4()),
+        project_id=project_id,
+        tool=payload.tool.strip() if payload.tool else None,
+        title_contains=tc,
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return {"id": rule.id, "tool": rule.tool, "title_contains": rule.title_contains, "created_at": str(rule.created_at)}
+
+
+@router.delete("/{project_id}/fp-rules/{rule_id}", status_code=204)
+def delete_fp_rule(project_id: str, rule_id: str, db: Session = Depends(get_db)):
+    rule = db.query(FPSuppressionRule).filter(
+        FPSuppressionRule.id == rule_id,
+        FPSuppressionRule.project_id == project_id,
+    ).first()
+    if not rule:
+        raise HTTPException(404, "Rule not found")
+    db.delete(rule)
+    db.commit()
 
 
 # ── Standalone target endpoints ───────────────────────────────────────────────

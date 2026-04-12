@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -24,7 +25,7 @@ def create_notification(payload: NotificationCreate, db: Session = Depends(get_d
 
 
 def push_notification(db: Session, title: str, body: str = "", type: str = "info") -> Notification:
-    """Create a notification — call from other services/routers."""
+    """Create a notification and fire matching webhooks."""
     n = Notification(
         id=str(uuid.uuid4()),
         title=title,
@@ -34,6 +35,13 @@ def push_notification(db: Session, title: str, body: str = "", type: str = "info
     )
     db.add(n)
     db.commit()
+    # Fire webhooks if we're inside an async context
+    try:
+        loop = asyncio.get_running_loop()
+        from services.webhook_service import fire_webhooks
+        loop.create_task(fire_webhooks(type, title, body))
+    except RuntimeError:
+        pass  # no running loop — skip (e.g. during tests or sync callers)
     return n
 
 

@@ -23,9 +23,10 @@ const SEVERITY_ACCENT: Record<string, string> = {
 interface FindingsTableProps {
   findings: Finding[]
   loading?: boolean
+  onDelete?: (id: string) => void
 }
 
-export default function FindingsTable({ findings, loading }: FindingsTableProps) {
+export default function FindingsTable({ findings, loading, onDelete }: FindingsTableProps) {
   const [sortField, setSortField] = useState<'severity' | 'title' | 'framework'>('severity')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [filterSeverity, setFilterSeverity] = useState<string>('all')
@@ -303,6 +304,18 @@ export default function FindingsTable({ findings, loading }: FindingsTableProps)
                     <div>
                       <div className="text-xs font-semibold text-slate-400 uppercase mb-1">Evidence</div>
                       <pre className="text-xs font-mono text-slate-300 rounded p-3 overflow-x-auto whitespace-pre-wrap border border-cyan-900/20" style={{ background: '#05080d' }}>{finding.evidence}</pre>
+                    </div>
+                  )}
+
+                  {/* Delete finding */}
+                  {onDelete && (
+                    <div className="flex justify-end pt-1">
+                      <button
+                        onClick={() => onDelete(finding.id)}
+                        className="flex items-center gap-1.5 px-3 py-1 rounded text-xs text-red-400 border border-red-900/40 hover:bg-red-900/20 transition-colors"
+                      >
+                        <Trash2 size={11} /> Delete Finding
+                      </button>
                     </div>
                   )}
 

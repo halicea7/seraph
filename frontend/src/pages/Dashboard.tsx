@@ -271,12 +271,21 @@ export default function Dashboard() {
 
   async function handleCreateProject(
     projectData: { name: string; description: string },
-    targets: Array<{ hostname_or_ip: string; target_type: string; ports: string; notes: string }>
+    targets: Array<{ hostname_or_ip: string; target_type: string; ports: string; notes: string }>,
+    scope?: { include: string[]; exclude: string[] }
   ) {
     const project = await createProject({
       name: projectData.name,
       description: projectData.description,
     })
+    // Save scope if any rules were defined
+    if (scope && (scope.include.length > 0 || scope.exclude.length > 0)) {
+      await fetch(`/api/v1/projects/${project.id}/scope`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scope),
+      })
+    }
     for (const t of targets) {
       if (t.hostname_or_ip.trim()) {
         await createTarget(project.id, {

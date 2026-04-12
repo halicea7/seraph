@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from database import get_db, Scan, Target, Project, Finding
+from database import get_db, FPSuppressionRule, Scan, Target, Project, Finding
 from services.script_generator import generate_script
 from services.executor import run_command_streaming
 
@@ -124,10 +124,29 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
     # Delete existing findings for this scan
     db.query(Finding).filter(Finding.scan_id == scan_id).delete()
 
+    # Load project-level FP suppression rules once
+    target = db.query(Target).filter(Target.id == scan.target_id).first()
+    fp_rules = []
+    if target:
+        fp_rules = db.query(FPSuppressionRule).filter(
+            FPSuppressionRule.project_id == target.project_id
+        ).all()
+
+    def _is_auto_fp(title: str, tool: str) -> bool:
+        """Return True if a suppression rule matches this finding."""
+        title_lc = title.lower()
+        tool_lc = tool.lower() if tool else ""
+        for rule in fp_rules:
+            if rule.tool and rule.tool.lower() not in tool_lc:
+                continue
+            if rule.title_contains.lower() in title_lc:
+                return True
+        return False
+
     created = []
     for pf in parsed:
-        existing_tags = []
         extra = ",".join(t for t in (pf.extra_tags or []) if t)
+        auto_fp = _is_auto_fp(pf.title or "", scan.scan_type or "")
         finding = Finding(
             id=str(uuid.uuid4()),
             scan_id=scan_id,
@@ -140,6 +159,8 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
             evidence=pf.evidence,
             cve_id=pf.cve_id,
             tags=extra,
+            status="false_positive" if auto_fp else "open",
+            fp_reason="Auto-suppressed by project rule" if auto_fp else None,
         )
         db.add(finding)
         created.append(finding)
@@ -202,16 +223,21 @@ def get_scan_findings(scan_id: str, db: Session = Depends(get_db)):
     return findings
 
 
+_VALID_REPORT_TYPES = {"audit", "pentest", "executive_summary", "technical_detail", "compliance_mapped"}
+
+
 class GenerateReportRequest(BaseModel):
     project_id: str
-    report_type: str = "audit"  # "audit" or "pentest"
+    report_type: str = "audit"  # "audit" | "pentest" | "executive_summary" | "technical_detail" | "compliance_mapped"
     scan_ids: Optional[list[str]] = None  # None means all scans for project
     auditor: str = "Seraph (Automated)"
 
 
 @router.post("/reports/generate")
 def generate_project_report(req: GenerateReportRequest, db: Session = Depends(get_db)):
-    """Generate a Markdown+HTML report for a project."""
+    """Generate a report for a project. report_type: audit | pentest | executive_summary | technical_detail | compliance_mapped"""
+    if req.report_type not in _VALID_REPORT_TYPES:
+        raise HTTPException(400, f"report_type must be one of: {sorted(_VALID_REPORT_TYPES)}")
     project = db.query(Project).filter(Project.id == req.project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")

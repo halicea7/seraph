@@ -1,5 +1,6 @@
 import json
 import os
+import pathlib
 import shutil
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,13 +35,70 @@ JOHN_FORMATS = [
     {"id": "krb5tgs",      "label": "Kerberos TGS"},
 ]
 
+# Local wordlists directory (user-writable, no root needed)
+_WORDLIST_DIR = str(pathlib.Path(__file__).resolve().parents[2] / "wordlists")
+
 COMMON_WORDLISTS = [
+    f"{_WORDLIST_DIR}/rockyou.txt",
+    f"{_WORDLIST_DIR}/rockyou.txt.gz",
     "/usr/share/wordlists/rockyou.txt",
     "/usr/share/wordlists/fasttrack.txt",
+    "/usr/share/john/password.lst",
+    f"{_WORDLIST_DIR}/top-1000.txt",
     "/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000.txt",
     "/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-100.txt",
     "/usr/share/seclists/Passwords/Leaked-Databases/rockyou-75.txt",
 ]
+
+# Downloadable wordlist bundles — wget to local dir, no root required
+WORDLIST_BUNDLES = [
+    {
+        "id": "rockyou",
+        "label": "rockyou.txt",
+        "description": "14M passwords from the 2009 RockYou breach. Best all-around list (~134 MB).",
+        "dest": f"{_WORDLIST_DIR}/rockyou.txt",
+        "commands": [
+            f"mkdir -p {_WORDLIST_DIR}",
+            f"wget -q --show-progress -O {_WORDLIST_DIR}/rockyou.txt.gz "
+            "https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt",
+            # The above URL serves the plain text file despite the .gz extension in the save name
+            # Rename to .txt if it downloaded as plaintext
+            f"file {_WORDLIST_DIR}/rockyou.txt.gz | grep -q gzip "
+            f"&& gunzip -f {_WORDLIST_DIR}/rockyou.txt.gz "
+            f"|| mv {_WORDLIST_DIR}/rockyou.txt.gz {_WORDLIST_DIR}/rockyou.txt",
+        ],
+    },
+    {
+        "id": "top1000",
+        "label": "Top 1000 passwords",
+        "description": "Lightweight 1 KB list — cracks weak passwords in seconds.",
+        "dest": f"{_WORDLIST_DIR}/top-1000.txt",
+        "commands": [
+            f"mkdir -p {_WORDLIST_DIR}",
+            f"wget -q --show-progress -O {_WORDLIST_DIR}/top-1000.txt "
+            "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10-million-password-list-top-1000.txt",
+        ],
+    },
+    {
+        "id": "fasttrack",
+        "label": "fasttrack.txt",
+        "description": "~200 passwords focused on corporate/default creds. Fast.",
+        "dest": f"{_WORDLIST_DIR}/fasttrack.txt",
+        "commands": [
+            f"mkdir -p {_WORDLIST_DIR}",
+            f"wget -q --show-progress -O {_WORDLIST_DIR}/fasttrack.txt "
+            "https://raw.githubusercontent.com/trustedsec/social-engineer-toolkit/master/src/fasttrack/wordlist.txt",
+        ],
+    },
+]
+
+
+@router.get("/wordlists/available")
+def list_wordlist_bundles():
+    return [
+        {**b, "installed": os.path.exists(b["dest"]), "commands": None}
+        for b in WORDLIST_BUNDLES
+    ]
 
 
 @router.get("/tools")

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Executive Summary — {{ project_name }}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f8fafc; color: #1e293b; line-height: 1.6; }
+  .page { max-width: 860px; margin: 0 auto; padding: 3rem 2rem; }
+  .header { border-bottom: 4px solid #1e293b; padding-bottom: 1.5rem; margin-bottom: 2rem; }
+  .header h1 { font-size: 2rem; font-weight: 700; color: #0f172a; }
+  .header .subtitle { font-size: 0.95rem; color: #64748b; margin-top: 0.25rem; }
+  .meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 1.5rem 0 2rem; }
+  .meta-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem; }
+  .meta-card .label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; }
+  .meta-card .value { font-size: 1rem; font-weight: 600; color: #0f172a; margin-top: 0.15rem; }
+  .risk-banner { border-radius: 10px; padding: 1.25rem 1.5rem; margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem; }
+  .risk-banner.CRITICAL { background: #fef2f2; border: 2px solid #ef4444; }
+  .risk-banner.HIGH     { background: #fff7ed; border: 2px solid #f97316; }
+  .risk-banner.MEDIUM   { background: #fffbeb; border: 2px solid #f59e0b; }
+  .risk-banner.LOW      { background: #f0fdf4; border: 2px solid #22c55e; }
+  .risk-banner.INFORMATIONAL { background: #eff6ff; border: 2px solid #3b82f6; }
+  .risk-banner .badge { font-size: 1.1rem; font-weight: 800; padding: 0.4rem 1rem; border-radius: 6px; color: #fff; }
+  .risk-banner.CRITICAL .badge { background: #ef4444; }
+  .risk-banner.HIGH     .badge { background: #f97316; }
+  .risk-banner.MEDIUM   .badge { background: #f59e0b; }
+  .risk-banner.LOW      .badge { background: #22c55e; }
+  .risk-banner.INFORMATIONAL .badge { background: #3b82f6; }
+  .risk-banner p { font-size: 0.9rem; color: #475569; flex: 1; }
+  .sev-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; margin-bottom: 2rem; }
+  .sev-card { text-align: center; border-radius: 8px; padding: 1rem; border: 1px solid; }
+  .sev-card .count { font-size: 2rem; font-weight: 800; }
+  .sev-card .label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .sev-card.critical { border-color: #fca5a5; background: #fef2f2; }
+  .sev-card.critical .count { color: #ef4444; }
+  .sev-card.high     { border-color: #fdba74; background: #fff7ed; }
+  .sev-card.high     .count { color: #f97316; }
+  .sev-card.medium   { border-color: #fcd34d; background: #fffbeb; }
+  .sev-card.medium   .count { color: #d97706; }
+  .sev-card.low      { border-color: #86efac; background: #f0fdf4; }
+  .sev-card.low      .count { color: #16a34a; }
+  .sev-card.info     { border-color: #93c5fd; background: #eff6ff; }
+  .sev-card.info     .count { color: #2563eb; }
+  h2 { font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 2rem 0 0.75rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.4rem; }
+  .finding-row { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem 0; border-bottom: 1px solid #f1f5f9; }
+  .sev-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 0.35rem; }
+  .sev-dot.critical { background: #ef4444; }
+  .sev-dot.high     { background: #f97316; }
+  .sev-dot.medium   { background: #f59e0b; }
+  .sev-dot.low      { background: #22c55e; }
+  .sev-dot.info     { background: #3b82f6; }
+  .finding-title { font-size: 0.9rem; font-weight: 600; color: #1e293b; }
+  .finding-meta  { font-size: 0.78rem; color: #94a3b8; }
+  .remediation-priority { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1.25rem 1.5rem; margin: 0.5rem 0; }
+  .remediation-priority h3 { font-size: 0.88rem; font-weight: 700; color: #0f172a; }
+  .remediation-priority p  { font-size: 0.83rem; color: #475569; margin-top: 0.3rem; }
+  .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; font-size: 0.75rem; color: #94a3b8; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div class="page">
+  <!-- Header -->
+  <div class="header">
+    <h1>{{ project_name }}</h1>
+    <div class="subtitle">Executive Summary &mdash; Security Assessment</div>
+  </div>
+
+  <!-- Meta -->
+  <div class="meta-grid">
+    <div class="meta-card">
+      <div class="label">Assessment Date</div>
+      <div class="value">{{ generated_at }}</div>
+    </div>
+    <div class="meta-card">
+      <div class="label">Auditor</div>
+      <div class="value">{{ auditor }}</div>
+    </div>
+    <div class="meta-card">
+      <div class="label">Scope</div>
+      <div class="value">{{ targets | length }} target(s) &middot; {{ scans | length }} scan(s)</div>
+    </div>
+  </div>
+
+  <!-- Overall Risk -->
+  <div class="risk-banner {{ risk_rating }}">
+    <div class="badge">{{ risk_rating }}</div>
+    <p>
+      The overall risk rating for <strong>{{ project_name }}</strong> is <strong>{{ risk_rating }}</strong>.
+      {{ total_findings }} finding(s) were identified across {{ targets | length }} target(s).
+      {% if severity_counts.critical > 0 %}
+      Immediate action is required to address {{ severity_counts.critical }} critical finding(s).
+      {% elif severity_counts.high > 0 %}
+      Priority remediation is recommended for {{ severity_counts.high }} high-severity finding(s).
+      {% else %}
+      No critical or high-severity findings were identified.
+      {% endif %}
+    </p>
+  </div>
+
+  <!-- Severity breakdown -->
+  <div class="sev-grid">
+    <div class="sev-card critical">
+      <div class="count">{{ severity_counts.critical }}</div>
+      <div class="label">Critical</div>
+    </div>
+    <div class="sev-card high">
+      <div class="count">{{ severity_counts.high }}</div>
+      <div class="label">High</div>
+    </div>
+    <div class="sev-card medium">
+      <div class="count">{{ severity_counts.medium }}</div>
+      <div class="label">Medium</div>
+    </div>
+    <div class="sev-card low">
+      <div class="count">{{ severity_counts.low }}</div>
+      <div class="label">Low</div>
+    </div>
+    <div class="sev-card info">
+      <div class="count">{{ severity_counts.info }}</div>
+      <div class="label">Info</div>
+    </div>
+  </div>
+
+  <!-- Key Findings (top 10, critical + high first) -->
+  {% set top_findings = (findings | selectattr('severity', 'in', ['critical','high']) | list)[:10] %}
+  {% if top_findings %}
+  <h2>Key Findings</h2>
+  {% for f in top_findings %}
+  <div class="finding-row">
+    <div class="sev-dot {{ f.severity }}"></div>
+    <div>
+      <div class="finding-title">{{ f.title }}</div>
+      <div class="finding-meta">{{ f.severity | upper }}{% if f.cve_id %} &middot; {{ f.cve_id }}{% endif %}</div>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <h2>Key Findings</h2>
+  <p style="color:#64748b;font-size:0.9rem;">No critical or high-severity findings were identified.</p>
+  {% endif %}
+
+  <!-- Remediation Priorities -->
+  {% set priority_findings = (findings | selectattr('severity', 'in', ['critical','high']) | list)[:5] %}
+  {% if priority_findings %}
+  <h2>Remediation Priorities</h2>
+  {% for f in priority_findings %}
+  <div class="remediation-priority">
+    <h3>{{ loop.index }}. {{ f.title }}</h3>
+    {% if f.remediation %}
+    <p>{{ f.remediation }}</p>
+    {% else %}
+    <p>Refer to the Technical Detail report for remediation guidance.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <!-- Targets in scope -->
+  <h2>Assessment Scope</h2>
+  {% for t in targets %}
+  <div class="finding-row">
+    <div class="sev-dot info"></div>
+    <div>
+      <div class="finding-title">{{ t.hostname_or_ip }}</div>
+      <div class="finding-meta">{{ t.target_type }}</div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="footer">
+    <span>{{ project_name }} &mdash; Executive Summary</span>
+    <span>Generated {{ generated_at }} &middot; {{ generated_by }}</span>
+  </div>
+</div>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, Plus, Trash2 } from 'lucide-react'
+import { X, Plus, Trash2, ChevronDown, ChevronRight, Shield } from 'lucide-react'
 
 interface TargetInput {
   hostname_or_ip: string
@@ -8,9 +8,14 @@ interface TargetInput {
   notes: string
 }
 
+interface ScopeData {
+  include: string[]
+  exclude: string[]
+}
+
 interface ProjectModalProps {
   onClose: () => void
-  onSave: (project: { name: string; description: string }, targets: TargetInput[]) => Promise<void>
+  onSave: (project: { name: string; description: string }, targets: TargetInput[], scope: ScopeData) => Promise<void>
 }
 
 const TARGET_TYPES = [
@@ -18,7 +23,10 @@ const TARGET_TYPES = [
   { value: 'windows_host', label: 'Windows Host' },
   { value: 'web_app', label: 'Web Application' },
   { value: 'cloud_aws', label: 'Cloud (AWS)' },
+  { value: 'cloud_azure', label: 'Cloud (Azure)' },
+  { value: 'cloud_gcp', label: 'Cloud (GCP)' },
   { value: 'network', label: 'Network' },
+  { value: 'api_endpoint', label: 'API Endpoint' },
 ]
 
 const inputClass = "w-full rounded-lg px-3 py-2 text-sm text-white focus:outline-none border border-cyan-900/20 focus:border-cyan-500/40"
@@ -29,6 +37,10 @@ export default function ProjectModal({ onClose, onSave }: ProjectModalProps) {
   const [targets, setTargets] = useState<TargetInput[]>([
     { hostname_or_ip: '', target_type: 'linux_host', ports: '', notes: '' }
   ])
+  const [scope, setScope] = useState<ScopeData>({ include: [], exclude: [] })
+  const [scopeIncludeInput, setScopeIncludeInput] = useState('')
+  const [scopeExcludeInput, setScopeExcludeInput] = useState('')
+  const [scopeExpanded, setScopeExpanded] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -44,13 +56,25 @@ export default function ProjectModal({ onClose, onSave }: ProjectModalProps) {
     setTargets(prev => prev.map((t, i) => i === idx ? { ...t, [field]: value } : t))
   }
 
+  function addScopeRule(type: 'include' | 'exclude') {
+    const val = type === 'include' ? scopeIncludeInput.trim() : scopeExcludeInput.trim()
+    if (!val) return
+    setScope(s => ({ ...s, [type]: [...s[type], val] }))
+    if (type === 'include') setScopeIncludeInput('')
+    else setScopeExcludeInput('')
+  }
+
+  function removeScopeRule(type: 'include' | 'exclude', idx: number) {
+    setScope(s => ({ ...s, [type]: s[type].filter((_, i) => i !== idx) }))
+  }
+
   async function handleSave() {
     if (!name.trim()) { setError('Project name is required'); return }
     const validTargets = targets.filter(t => t.hostname_or_ip.trim())
     setSaving(true)
     setError('')
     try {
-      await onSave({ name: name.trim(), description: description.trim() }, validTargets)
+      await onSave({ name: name.trim(), description: description.trim() }, validTargets, scope)
       onClose()
     } catch (e: any) {
       setError(e.message || 'Failed to save project')
@@ -176,6 +200,54 @@ export default function ProjectModal({ onClose, onSave }: ProjectModalProps) {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Scope (optional) */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setScopeExpanded(e => !e)}
+              className="flex items-center gap-2 text-xs font-semibold text-slate-300 uppercase tracking-wider hover:text-slate-100 transition-colors"
+            >
+              {scopeExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              <Shield size={13} className="text-cyan-400" /> Scope (optional)
+            </button>
+            {scopeExpanded && (
+              <div className="mt-3 glass rounded-xl p-4 space-y-4">
+                <p className="text-[11px] text-slate-400">
+                  Restrict which IPs/hostnames can be added as targets. Leave empty to allow everything.
+                  Supports CIDRs (e.g. 10.0.0.0/8), exact hostnames, and wildcards (e.g. *.example.com).
+                </p>
+                {(['include', 'exclude'] as const).map(type => (
+                  <div key={type}>
+                    <label className="block text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1.5">
+                      {type === 'include' ? '✓ Include (allowed)' : '✗ Exclude (blocked)'}
+                    </label>
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        className="flex-1 bg-slate-900/60 border border-slate-700/50 rounded px-2 py-1.5 text-xs text-white font-mono placeholder-slate-600 focus:outline-none focus:border-cyan-500/50"
+                        placeholder={type === 'include' ? '192.168.1.0/24 or example.com' : '192.168.1.1'}
+                        value={type === 'include' ? scopeIncludeInput : scopeExcludeInput}
+                        onChange={e => type === 'include' ? setScopeIncludeInput(e.target.value) : setScopeExcludeInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addScopeRule(type) } }}
+                      />
+                      <button type="button" onClick={() => addScopeRule(type)}
+                        className="px-2 py-1.5 rounded border border-slate-700/40 text-slate-400 hover:text-cyan-300 hover:border-cyan-500/30 text-xs transition-colors">
+                        +
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {scope[type].map((rule, idx) => (
+                        <span key={idx} className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border font-mono ${type === 'include' ? 'text-green-400 border-green-500/30 bg-green-900/20' : 'text-red-400 border-red-500/30 bg-red-900/20'}`}>
+                          {rule}
+                          <button type="button" onClick={() => removeScopeRule(type, idx)} className="hover:text-white ml-0.5">×</button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Search, Network, Swords, Terminal, BookOpen,
   KeyRound, Lock, ShieldCheck, ShieldAlert, FileSearch,
-  FileText, Settings, HelpCircle, Command,
+  FileText, Settings, HelpCircle, Command, GitBranch, Cpu, Radio,
 } from 'lucide-react'
 
 interface Route {
@@ -20,10 +20,14 @@ const ROUTES: Route[] = [
   { label: 'Pentest Workbench',  to: '/pentest',    icon: <Swords size={15} />,         group: 'Offense' },
   { label: 'C2 Console',         to: '/c2',         icon: <Terminal size={15} />,       group: 'Offense' },
   { label: 'Playbooks',          to: '/playbooks',  icon: <BookOpen size={15} />,       group: 'Offense' },
+  { label: 'Attack Paths',       to: '/attack-paths', icon: <GitBranch size={15} />,    group: 'Offense' },
   { label: 'Credential Vault',   to: '/vault',      icon: <KeyRound size={15} />,       group: 'Credentials' },
   { label: 'Password Auditing',  to: '/cracking',   icon: <Lock size={15} />,           group: 'Credentials' },
   { label: 'Audit Builder',      to: '/audit',      icon: <ShieldCheck size={15} />,    group: 'Defense' },
+  { label: 'Agents',             to: '/agents',     icon: <Cpu size={15} />,            group: 'Defense' },
+  { label: 'Listeners',          to: '/listeners',  icon: <Radio size={15} />,          group: 'Defense' },
   { label: 'Vuln Tracker',       to: '/vulns',      icon: <ShieldAlert size={15} />,    group: 'Defense' },
+  { label: 'CVE Watch',          to: '/cve-watch',  icon: <ShieldAlert size={15} />,    group: 'Defense' },
   { label: 'Log Analysis',       to: '/logs',       icon: <FileSearch size={15} />,     group: 'Defense' },
   { label: 'Reports',            to: '/reports',    icon: <FileText size={15} />,       group: 'Core' },
   { label: 'Settings',           to: '/settings',   icon: <Settings size={15} />,       group: 'Core' },

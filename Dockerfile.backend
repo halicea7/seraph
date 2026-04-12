@@ -1,16 +1,185 @@
+# Seraph Backend — Production / Dev image
+#
+# Includes every tool Seraph can invoke at runtime:
+#   • apt  : nmap, masscan, nikto, hydra, sqlmap, john, hashcat, lynis, openscap,
+#             whois, dig, samba/ldap (enum4linux deps)
+#   • bin  : testssl.sh, gobuster, ffuf, subfinder, nuclei, feroxbuster,
+#             kerbrute, amass, rustscan
+#   • pipx : theHarvester, netexec (nxc), wafw00f
+#   • pip  : impacket (GetUserSPNs, GetNPUsers, secretsdump, psexec, wmiexec),
+#             awscli
+#   • git  : enum4linux (Perl), searchsploit/exploitdb, Responder
+#   • sys  : WeasyPrint PDF deps (pango, cairo, gdk-pixbuf, fonts, gi)
+#
+# Build args:
+#   PRODUCTION=1   → 4-worker uvicorn; PRODUCTION=0 (default) → --reload
+
 FROM python:3.11-slim
+
+ARG PRODUCTION=0
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIPX_HOME=/opt/pipx \
+    PIPX_BIN_DIR=/usr/local/bin \
+    PATH="/usr/local/bin:$PATH"
 
 WORKDIR /app
 
+# ── 1. Core apt tools ─────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    nmap \
+    # Utilities
+    curl wget git unzip ca-certificates gnupg perl file \
+    # Network recon
+    nmap masscan whois dnsutils iputils-ping \
+    # Web scanners
+    nikto \
+    # Credential / password auditing
+    hydra john hashcat \
+    # SQL injection
+    sqlmap \
+    # Host compliance audit
+    lynis \
+    # OpenSCAP (oscap binary + scanner)
+    libopenscap8 openscap-scanner \
+    # SMB / LDAP support (required by enum4linux)
+    samba-common-bin ldap-utils smbclient \
+    # pipx (for theHarvester, nxc, wafw00f)
+    pipx \
+    # WeasyPrint PDF system libraries
+    libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+    libcairo2 libcairo-gobject2 libgdk-pixbuf-2.0-0 libfontconfig1 \
+    gir1.2-pango-1.0 gir1.2-rsvg-2.0 gir1.2-gdkpixbuf-2.0 \
+    python3-gi python3-gi-cairo \
+    fonts-dejavu-core fonts-liberation fonts-noto-core \
     && rm -rf /var/lib/apt/lists/*
 
+# ── 2. testssl.sh ─────────────────────────────────────────────────────────────
+RUN curl -fsSL https://testssl.sh/testssl.sh -o /usr/local/bin/testssl.sh && \
+    chmod +x /usr/local/bin/testssl.sh && \
+    ln -sf /usr/local/bin/testssl.sh /usr/local/bin/testssl
+
+# ── 3. gobuster ──────────────────────────────────────────────────────────────
+RUN set -e; \
+    VER=$(curl -fsSL https://api.github.com/repos/OJ/gobuster/releases/latest \
+          | grep '"tag_name"' | cut -d'"' -f4); \
+    curl -fsSL "https://github.com/OJ/gobuster/releases/download/${VER}/gobuster_Linux_x86_64.tar.gz" \
+         | tar -xz -C /usr/local/bin gobuster; \
+    chmod +x /usr/local/bin/gobuster
+
+# ── 4. ffuf ───────────────────────────────────────────────────────────────────
+RUN set -e; \
+    VER=$(curl -fsSL https://api.github.com/repos/ffuf/ffuf/releases/latest \
+          | grep '"tag_name"' | cut -d'"' -f4); \
+    BARE=${VER#v}; \
+    curl -fsSL "https://github.com/ffuf/ffuf/releases/download/${VER}/ffuf_${BARE}_linux_amd64.tar.gz" \
+         | tar -xz -C /usr/local/bin ffuf; \
+    chmod +x /usr/local/bin/ffuf
+
+# ── 5. subfinder ─────────────────────────────────────────────────────────────
+RUN set -e; \
+    VER=$(curl -fsSL https://api.github.com/repos/projectdiscovery/subfinder/releases/latest \
+          | grep '"tag_name"' | cut -d'"' -f4); \
+    BARE=${VER#v}; \
+    curl -fsSL "https://github.com/projectdiscovery/subfinder/releases/download/${VER}/subfinder_${BARE}_linux_amd64.zip" \
+         -o /tmp/subfinder.zip; \
+    unzip -j /tmp/subfinder.zip subfinder -d /usr/local/bin; \
+    chmod +x /usr/local/bin/subfinder; \
+    rm /tmp/subfinder.zip
+
+# ── 6. nuclei ─────────────────────────────────────────────────────────────────
+RUN set -e; \
+    VER=$(curl -fsSL https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
+          | grep '"tag_name"' | cut -d'"' -f4); \
+    BARE=${VER#v}; \
+    curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/${VER}/nuclei_${BARE}_linux_amd64.zip" \
+         -o /tmp/nuclei.zip; \
+    unzip -j /tmp/nuclei.zip nuclei -d /usr/local/bin; \
+    chmod +x /usr/local/bin/nuclei; \
+    rm /tmp/nuclei.zip
+
+# ── 7. feroxbuster ───────────────────────────────────────────────────────────
+RUN set -e; \
+    curl -fsSL https://github.com/epi052/feroxbuster/releases/latest/download/x86_64-linux-feroxbuster.zip \
+         -o /tmp/ferox.zip; \
+    unzip -j /tmp/ferox.zip feroxbuster -d /usr/local/bin; \
+    chmod +x /usr/local/bin/feroxbuster; \
+    rm /tmp/ferox.zip
+
+# ── 8. kerbrute ──────────────────────────────────────────────────────────────
+RUN set -e; \
+    VER=$(curl -fsSL https://api.github.com/repos/ropnop/kerbrute/releases/latest \
+          | grep '"tag_name"' | cut -d'"' -f4); \
+    curl -fsSL "https://github.com/ropnop/kerbrute/releases/download/${VER}/kerbrute_linux_amd64" \
+         -o /usr/local/bin/kerbrute; \
+    chmod +x /usr/local/bin/kerbrute
+
+# ── 9. amass ─────────────────────────────────────────────────────────────────
+RUN set -e; \
+    VER=$(curl -fsSL https://api.github.com/repos/owasp-amass/amass/releases/latest \
+          | grep '"tag_name"' | cut -d'"' -f4); \
+    curl -fsSL "https://github.com/owasp-amass/amass/releases/download/${VER}/amass_Linux_amd64.zip" \
+         -o /tmp/amass.zip; \
+    unzip -j /tmp/amass.zip "amass_Linux_amd64/amass" -d /usr/local/bin || \
+    unzip -j /tmp/amass.zip "*/amass" -d /usr/local/bin; \
+    chmod +x /usr/local/bin/amass; \
+    rm /tmp/amass.zip
+
+# ── 10. rustscan ─────────────────────────────────────────────────────────────
+RUN set -e; \
+    VER=$(curl -fsSL https://api.github.com/repos/RustScan/RustScan/releases/latest \
+          | grep '"tag_name"' | cut -d'"' -f4); \
+    BARE=${VER#v}; \
+    curl -fsSL "https://github.com/RustScan/RustScan/releases/download/${VER}/rustscan_${BARE}_amd64.deb" \
+         -o /tmp/rustscan.deb; \
+    dpkg -i /tmp/rustscan.deb; \
+    rm /tmp/rustscan.deb
+
+# ── 11. enum4linux (Perl script) ──────────────────────────────────────────────
+RUN curl -fsSL \
+    https://raw.githubusercontent.com/CiscoCXSecurity/enum4linux/master/enum4linux.pl \
+    -o /usr/local/bin/enum4linux && chmod +x /usr/local/bin/enum4linux
+
+# ── 12. searchsploit / exploitdb ─────────────────────────────────────────────
+RUN git clone --depth=1 https://gitlab.com/exploit-database/exploitdb.git /opt/exploitdb && \
+    ln -sf /opt/exploitdb/searchsploit /usr/local/bin/searchsploit
+
+# ── 13. Responder ─────────────────────────────────────────────────────────────
+RUN git clone --depth=1 https://github.com/lgandx/Responder.git /opt/responder && \
+    chmod +x /opt/responder/Responder.py && \
+    ln -sf /opt/responder/Responder.py /usr/local/bin/responder
+
+# ── 14. pipx tools (system-wide via PIPX_BIN_DIR=/usr/local/bin) ─────────────
+RUN pipx install git+https://github.com/laramies/theHarvester && \
+    pipx install netexec && \
+    pipx install wafw00f && \
+    pipx ensurepath
+
+# ── 15. Python dependencies ───────────────────────────────────────────────────
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# awscli (aws command)
+RUN pip install --no-cache-dir awscli
+
+# impacket — installs impacket-GetUserSPNs, impacket-GetNPUsers,
+#            impacket-secretsdump, impacket-psexec, impacket-wmiexec
+RUN pip install --no-cache-dir impacket
+
+# ── 16. Non-root runtime user ─────────────────────────────────────────────────
+RUN useradd -r -u 1001 -m seraph && \
+    mkdir -p /seraph_results /app/reports && \
+    chown seraph:seraph /seraph_results /app/reports
+
 COPY backend/ .
+RUN chown -R seraph:seraph /app
+
+USER seraph
 
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+CMD uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    $([ "$PRODUCTION" = "1" ] && echo "--workers 4" || echo "--reload")

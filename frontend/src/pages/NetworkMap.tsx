@@ -38,7 +38,10 @@ const TARGET_ICONS: Record<string, string> = {
   windows_host: '🪟',
   web_app: '🌐',
   cloud_aws: '☁',
+  cloud_azure: '☁',
+  cloud_gcp: '☁',
   network: '🔗',
+  api_endpoint: '🔌',
 }
 
 export default function NetworkMap() {

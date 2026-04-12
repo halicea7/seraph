@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Search, ChevronDown, Download, Tag, X } from 'lucide-react'
+import { ArrowLeft, Search, ChevronDown, Download, Tag, X, Trash2, EyeOff, RotateCcw, ShieldOff, Plus } from 'lucide-react'
 
 interface FindingRow {
   id: string
@@ -10,6 +10,7 @@ interface FindingRow {
   cve_id: string | null
   cvss_score: string | null
   status: string
+  fp_reason: string | null
   tags: string
   target: string
   project: string
@@ -35,14 +36,15 @@ const SEV_BG: Record<string, string> = {
   info:     'rgba(59,130,246,0.15)',
 }
 
-const STATUS_OPTIONS = ['open', 'in-review', 'remediated', 'accepted'] as const
+const STATUS_OPTIONS = ['open', 'in-review', 'remediated', 'accepted', 'false_positive'] as const
 type FindingStatus = typeof STATUS_OPTIONS[number]
 
-const STATUS_STYLES: Record<FindingStatus, string> = {
-  'open':        'bg-red-500/15 text-red-400 border border-red-500/25',
-  'in-review':   'bg-amber-500/15 text-amber-400 border border-amber-500/25',
-  'remediated':  'bg-green-500/15 text-green-400 border border-green-500/25',
-  'accepted':    'bg-slate-500/15 text-slate-400 border border-slate-500/25',
+const STATUS_STYLES: Record<string, string> = {
+  'open':            'bg-red-500/15 text-red-400 border border-red-500/25',
+  'in-review':       'bg-amber-500/15 text-amber-400 border border-amber-500/25',
+  'remediated':      'bg-green-500/15 text-green-400 border border-green-500/25',
+  'accepted':        'bg-slate-500/15 text-slate-400 border border-slate-500/25',
+  'false_positive':  'bg-purple-500/15 text-purple-400 border border-purple-500/25',
 }
 
 export default function AllFindings() {
@@ -58,7 +60,22 @@ export default function AllFindings() {
   const [exportOpen, setExportOpen] = useState(false)
   const [statusDropdown, setStatusDropdown] = useState<string | null>(null)
   const [tagInput, setTagInput] = useState<Record<string, string>>({})
+  const [fpModal, setFpModal] = useState<{ id: string; title: string } | null>(null)
+  const [fpReason, setFpReason] = useState('')
+  const [fpSaving, setFpSaving] = useState(false)
+  const [showFp, setShowFp] = useState(false)
   const exportRef = useRef<HTMLDivElement>(null)
+
+  // FP suppression rules state
+  interface FPRule { id: string; tool: string | null; title_contains: string; created_at: string }
+  interface ProjectOpt { id: string; name: string }
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const [ruleProjects, setRuleProjects] = useState<ProjectOpt[]>([])
+  const [ruleProjectId, setRuleProjectId] = useState('')
+  const [fpRules, setFpRules] = useState<FPRule[]>([])
+  const [ruleTool, setRuleTool] = useState('')
+  const [ruleTitleContains, setRuleTitleContains] = useState('')
+  const [ruleSaving, setRuleSaving] = useState(false)
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -114,7 +131,29 @@ export default function AllFindings() {
       .finally(() => setLoading(false))
   }, [])
 
+  async function suppressFinding(id: string, reason: string) {
+    setFpSaving(true)
+    try {
+      await fetch(`/api/v1/findings/${id}/suppress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      })
+      setFindings(prev => prev.map(f => f.id === id ? { ...f, status: 'false_positive', fp_reason: reason } : f))
+      setFpModal(null)
+      setFpReason('')
+    } finally {
+      setFpSaving(false)
+    }
+  }
+
+  async function restoreFinding(id: string) {
+    await fetch(`/api/v1/findings/${id}/restore`, { method: 'POST' })
+    setFindings(prev => prev.map(f => f.id === id ? { ...f, status: 'open', fp_reason: null } : f))
+  }
+
   const filtered = findings.filter(f => {
+    if (!showFp && f.status === 'false_positive') return false
     if (sevFilter !== 'all' && f.severity !== sevFilter) return false
     if (statusFilter !== 'all' && f.status !== statusFilter) return false
     if (tagFilter) {
@@ -186,6 +225,52 @@ export default function AllFindings() {
     })
   }
 
+  function deleteFinding(id: string) {
+    fetch(`/api/v1/findings/${id}`, { method: 'DELETE' }).then(res => {
+      if (res.ok) setFindings(prev => prev.filter(f => f.id !== id))
+    })
+  }
+
+  // Load project list once when rules panel opens
+  useEffect(() => {
+    if (!rulesOpen) return
+    fetch('/api/v1/projects').then(r => r.json()).then((data: ProjectOpt[]) => {
+      setRuleProjects(data)
+      if (data.length > 0 && !ruleProjectId) setRuleProjectId(data[0].id)
+    }).catch(() => {})
+  }, [rulesOpen])
+
+  // Load rules when project changes
+  useEffect(() => {
+    if (!ruleProjectId) return
+    fetch(`/api/v1/projects/${ruleProjectId}/fp-rules`).then(r => r.json()).then(setFpRules).catch(() => setFpRules([]))
+  }, [ruleProjectId])
+
+  async function addFpRule() {
+    if (!ruleProjectId || !ruleTitleContains.trim()) return
+    setRuleSaving(true)
+    try {
+      const res = await fetch(`/api/v1/projects/${ruleProjectId}/fp-rules`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: ruleTool.trim() || null, title_contains: ruleTitleContains.trim() }),
+      })
+      if (res.ok) {
+        const rule = await res.json()
+        setFpRules(prev => [...prev, rule])
+        setRuleTitleContains('')
+        setRuleTool('')
+      }
+    } finally {
+      setRuleSaving(false)
+    }
+  }
+
+  async function deleteFpRule(ruleId: string) {
+    await fetch(`/api/v1/projects/${ruleProjectId}/fp-rules/${ruleId}`, { method: 'DELETE' })
+    setFpRules(prev => prev.filter(r => r.id !== ruleId))
+  }
+
   return (
     <div className="p-8 space-y-6">
       <div className="flex items-center gap-3">
@@ -248,6 +333,17 @@ export default function AllFindings() {
             />
           </div>
 
+          <button
+            onClick={() => setShowFp(p => !p)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border transition-colors ${
+              showFp
+                ? 'bg-purple-500/15 text-purple-400 border-purple-500/30'
+                : 'text-slate-400 border-slate-700 hover:border-slate-500'
+            }`}
+          >
+            <EyeOff size={12} />
+            {showFp ? 'Hide' : 'Show'} false positives
+          </button>
           <span className="text-xs text-slate-500">{filtered.length} shown</span>
         </div>
 
@@ -389,6 +485,33 @@ export default function AllFindings() {
                             className="bg-transparent text-[10px] text-slate-400 placeholder-slate-600 outline-none w-20 border-b border-slate-700/40 focus:border-cyan-500/40"
                           />
                         </div>
+                        {/* False positive controls */}
+                        {f.status === 'false_positive' ? (
+                          <button
+                            onClick={e => { e.stopPropagation(); restoreFinding(f.id) }}
+                            className="flex items-center gap-1 text-[10px] text-purple-400 border border-purple-900/40 rounded px-2 py-0.5 hover:bg-purple-900/20 transition-colors"
+                          >
+                            <RotateCcw size={9} /> Restore
+                          </button>
+                        ) : (
+                          <button
+                            onClick={e => { e.stopPropagation(); setFpModal({ id: f.id, title: f.title }); setFpReason('') }}
+                            className="flex items-center gap-1 text-[10px] text-slate-400 border border-slate-700/40 rounded px-2 py-0.5 hover:bg-slate-700/20 transition-colors"
+                          >
+                            <EyeOff size={9} /> False positive
+                          </button>
+                        )}
+                        {f.fp_reason && (
+                          <div className="w-full mt-1 text-[10px] text-purple-400 bg-purple-900/10 border border-purple-900/20 rounded px-2 py-1">
+                            FP reason: {f.fp_reason}
+                          </div>
+                        )}
+                        <button
+                          onClick={e => { e.stopPropagation(); deleteFinding(f.id) }}
+                          className="ml-auto flex items-center gap-1 text-[10px] text-red-400 border border-red-900/40 rounded px-2 py-0.5 hover:bg-red-900/20 transition-colors"
+                        >
+                          <Trash2 size={9} /> Delete
+                        </button>
                       </div>
                     </div>
                   )}
@@ -398,6 +521,124 @@ export default function AllFindings() {
           </div>
         )}
       </div>
+
+      {/* Suppression Rules Panel */}
+      <div className="glass rounded-xl overflow-hidden">
+        <button
+          onClick={() => setRulesOpen(o => !o)}
+          className="w-full flex items-center gap-2 px-5 py-3 hover:bg-cyan-950/10 transition-colors text-left"
+        >
+          <ShieldOff size={14} className="text-purple-400" />
+          <span className="text-sm font-medium text-slate-300">Auto-suppression Rules</span>
+          <span className="text-xs text-slate-500 ml-1">— apply at parse time to auto-mark FPs</span>
+          <ChevronDown size={12} className="text-slate-600 ml-auto transition-transform" style={{ transform: rulesOpen ? 'rotate(180deg)' : 'none' }} />
+        </button>
+        {rulesOpen && (
+          <div className="px-5 pb-5 pt-2 space-y-4 border-t border-cyan-900/10">
+            {/* Project picker */}
+            <div className="flex items-center gap-3">
+              <label className="text-xs text-slate-400">Project:</label>
+              <select
+                value={ruleProjectId}
+                onChange={e => setRuleProjectId(e.target.value)}
+                className="rounded px-2 py-1 text-xs text-slate-200 border border-cyan-900/20 focus:outline-none"
+                style={{ background: '#090d14' }}
+              >
+                {ruleProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+
+            {/* Rules list */}
+            {fpRules.length === 0 ? (
+              <p className="text-xs text-slate-500">No rules yet. Rules added here will auto-suppress matching findings when scans are parsed.</p>
+            ) : (
+              <div className="space-y-1">
+                {fpRules.map(rule => (
+                  <div key={rule.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-purple-900/10 border border-purple-900/20">
+                    {rule.tool && (
+                      <span className="text-[10px] bg-slate-700/40 text-slate-300 rounded px-1.5 py-0.5 font-mono">{rule.tool}</span>
+                    )}
+                    <span className="text-xs text-slate-300 flex-1">title contains <span className="text-purple-300 font-medium">"{rule.title_contains}"</span></span>
+                    <button
+                      onClick={() => deleteFpRule(rule.id)}
+                      className="text-slate-600 hover:text-red-400 transition-colors"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add rule form */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="text"
+                placeholder="Tool (optional, e.g. nikto)"
+                value={ruleTool}
+                onChange={e => setRuleTool(e.target.value)}
+                className="rounded px-2 py-1.5 text-xs text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none w-36"
+                style={{ background: '#090d14' }}
+              />
+              <input
+                type="text"
+                placeholder="Title contains (required)"
+                value={ruleTitleContains}
+                onChange={e => setRuleTitleContains(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addFpRule() }}
+                className="rounded px-2 py-1.5 text-xs text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none w-56"
+                style={{ background: '#090d14' }}
+              />
+              <button
+                onClick={addFpRule}
+                disabled={!ruleTitleContains.trim() || !ruleProjectId || ruleSaving}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white transition-colors"
+              >
+                <Plus size={11} /> Add Rule
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* False Positive Modal */}
+      {fpModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div
+            className="w-full max-w-md rounded-xl border border-slate-700 shadow-2xl p-6 space-y-4"
+            style={{ background: '#0b1120' }}
+          >
+            <h2 className="text-base font-semibold text-white">Mark as False Positive</h2>
+            <p className="text-sm text-slate-400 truncate">{fpModal.title}</p>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Reason <span className="text-red-400">*</span></label>
+              <textarea
+                value={fpReason}
+                onChange={e => setFpReason(e.target.value)}
+                placeholder="Explain why this is a false positive…"
+                rows={3}
+                className="w-full px-3 py-2 rounded-lg text-sm text-slate-200 border border-slate-700 focus:border-purple-500/60 focus:outline-none resize-none"
+                style={{ background: '#080e1a' }}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setFpModal(null)}
+                className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => suppressFinding(fpModal.id, fpReason)}
+                disabled={!fpReason.trim() || fpSaving}
+                className="px-4 py-2 rounded-lg text-sm text-white bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {fpSaving ? 'Saving…' : 'Suppress'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Lock, Upload, Play, RefreshCw, Check, KeyRound, ShieldAlert } from 'lucide-react'
+import { Lock, Upload, Play, RefreshCw, Check, KeyRound, ShieldAlert, Download } from 'lucide-react'
 import Terminal, { TerminalHandle } from '../components/Terminal'
 import type { Project, Credential } from '../types/index'
 
@@ -13,6 +13,14 @@ interface ToolsResponse {
   hash_types: { id: string; label: string }[]
   john_formats: { id: string; label: string }[]
   wordlists: string[]
+}
+
+interface WordlistBundle {
+  id: string
+  label: string
+  description: string
+  dest: string
+  installed: boolean
 }
 
 interface CrackedPair {
@@ -48,13 +56,27 @@ export default function PasswordAuditing() {
   const [results, setResults] = useState<{ cracked: number; pairs: CrackedPair[]; vault_updated: number } | null>(null)
   const [savedPairs, setSavedPairs] = useState<Set<string>>(new Set())
 
+  // Wordlist bundles
+  const [bundles, setBundles] = useState<WordlistBundle[]>([])
+  const [installing, setInstalling] = useState<string | null>(null)
+  const [installLog, setInstallLog] = useState<Record<string, string>>({})
+
   const terminalRef = useRef<TerminalHandle>(null)
 
-  useEffect(() => {
+  function loadBundles() {
+    fetch('/api/v1/cracking/wordlists/available').then(r => r.json()).then(setBundles)
+  }
+
+  function loadTools() {
     fetch('/api/v1/cracking/tools').then(r => r.json()).then(data => {
       setTools(data)
       if (data.wordlists.length > 0) setWordlist(data.wordlists[0])
     })
+  }
+
+  useEffect(() => {
+    loadTools()
+    loadBundles()
     fetch('/api/v1/projects').then(r => r.json()).then(setProjects)
   }, [])
 
@@ -65,6 +87,28 @@ export default function PasswordAuditing() {
         .then((data: Credential[]) => setVaultCreds(data.filter(c => c.cred_type === 'hash')))
     }
   }, [selectedProject])
+
+  function installBundle(bundleId: string) {
+    if (installing) return
+    setInstalling(bundleId)
+    setInstallLog(prev => ({ ...prev, [bundleId]: '' }))
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/wordlists/install/${bundleId}`)
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data)
+      if (msg.type === 'stdout' || msg.type === 'stderr') {
+        setInstallLog(prev => ({ ...prev, [bundleId]: (prev[bundleId] || '') + msg.data }))
+      } else if (msg.type === 'done') {
+        setInstalling(null)
+        loadBundles()
+        loadTools()
+      } else if (msg.type === 'error') {
+        setInstallLog(prev => ({ ...prev, [bundleId]: (prev[bundleId] || '') + `\n[ERROR] ${msg.data}` }))
+        setInstalling(null)
+      }
+    }
+    ws.onerror = () => setInstalling(null)
+  }
 
   function loadFromVault() {
     const selected = vaultCreds.filter(c => selectedCredIds.includes(c.id))
@@ -263,6 +307,40 @@ export default function PasswordAuditing() {
           </div>
         )}
 
+        {/* Get wordlists */}
+        <div className="glass rounded-xl p-4">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+            <Download size={10} /> Get Wordlists
+          </h3>
+          <div className="space-y-2">
+            {bundles.map(b => (
+              <div key={b.id} className="rounded-lg border border-cyan-900/20 p-2.5">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-xs font-mono text-slate-200">{b.label}</span>
+                  {b.installed ? (
+                    <span className="flex items-center gap-1 text-[10px] text-green-400"><Check size={10} /> Installed</span>
+                  ) : (
+                    <button
+                      onClick={() => installBundle(b.id)}
+                      disabled={installing !== null}
+                      className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-cyan-700/40 text-cyan-400 hover:bg-cyan-950/40 disabled:opacity-40 transition-all"
+                    >
+                      {installing === b.id ? <RefreshCw size={9} className="animate-spin" /> : <Download size={9} />}
+                      {installing === b.id ? 'Installing…' : 'Install'}
+                    </button>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-500">{b.description}</p>
+                {installLog[b.id] && (
+                  <pre className="mt-1.5 text-[9px] font-mono text-slate-400 bg-[#05080d] rounded p-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap">
+                    {installLog[b.id]}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Load from vault */}
         <div className="glass rounded-xl p-4">
           <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1">
@@ -274,6 +352,21 @@ export default function PasswordAuditing() {
           </select>
           {vaultCreds.length > 0 ? (
             <>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedCredIds.length === vaultCreds.length}
+                    ref={el => { if (el) el.indeterminate = selectedCredIds.length > 0 && selectedCredIds.length < vaultCreds.length }}
+                    onChange={e => setSelectedCredIds(e.target.checked ? vaultCreds.map(c => c.id) : [])}
+                    className="accent-cyan-500"
+                  />
+                  <span className="text-[10px] text-slate-400">All ({vaultCreds.length})</span>
+                </label>
+                {selectedCredIds.length > 0 && (
+                  <span className="text-[10px] text-cyan-500">{selectedCredIds.length} selected</span>
+                )}
+              </div>
               <div className="space-y-1 max-h-32 overflow-y-auto mb-2">
                 {vaultCreds.map(c => (
                   <label key={c.id} className="flex items-center gap-2 cursor-pointer group">

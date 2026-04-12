@@ -41,3 +41,13 @@ def delete_note(note_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Note not found")
     db.delete(note)
     db.commit()
+
+
+@router.delete("/findings/{finding_id}", status_code=204)
+def delete_finding(finding_id: str, db: Session = Depends(get_db)):
+    finding = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not finding:
+        raise HTTPException(404, "Finding not found")
+    db.query(FindingNote).filter(FindingNote.finding_id == finding_id).delete()
+    db.delete(finding)
+    db.commit()

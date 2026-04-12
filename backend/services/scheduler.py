@@ -167,4 +167,175 @@ def initialize_scheduler() -> None:
     finally:
         db.close()
 
+    # Daily CVE watchlist check — runs at 03:00 UTC
+    scheduler.add_job(
+        _run_cve_check,
+        CronTrigger.from_crontab("0 3 * * *", timezone="UTC"),
+        id="cve_daily_check",
+        replace_existing=True,
+    )
+
+    # C2 session auto-sync — every 30 seconds
+    from apscheduler.triggers.interval import IntervalTrigger
+    scheduler.add_job(
+        _run_c2_session_sync,
+        IntervalTrigger(seconds=30),
+        id="c2_session_sync",
+        replace_existing=True,
+    )
+
     scheduler.start()
+
+
+async def _run_cve_check() -> None:
+    """APScheduler job: check all watched services for new CVEs."""
+    from services.cve_watcher import check_all_watched_services
+    try:
+        await check_all_watched_services()
+    except Exception:
+        pass
+
+
+async def _run_c2_session_sync() -> None:
+    """
+    APScheduler job: pull live sessions from MSF and Sliver, upsert Seraph
+    C2Session records for all projects that have active sessions.
+
+    Runs every 30 s.  Only active sessions are synced; dead/inactive sessions
+    already in the DB are transitioned to 'lost' if they no longer appear in
+    the live list.
+    """
+    from database import SessionLocal, C2Session, Target, AppSetting
+    import services.msf_client as msf
+    import services.sliver_client as sliver
+    import uuid as _uuid
+    import json as _json
+    from routers.c2 import _DEFAULT_CHECKLIST
+
+    db = SessionLocal()
+    try:
+        # ── MSF sync ─────────────────────────────────────────────────
+        try:
+            live_msf = msf.list_sessions()  # returns [] if not connected
+        except Exception:
+            live_msf = []
+
+        live_msf_ids = {str(s["msf_session_id"]) for s in live_msf}
+
+        # Collect all project IDs that already have C2 sessions
+        project_ids = [
+            row[0] for row in db.query(C2Session.project_id).distinct().all()
+        ]
+        if not project_ids and live_msf:
+            # Fallback: use first project found
+            from database import Project
+            p = db.query(Project).first()
+            if p:
+                project_ids = [p.id]
+
+        for project_id in project_ids:
+            # Mark sessions that disappeared as 'lost'
+            db.query(C2Session).filter(
+                C2Session.project_id == project_id,
+                C2Session.status == "active",
+                C2Session.msf_session_id.notin_(live_msf_ids),
+                C2Session.session_type.notlike("sliver_%"),  # don't touch sliver sessions here
+            ).update({"status": "lost"}, synchronize_session=False)
+
+        for ls in live_msf:
+            sid = str(ls["msf_session_id"])
+            existing = db.query(C2Session).filter(C2Session.msf_session_id == sid).first()
+            if existing:
+                # Refresh last_seen and status
+                existing.status = "active"
+                existing.last_seen = datetime.utcnow()
+            else:
+                # Create in first project if we have one
+                project_id = project_ids[0] if project_ids else None
+                if not project_id:
+                    continue
+                remote_host = ls.get("remote_host", "")
+                target = None
+                if remote_host:
+                    target = db.query(Target).filter(
+                        Target.project_id == project_id,
+                        Target.hostname_or_ip == remote_host,
+                    ).first()
+                session = C2Session(
+                    id=str(_uuid.uuid4()),
+                    project_id=project_id,
+                    target_id=target.id if target else None,
+                    msf_session_id=sid,
+                    session_type=ls.get("session_type", "shell"),
+                    platform=ls.get("platform", ""),
+                    arch=ls.get("arch", ""),
+                    remote_host=remote_host,
+                    remote_port=ls.get("remote_port", ""),
+                    tunnel_peer=ls.get("tunnel_peer", ""),
+                    via_exploit=ls.get("via_exploit", ""),
+                    via_payload=ls.get("via_payload", ""),
+                    status="active",
+                    established_at=datetime.utcnow(),
+                    last_seen=datetime.utcnow(),
+                    checklist_json=_json.dumps(_DEFAULT_CHECKLIST),
+                )
+                db.add(session)
+
+        # ── Sliver sync ───────────────────────────────────────────────
+        try:
+            live_sliver = sliver.list_sessions() if sliver.is_available() else []
+        except Exception:
+            live_sliver = []
+
+        live_sliver_ids = {str(s["sliver_id"]) for s in live_sliver}
+
+        for project_id in project_ids:
+            db.query(C2Session).filter(
+                C2Session.project_id == project_id,
+                C2Session.status == "active",
+                C2Session.session_type.like("sliver_%"),
+                C2Session.msf_session_id.notin_(live_sliver_ids),
+            ).update({"status": "lost"}, synchronize_session=False)
+
+        for ls in live_sliver:
+            sid = str(ls["sliver_id"])
+            existing = db.query(C2Session).filter(C2Session.msf_session_id == sid).first()
+            if existing:
+                existing.status = "active"
+                existing.last_seen = datetime.utcnow()
+            else:
+                project_id = project_ids[0] if project_ids else None
+                if not project_id:
+                    continue
+                remote_host = ls.get("remote_host", "")
+                target = None
+                if remote_host:
+                    target = db.query(Target).filter(
+                        Target.project_id == project_id,
+                        Target.hostname_or_ip == remote_host,
+                    ).first()
+                session = C2Session(
+                    id=str(_uuid.uuid4()),
+                    project_id=project_id,
+                    target_id=target.id if target else None,
+                    msf_session_id=sid,
+                    session_type=ls["session_type"],
+                    platform=ls.get("platform", ""),
+                    arch=ls.get("arch", ""),
+                    remote_host=remote_host,
+                    remote_port=ls.get("remote_port", ""),
+                    tunnel_peer=ls.get("tunnel_peer", ""),
+                    via_exploit="sliver-implant",
+                    via_payload=ls.get("via_payload", ""),
+                    status="active",
+                    established_at=datetime.utcnow(),
+                    last_seen=datetime.utcnow(),
+                    checklist_json=_json.dumps(_DEFAULT_CHECKLIST),
+                )
+                db.add(session)
+
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()

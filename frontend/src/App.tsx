@@ -22,6 +22,9 @@ import AllScans from '@/pages/AllScans'
 import AllFindings from '@/pages/AllFindings'
 import Listeners from '@/pages/Listeners'
 import Agents from '@/pages/Agents'
+import AttackPaths from '@/pages/AttackPaths'
+import CveWatch from '@/pages/CveWatch'
+import Timeline from '@/pages/Timeline'
 import { Loader } from 'lucide-react'
 
 function ProtectedRoutes() {
@@ -56,6 +59,9 @@ function ProtectedRoutes() {
         <Route path="findings" element={<AllFindings />} />
         <Route path="listeners" element={<Listeners />} />
         <Route path="agents" element={<Agents />} />
+        <Route path="attack-paths" element={<AttackPaths />} />
+        <Route path="cve-watch" element={<CveWatch />} />
+        <Route path="timeline" element={<Timeline />} />
         <Route path="c2" element={<C2Console />} />
         <Route path="vault" element={<CredentialVault />} />
         <Route path="reports" element={<Reports />} />

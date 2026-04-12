@@ -288,6 +288,46 @@ Every hour   →  0 * * * *`}</Block>
           </>
         ),
       },
+      {
+        id: 'pentest-ad',
+        title: 'Active Directory Engagements',
+        content: (
+          <>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Select the <strong className="text-white">Active Directory</strong> engagement type for domain-focused assessments. The workflow walks through five phases using dedicated AD tools.
+            </p>
+            <Bullets items={[
+              <><Badge color="amber">Phase 1 — Recon</Badge> Kerbrute user enumeration against the domain controller</>,
+              <><Badge color="amber">Phase 2 — Enumeration</Badge> NetExec (nxc) SMB/LDAP/WinRM enumeration with optional credential spray</>,
+              <><Badge color="amber">Phase 3 — Kerberoasting</Badge> impacket-GetUserSPNs — request service tickets for offline hash cracking</>,
+              <><Badge color="amber">Phase 4 — AS-REP Roasting</Badge> impacket-GetNPUsers — find accounts with pre-auth disabled</>,
+              <><Badge color="red">Phase 5 — Post-Compromise</Badge> impacket-secretsdump / psexec / wmiexec for credential extraction and lateral movement</>,
+            ]} />
+            <p className="text-sm text-slate-300 leading-relaxed mt-3">
+              Template variables auto-fill from your target: <Cmd>domain</Cmd>, <Cmd>dc_ip</Cmd>, <Cmd>username</Cmd>, <Cmd>password</Cmd>, <Cmd>hash</Cmd>. Edit them inline before running.
+            </p>
+            <Tip>Cracked Kerberos hashes (TGS-REP / AS-REP) can be sent directly to Password Auditing — select hashcat mode 13100 for TGS-REP or 18200 for AS-REP.</Tip>
+          </>
+        ),
+      },
+      {
+        id: 'pentest-tools',
+        title: 'New Tools (RustScan, Nuclei, Feroxbuster)',
+        content: (
+          <>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Several high-performance tools have been added to the pentest tool chains and auto-probe:
+            </p>
+            <Bullets items={[
+              <><Cmd>rustscan</Cmd> — Finds all open ports in seconds, then hands off to nmap for service detection. Used in scanning phases as a fast alternative to full nmap sweeps.</>,
+              <><Cmd>nuclei</Cmd> — Template-based vulnerability scanner. Runs thousands of community templates against web and network targets. Findings are auto-parsed into the database.</>,
+              <><Cmd>feroxbuster</Cmd> — Recursive web directory brute-forcer, faster than gobuster for deep directory trees. Used in web enumeration phases.</>,
+              <><Cmd>responder</Cmd> — LLMNR/NBT-NS/mDNS poisoner for internal network engagements. Captures NTLMv2 hashes from broadcast name resolution. Run with: <Cmd>sudo responder -I eth0 -rdwv</Cmd></>,
+            ]} />
+            <Note>Install these from Settings → Tools. Each has an Install button that runs the correct install command for your system.</Note>
+          </>
+        ),
+      },
     ],
   },
   {
@@ -402,6 +442,62 @@ Every hour   →  0 * * * *`}</Block>
               'Sessions tab: all active Meterpreter/shell sessions — click to open an interactive terminal',
               'Loot tab: credentials and files captured from sessions',
             ]} />
+          </>
+        ),
+      },
+      {
+        id: 'c2-postex',
+        title: 'Post-Exploitation Tab',
+        content: (
+          <>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Every active session has a <strong className="text-white">Post-Ex</strong> tab with automated and guided post-exploitation capabilities. Select a session and click the Post-Ex tab to access them.
+            </p>
+            <Bullets items={[
+              <><strong className="text-white">Auto-Probe</strong> — runs a platform-appropriate recon set (sysinfo, getuid, ipconfig/ifconfig, ps) and stores results as loot</>,
+              <><strong className="text-white">Harvest Creds</strong> — runs hashdump + kiwi on Windows Meterpreter, or reads /etc/shadow on Linux. Parsed credentials are saved to the Credential Vault automatically</>,
+              <><strong className="text-white">Screenshot</strong> — captures the current desktop of the compromised machine and displays it inline</>,
+              <><strong className="text-white">Upgrade Shell</strong> — upgrades a plain shell session to a Meterpreter session with streaming output</>,
+            ]} />
+            <Tip>Auto-Probe also fires automatically when a new session is created (if enabled in Settings). By the time you open the session, initial recon is already waiting in the Loot tab.</Tip>
+          </>
+        ),
+      },
+      {
+        id: 'c2-checklist',
+        title: 'Post-Ex Checklist',
+        content: (
+          <>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Each session has a persistent 12-item post-exploitation checklist organized into six categories. Check items off as you complete them — state is saved per session.
+            </p>
+            <Bullets items={[
+              <><Badge color="cyan">Situational Awareness</Badge> — sysinfo, current user, process list, network config</>,
+              <><Badge color="amber">Privilege Escalation</Badge> — check admin rights, attempt local privesc</>,
+              <><Badge color="red">Credential Access</Badge> — hashdump, Mimikatz/kiwi, /etc/shadow</>,
+              <><Badge color="purple">Persistence</Badge> — establish persistence mechanism, document method</>,
+              <><Badge color="green">Lateral Movement</Badge> — enumerate network neighbors, identify pivot targets</>,
+              <><Badge>Evidence</Badge> — screenshot desktop, export loot to project</>,
+            ]} />
+            <Note>Use "Reset Checklist" to clear all checkboxes when starting a new engagement phase on the same session.</Note>
+          </>
+        ),
+      },
+      {
+        id: 'c2-pivoting',
+        title: 'Pivot Routes',
+        content: (
+          <>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              The Pivot Routes table lets you manage MSF route entries for tunneling traffic through a compromised host to reach otherwise inaccessible network segments.
+            </p>
+            <Steps items={[
+              'In the Post-Ex tab, scroll to the Pivot Routes section',
+              'Enter a subnet (e.g. 10.10.20.0) and netmask (e.g. 255.255.255.0)',
+              'Click "Add Route" — Metasploit\'s route add command runs automatically',
+              'The route appears in the table; click the trash icon to remove it',
+            ]} />
+            <Tip>After adding a route, tools like nmap and impacket can reach the internal subnet through the Meterpreter session without additional proxy configuration.</Tip>
           </>
         ),
       },
@@ -760,9 +856,16 @@ Every hour   →  0 * * * *`}</Block>
         content: (
           <>
             <p className="text-sm text-slate-300 leading-relaxed">
-              The Tools tab detects which security tools are installed and shows their paths and versions. Missing tools display their install command.
+              The Tools tab detects which security tools are installed on startup and shows their paths and versions. Missing tools show an install command and an <strong className="text-white">Install</strong> button.
             </p>
-            <Tip>Use the "Quick Install" banner to copy a single <Cmd>apt install</Cmd> command that installs all missing apt-based tools at once.</Tip>
+            <Bullets items={[
+              'Green checkmark — tool detected, path and version shown',
+              'Red X — tool not found; install command and Install button shown',
+              <>Click <strong className="text-white">Install</strong> on any missing tool to run the install command in a live terminal — no copy/paste needed</>,
+              'Tools install via the most appropriate method: apt, pip3, go install, snap, or direct binary download',
+              <>Click <strong className="text-white">Refresh</strong> after installing to re-detect all tools</>,
+            ]} />
+            <Tip>Use the "Quick Install" banner to copy a single command that installs all missing apt/pip-compatible tools at once. For tools requiring cargo, go, or snap, use the per-tool Install button.</Tip>
           </>
         ),
       },
@@ -820,6 +923,26 @@ LMStudio default: http://localhost:1234`}</Block>
               'Save captured credentials to the Credential Vault; run Password Auditing on captured hashes',
               'Generate an AI Narrative and export a PDF report',
             ]} />
+          </>
+        ),
+      },
+      {
+        id: 'workflow-ad',
+        title: 'Active Directory engagement workflow',
+        content: (
+          <>
+            <Steps items={[
+              'Install required tools: kerbrute, nxc (netexec), impacket (via Settings → Tools)',
+              'Create a project and add the domain controller as target (type: windows_host)',
+              'Open Pentest Workbench → Active Directory engagement type',
+              'Phase 1: Run Kerbrute to enumerate valid domain usernames',
+              'Phase 2: Run NetExec to enumerate SMB shares, spray credentials if you have any',
+              'Phase 3: Run impacket-GetUserSPNs to request Kerberos service tickets (Kerberoasting)',
+              'Phase 4: Run impacket-GetNPUsers to find AS-REP roastable accounts',
+              'Take captured hashes to Password Auditing — use hashcat mode 13100 (TGS) or 18200 (AS-REP)',
+              'Phase 5: With cracked credentials, run impacket-secretsdump or psexec for full domain compromise',
+            ]} />
+            <Tip>Captured hashes auto-save to the Credential Vault with source "c2_loot" or can be manually added. From the vault, use "Load from Vault" in Password Auditing to crack them in one step.</Tip>
           </>
         ),
       },

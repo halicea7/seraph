@@ -1,6 +1,7 @@
 import { useState, useEffect, FormEvent } from 'react'
-import { Shield, Eye, EyeOff, Loader, UserPlus, LogIn } from 'lucide-react'
+import { Shield, Eye, EyeOff, Loader, UserPlus, LogIn, Fingerprint } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import LoginBackground from '../components/LoginBackground'
 
 type Mode = 'checking' | 'setup' | 'login'
 
@@ -13,7 +14,93 @@ export default function Login() {
   const [lastName, setLastName] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [passkeyLoading, setPasskeyLoading] = useState(false)
   const [error, setError] = useState('')
+
+  async function handlePasskeyLogin() {
+    if (!window.isSecureContext) {
+      setError('Passkeys require a secure context. Access Seraph via http://localhost:8000 or enable HTTPS.')
+      return
+    }
+    if (!window.PublicKeyCredential) {
+      setError('Passkeys are not available in this browser.')
+      return
+    }
+    setError('')
+    setPasskeyLoading(true)
+    try {
+      // 1. Get authentication options from server
+      const beginRes = await fetch('/api/v1/passkeys/authenticate/begin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim() || undefined }),
+      })
+      if (!beginRes.ok) throw new Error('Failed to start passkey flow')
+      const opts = await beginRes.json()
+      const { _challenge_key: challengeKey, ...publicKeyOpts } = opts
+
+      // 2. Decode base64url fields expected by the browser API
+      const credOpts: PublicKeyCredentialRequestOptions = {
+        ...publicKeyOpts,
+        challenge: _b64urlToBuffer(publicKeyOpts.challenge),
+        allowCredentials: (publicKeyOpts.allowCredentials || []).map((c: any) => ({
+          ...c,
+          id: _b64urlToBuffer(c.id),
+        })),
+      }
+
+      // 3. Prompt the user's authenticator
+      const assertion = await navigator.credentials.get({ publicKey: credOpts }) as PublicKeyCredential | null
+      if (!assertion) throw new Error('No passkey selected')
+      const ar = assertion.response as AuthenticatorAssertionResponse
+
+      // 4. Send response to server
+      const completeRes = await fetch('/api/v1/passkeys/authenticate/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challenge_key: challengeKey,
+          credential: {
+            id: assertion.id,
+            rawId: _bufferToB64url(assertion.rawId),
+            response: {
+              clientDataJSON: _bufferToB64url(ar.clientDataJSON),
+              authenticatorData: _bufferToB64url(ar.authenticatorData),
+              signature: _bufferToB64url(ar.signature),
+              userHandle: ar.userHandle ? _bufferToB64url(ar.userHandle) : null,
+            },
+            type: assertion.type,
+          },
+        }),
+      })
+      const data = await completeRes.json()
+      if (!completeRes.ok) throw new Error(data.detail || 'Passkey authentication failed')
+      login(data.access_token, data.user)
+    } catch (err: any) {
+      if (err.name === 'NotAllowedError') {
+        setError('Passkey prompt was cancelled.')
+      } else {
+        setError(err.message || 'Passkey authentication failed')
+      }
+    } finally {
+      setPasskeyLoading(false)
+    }
+  }
+
+  function _b64urlToBuffer(b64url: string): ArrayBuffer {
+    const padded = b64url.replace(/-/g, '+').replace(/_/g, '/').padEnd(
+      b64url.length + (4 - (b64url.length % 4)) % 4, '=',
+    )
+    const bin = atob(padded)
+    const buf = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i)
+    return buf.buffer
+  }
+
+  function _bufferToB64url(buf: ArrayBuffer): string {
+    return btoa(String.fromCharCode(...new Uint8Array(buf)))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+  }
 
   useEffect(() => {
     fetch('/api/v1/auth/setup-required')
@@ -63,18 +150,20 @@ export default function Login() {
 
   if (mode === 'checking') {
     return (
-      <div className="flex items-center justify-center h-screen" style={{ background: '#05080d' }}>
-        <Loader size={24} className="animate-spin text-cyan-500" />
+      <div className="relative flex items-center justify-center h-screen overflow-hidden" style={{ background: '#0a0a0f' }}>
+        <LoginBackground />
+        <Loader size={24} className="animate-spin text-cyan-500" style={{ position: 'relative', zIndex: 10 }} />
       </div>
     )
   }
 
   return (
     <div
-      className="flex items-center justify-center h-screen dot-grid"
-      style={{ background: '#05080d', color: '#e2e8f0' }}
+      className="relative flex items-center justify-center h-screen overflow-hidden"
+      style={{ background: '#0a0a0f', color: '#e2e8f0' }}
     >
-      <div className="w-full max-w-sm space-y-8 px-4">
+      <LoginBackground />
+      <div className="relative z-10 w-full max-w-sm space-y-8 px-4">
         {/* Brand */}
         <div className="text-center space-y-3">
           <div
@@ -192,6 +281,33 @@ export default function Login() {
                 <><LogIn size={14} /> Sign In</>
               )}
             </button>
+
+            {mode === 'login' && (
+              <>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-px" style={{ background: 'rgba(148,163,184,0.1)' }} />
+                  <span className="text-xs text-slate-600">or</span>
+                  <div className="flex-1 h-px" style={{ background: 'rgba(148,163,184,0.1)' }} />
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePasskeyLogin}
+                  disabled={passkeyLoading}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-all"
+                  style={{
+                    background: 'rgba(6,182,212,0.06)',
+                    border: '1px solid rgba(6,182,212,0.2)',
+                    color: '#67e8f9',
+                  }}
+                >
+                  {passkeyLoading ? (
+                    <Loader size={14} className="animate-spin" />
+                  ) : (
+                    <><Fingerprint size={14} /> Sign in with Passkey</>
+                  )}
+                </button>
+              </>
+            )}
           </form>
         </div>
 

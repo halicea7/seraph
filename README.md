@@ -18,13 +18,16 @@ A self-hosted security assessment platform combining compliance auditing, penetr
 | **Pentest** | Phased workflows (recon → scanning → exploitation), tool-chained command templates, live terminal |
 | **Playbooks** | Multi-step automated workflows with step-through, auto-run, and conditional logic |
 | **Recon** | OSINT module (Whois, Subfinder, theHarvester, Searchsploit), network visualization |
-| **C2** | Metasploit RPC integration — manage sessions, execute commands, harvest loot |
+| **C2** | Metasploit RPC integration — sessions, payloads, listeners, loot, post-exploitation |
+| **Post-Ex** | Per-session checklist (12 items), auto-probe, credential harvesting, pivot route manager, screenshot, shell upgrade |
+| **Active Directory** | Kerbrute enumeration, NetExec SMB/LDAP/WinRM, Kerberoasting, AS-REP roasting, secretsdump, psexec/wmiexec |
 | **Credentials** | Vault for passwords, hashes, keys, tokens with source tracking and password auditing (Hashcat / John) |
 | **Defense** | Vulnerability tracker with status workflow, AI remediation suggestions, log analysis and IOC extraction |
 | **Reporting** | HTML, Markdown, and PDF audit/pentest reports with executive summaries and finding tables |
 | **AI Narrative** | Local LLM integration (Ollama) for AI-generated executive and technical narratives |
 | **Multi-user** | Admin / analyst roles, JWT authentication, per-user profiles, user management |
-| **Auto-Probe** | Automatic nmap + nikto scan triggered when a new target is added |
+| **Auto-Probe** | Automatic nmap + nikto + searchsploit scan triggered when a new target is added |
+| **Passkeys** | WebAuthn / FIDO2 passkey support per user (iCloud Keychain, Touch ID, Face ID, YubiKey) |
 | **Demo Mode** | Seed realistic demo data across three projects to explore the platform (admin only) |
 
 ---
@@ -38,7 +41,7 @@ A self-hosted security assessment platform combining compliance auditing, penetr
 | Database | SQLite (zero-config, file-based) |
 | Real-time | WebSockets (terminal I/O, scan streaming) |
 | Scheduling | APScheduler (recurring scan profiles) |
-| Auth | JWT + bcrypt |
+| Auth | JWT + bcrypt + WebAuthn (passkeys) |
 | Visualization | Cytoscape.js (network map), XTerm.js (terminal) |
 
 ---
@@ -63,6 +66,7 @@ Installed via `pip install -r requirements.txt`. Key dependencies:
 | `jinja2` | Report and script templating |
 | `apscheduler` | Scheduled scan profiles |
 | `pymetasploit3` | C2 / Metasploit RPC (optional) |
+| `webauthn` | Passkey / FIDO2 registration and authentication |
 | `weasyprint` | PDF report export (optional, not installed by default) |
 
 ### Optional security tools
@@ -70,10 +74,11 @@ Installed via `pip install -r requirements.txt`. Key dependencies:
 Detected automatically at startup via `which`. Missing tools are flagged in **Settings → Tools** with an install command shown.
 
 ```
-nmap       nikto      testssl.sh   lynis      openscap   masscan
-gobuster   sqlmap     hydra        whois      dig        theHarvester
-subfinder  enum4linux ffuf         searchsploit hashcat   john
-metasploit
+nmap          nikto         testssl.sh    lynis         openscap      masscan
+gobuster      sqlmap        hydra         whois         dig           theHarvester
+subfinder     enum4linux    ffuf          searchsploit  hashcat       john
+rustscan      nuclei        feroxbuster   kerbrute      nxc           responder
+impacket      metasploit
 ```
 
 ---
@@ -171,6 +176,60 @@ To explore the platform without running real scans, go to **Settings → Appeara
 
 ---
 
+## HTTPS (required for passkeys)
+
+Passkeys (WebAuthn) require a secure context — either HTTPS or `http://localhost`. If you access Seraph over a local IP address or need passkeys in the browser, enable HTTPS with the included setup script.
+
+### Local development (no domain needed)
+
+Uses [mkcert](https://github.com/FiloSottile/mkcert) to generate a **locally-trusted certificate** — Brave, Chrome, and Firefox will show a green padlock with no warnings.
+
+```bash
+# One-time setup
+bash setup-https.sh
+```
+
+This will:
+1. Install `mkcert` and `libnss3-tools` (the latter is required for Brave/Chrome trust on Linux)
+2. Run `mkcert -install` to add a local CA to the system and browser trust stores
+3. Generate `seraph/certs/localhost.pem` and `seraph/certs/localhost-key.pem`
+
+Then restart `dev.sh` — it detects the certs automatically and starts both servers over HTTPS:
+
+```
+https://localhost:22123   ← dev server
+https://localhost:8000    ← production build
+```
+
+> **After running `mkcert -install`, fully quit and relaunch Brave/Chrome** for the CA trust to take effect.
+
+> **Accessing from another machine on the LAN?** Chromium-based browsers reject `.local` mDNS hostnames as WebAuthn RP IDs. The simplest workaround is an SSH port-forward from the client machine so the browser sees `localhost`:
+> ```bash
+> ssh -L 8000:localhost:8000 user@seraph-host -N
+> ```
+> Then open `https://localhost:8000` — no `.env` changes needed, the default `rp_id = localhost` is correct.
+
+### Production / real domain
+
+Set these variables in your `.env`:
+
+```env
+SERAPH_RP_ID=yourdomain.com
+SERAPH_RP_ORIGINS=https://yourdomain.com
+```
+
+Then run uvicorn behind a reverse proxy (nginx, Caddy) that terminates TLS with a valid certificate.
+
+---
+
+## Passkeys
+
+Once HTTPS is running, each user can register passkeys (iCloud Keychain, Touch ID, Face ID, YubiKey, Windows Hello, etc.) in **Settings → Users → Passkeys**. Multiple passkeys per account are supported.
+
+On the login page, the **Sign in with Passkey** button skips the password form entirely.
+
+---
+
 ## PDF Report Export (optional)
 
 PDF export uses [WeasyPrint](https://doc.courtbouillon.org/weasyprint/). It is not installed by default due to system library requirements.
@@ -217,13 +276,39 @@ msfrpcd -P "$MSF_RPC_PASSWORD" -S -a 127.0.0.1 -p 55553 -f
 
 `dev.sh` handles this automatically if Metasploit is installed.
 
+### Post-Exploitation
+
+Each active session has a **Post-Ex** tab with:
+
+- **Auto-Probe** — automatically runs platform-appropriate initial recon (sysinfo, getuid, network config, process list) when a session opens. Results stored as loot.
+- **Post-Ex Checklist** — 12-item guided checklist across 6 categories (Situational Awareness, Privilege Escalation, Credential Access, Persistence, Lateral Movement, Evidence)
+- **Harvest Credentials** — runs hashdump + Mimikatz kiwi (Windows) or reads /etc/shadow (Linux); parsed credentials auto-save to the Credential Vault
+- **Pivot Routes** — add/remove MSF route entries to tunnel traffic through a session to internal subnets
+- **Screenshot** — capture the compromised desktop inline
+- **Upgrade Shell** — upgrade a plain shell session to Meterpreter with live streaming output
+
+---
+
+## Active Directory Assessments
+
+Select the **Active Directory** engagement type in the Pentest Workbench for domain assessments. Required tools (install via Settings → Tools):
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| `kerbrute` | Domain user enumeration and password spraying | `go install github.com/ropnop/kerbrute@latest` |
+| `nxc` (NetExec) | SMB/LDAP/WinRM enumeration and credential validation | `pip3 install netexec` |
+| `impacket` | Kerberoasting, AS-REP roasting, secretsdump, psexec, wmiexec | `pip3 install impacket` |
+| `responder` | LLMNR/NBT-NS poisoning for NTLMv2 hash capture | git clone from GitHub |
+
+Captured Kerberos hashes (TGS-REP / AS-REP) are saved to the Credential Vault and can be loaded directly into Password Auditing for hashcat cracking (modes 13100 / 18200).
+
 ---
 
 ## User Management
 
 - The first account created is always **admin**.
 - Admins can create additional users at **Settings → Users → Create User** (requires First Name, Last Name, username, password, and role).
-- Any user can edit their own name at **Settings → Users → My Profile** and change their password.
+- Any user can edit their own name at **Settings → Users → My Profile**, change their password, and register passkeys.
 - Roles: `admin` (full access + user management) and `analyst` (standard access).
 
 ---
@@ -254,6 +339,7 @@ Interactive docs available at `http://localhost:8000/docs` when the backend is r
 | `/api/v1/cracking` | Password auditing jobs |
 | `/api/v1/osint` | OSINT tools |
 | `/api/v1/auth` | Authentication and user management |
+| `/api/v1/passkeys` | WebAuthn passkey registration and authentication |
 | `/api/v1/stats` | Platform-wide statistics |
 | `/api/v1/diff` | Scan diff comparison |
 | `/api/v1/ai` | AI narrative generation |

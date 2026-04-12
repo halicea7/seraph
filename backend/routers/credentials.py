@@ -1,8 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from database import Credential, get_db
+from services.validators import (
+    VALID_CRED_SOURCES,
+    VALID_CRED_TYPES,
+    validate_enum,
+    validate_free_text,
+    validate_hostname_or_ip,
+)
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
@@ -15,6 +22,26 @@ class CredentialCreate(BaseModel):
     source: str = "manual"        # manual, c2_loot, osint, brute_force
     target_host: str = ""
     notes: str = ""
+
+    @field_validator("cred_type")
+    @classmethod
+    def _check_cred_type(cls, v: str) -> str:
+        return validate_enum(v, VALID_CRED_TYPES, "cred_type")
+
+    @field_validator("source")
+    @classmethod
+    def _check_source(cls, v: str) -> str:
+        return validate_enum(v, VALID_CRED_SOURCES, "source")
+
+    @field_validator("target_host")
+    @classmethod
+    def _check_target_host(cls, v: str) -> str:
+        return validate_hostname_or_ip(v, allow_empty=True)
+
+    @field_validator("username", "notes")
+    @classmethod
+    def _check_free_text(cls, v: str) -> str:
+        return validate_free_text(v, max_length=1024)
 
 
 @router.get("")

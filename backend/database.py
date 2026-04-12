@@ -16,10 +16,15 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
 from config import settings
+from services.vault import EncryptedText
+
+_connect_args = {}
+if settings.database_url.startswith("sqlite"):
+    _connect_args["check_same_thread"] = False
 
 engine = create_engine(
     settings.database_url,
-    connect_args={"check_same_thread": False},
+    connect_args=_connect_args,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -36,6 +41,7 @@ class Project(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    scope_json = Column(Text, nullable=True)   # {"include": ["10.0.0.0/8"], "exclude": []}
 
     targets = relationship(
         "Target", back_populates="project", cascade="all, delete-orphan"
@@ -54,7 +60,10 @@ class Target(Base):
             "windows_host",
             "web_app",
             "cloud_aws",
+            "cloud_azure",
+            "cloud_gcp",
             "network",
+            "api_endpoint",
             name="target_type_enum",
         ),
         nullable=False,
@@ -122,8 +131,10 @@ class Finding(Base):
 
     cve_id = Column(String, nullable=True)
     cvss_score = Column(String, nullable=True)
-    status = Column(String, default="open")   # open | in-review | remediated | accepted
+    status = Column(String, default="open")   # open | in-review | remediated | accepted | false_positive
+    fp_reason = Column(Text, nullable=True)   # reason for false positive suppression
     tags = Column(String, default="")         # comma-separated
+    exploit_chain_json = Column(Text, nullable=True)   # JSON: [{session_id, technique, timestamp, notes}]
 
     scan = relationship("Scan", back_populates="findings")
 
@@ -162,6 +173,10 @@ class C2Session(Base):
     notes = Column(String, default="")
     established_at = Column(DateTime, default=datetime.utcnow)
     last_seen = Column(DateTime, default=datetime.utcnow)
+    checklist_json = Column(Text, nullable=True)      # JSON array of checklist items
+    pivot_routes_json = Column(Text, nullable=True)   # JSON array of active pivot routes
+    sysinfo_json = Column(Text, nullable=True)         # Structured: {hostname, os, arch, username, domain, is_admin, local_time}
+    finding_id = Column(String, ForeignKey("findings.id", ondelete="SET NULL"), nullable=True)  # Finding that was exploited to get this session
     # relationships
     loot = relationship("LootEntry", back_populates="session", cascade="all, delete-orphan")
     tasks = relationship("C2Task", back_populates="session", cascade="all, delete-orphan")
@@ -209,11 +224,11 @@ class Credential(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     username = Column(String, default="")
-    secret = Column(String, default="")
-    cred_type = Column(String, default="password")  # password, hash, key, token, other
-    source = Column(String, default="manual")        # manual, c2_loot, osint, brute_force
+    secret = Column(EncryptedText, default="")       # AES-256-GCM encrypted at rest
+    cred_type = Column(String, default="password")   # password, hash, key, token, other
+    source = Column(String, default="manual")         # manual, c2_loot, osint, brute_force
     target_host = Column(String, default="")
-    notes = Column(Text, default="")
+    notes = Column(EncryptedText, default="")         # AES-256-GCM encrypted at rest
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -354,6 +369,72 @@ class AgentJob(Base):
     agent = relationship("Agent", back_populates="jobs")
 
 
+class WebhookConfig(Base):
+    __tablename__ = "webhook_configs"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    events = Column(String, default="critical,warning")  # comma-separated: critical,warning,info
+    active = Column(Boolean, default=True)
+    secret = Column(String, nullable=True)   # HMAC-SHA256 signing secret; None = unsigned
+    created_at = Column(DateTime, default=datetime.utcnow)
+    deliveries = relationship("WebhookDelivery", back_populates="webhook", cascade="all, delete-orphan")
+
+
+class WebhookDelivery(Base):
+    """Delivery attempt log for each webhook firing."""
+    __tablename__ = "webhook_deliveries"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    webhook_id = Column(String, ForeignKey("webhook_configs.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    status_code = Column(Integer, nullable=True)   # HTTP response code, None on network failure
+    attempt = Column(Integer, default=1)           # 1 / 2 / 3
+    success = Column(Boolean, default=False)
+    error = Column(String, nullable=True)          # error message on failure
+    fired_at = Column(DateTime, default=datetime.utcnow)
+    webhook = relationship("WebhookConfig", back_populates="deliveries")
+
+
+class FPSuppressionRule(Base):
+    """Project-level false-positive suppression rules applied at parse time."""
+    __tablename__ = "fp_suppression_rules"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    tool = Column(String, nullable=True)           # None = match any tool
+    title_contains = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WatchedService(Base):
+    __tablename__ = "watched_services"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    target_id = Column(String, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False)
+    service_term = Column(String, nullable=False)   # e.g. "Apache httpd 2.4.52"
+    last_checked = Column(DateTime, nullable=True)
+    known_cves = Column(Text, default="[]")         # JSON array of CVE IDs already seen
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PasskeyCredential(Base):
+    __tablename__ = "passkey_credentials"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    credential_id = Column(String, unique=True, nullable=False)   # base64url-encoded bytes
+    public_key = Column(Text, nullable=False)                      # base64url-encoded COSE key
+    sign_count = Column(Integer, default=0)
+    name = Column(String, default="Passkey")                       # user-supplied label
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RevokedToken(Base):
+    """Tracks invalidated JWTs so logout is enforced server-side."""
+    __tablename__ = "revoked_tokens"
+    jti = Column(String, primary_key=True)          # JWT ID claim
+    revoked_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)    # used for periodic cleanup
+
+
 class HardeningReport(Base):
     __tablename__ = "hardening_reports"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -363,6 +444,19 @@ class HardeningReport(Base):
     overall_score = Column(String, default="0")
     controls_json = Column(Text, default="{}")
     scan_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AuditLog(Base):
+    """Security audit log — records all mutating API calls with user + IP context."""
+    __tablename__ = "audit_log"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=True)         # None for unauthenticated requests
+    action = Column(String, nullable=False)          # HTTP method + path, e.g. "POST /api/v1/projects"
+    resource_type = Column(String, nullable=True)    # e.g. "project", "scan", "c2_session"
+    resource_id = Column(String, nullable=True)
+    detail = Column(Text, nullable=True)             # optional extra context (body digest, etc.)
+    ip_address = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -377,6 +471,30 @@ def get_db():
 def create_tables():
     Base.metadata.create_all(bind=engine)
     _migrate()
+    _cleanup_noise_findings()
+
+
+_NIKTO_NOISE_SUBSTRINGS = [
+    "No CGI Directories found",
+    "Host maximum execution time",
+    "SSL connect failed",
+    "No web server found",
+    "0 item(s) reported",
+    "end of test.",
+]
+
+
+def _cleanup_noise_findings():
+    """Remove known noisy / non-actionable findings created by older parser versions."""
+    db = SessionLocal()
+    try:
+        for pattern in _NIKTO_NOISE_SUBSTRINGS:
+            db.query(Finding).filter(Finding.title.contains(pattern)).delete(synchronize_session=False)
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _migrate():
@@ -394,6 +512,15 @@ def _migrate():
         "ALTER TABLE notifications ADD COLUMN scan_id VARCHAR",
         "ALTER TABLE users ADD COLUMN full_name VARCHAR",
         "ALTER TABLE agents ADD COLUMN short_code VARCHAR",
+        "ALTER TABLE projects ADD COLUMN scope_json TEXT",
+        "ALTER TABLE c2_sessions ADD COLUMN checklist_json TEXT",
+        "ALTER TABLE c2_sessions ADD COLUMN pivot_routes_json TEXT",
+        "ALTER TABLE c2_sessions ADD COLUMN sysinfo_json TEXT",
+        "ALTER TABLE c2_sessions ADD COLUMN finding_id VARCHAR",
+        "ALTER TABLE findings ADD COLUMN exploit_chain_json TEXT",
+        "ALTER TABLE findings ADD COLUMN fp_reason TEXT",
+        "ALTER TABLE webhook_configs ADD COLUMN secret VARCHAR",
+        # webhook_deliveries and fp_suppression_rules created by create_all
     ]
     with engine.connect() as conn:
         for sql in migrations:

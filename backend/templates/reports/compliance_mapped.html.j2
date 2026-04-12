@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compliance-Mapped Report — {{ project_name }}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f8fafc; color: #1e293b; line-height: 1.6; }
+  .page { max-width: 920px; margin: 0 auto; padding: 3rem 2rem; }
+  .header { border-bottom: 4px solid #1e293b; padding-bottom: 1.5rem; margin-bottom: 2rem; }
+  .header h1 { font-size: 2rem; font-weight: 700; color: #0f172a; }
+  .header .subtitle { font-size: 0.95rem; color: #64748b; margin-top: 0.25rem; }
+  .meta-row { display: flex; gap: 2rem; margin-bottom: 2rem; flex-wrap: wrap; }
+  .meta-item .label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; }
+  .meta-item .value { font-size: 0.9rem; font-weight: 600; color: #0f172a; }
+  h2 { font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 2.5rem 0 1rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.4rem; }
+  h3 { font-size: 0.95rem; font-weight: 700; color: #1e293b; }
+  .framework-section { margin-bottom: 2.5rem; }
+  .control-group { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 0.75rem; overflow: hidden; }
+  .control-header { background: #f8fafc; border-bottom: 1px solid #e2e8f0; padding: 0.6rem 1rem; display: flex; align-items: center; justify-content: space-between; }
+  .control-id { font-size: 0.8rem; font-weight: 700; font-family: monospace; color: #4f46e5; }
+  .control-count { font-size: 0.72rem; background: #e0e7ff; color: #4338ca; padding: 0.15rem 0.5rem; border-radius: 12px; font-weight: 600; }
+  .control-finding { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.6rem 1rem; border-bottom: 1px solid #f1f5f9; }
+  .control-finding:last-child { border-bottom: none; }
+  .sev-badge { font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 4px; color: #fff; text-transform: uppercase; flex-shrink: 0; margin-top: 0.1rem; }
+  .sev-badge.critical { background: #ef4444; }
+  .sev-badge.high     { background: #f97316; }
+  .sev-badge.medium   { background: #d97706; }
+  .sev-badge.low      { background: #16a34a; }
+  .sev-badge.info     { background: #2563eb; }
+  .finding-title { font-size: 0.875rem; font-weight: 600; color: #1e293b; }
+  .finding-desc  { font-size: 0.8rem; color: #64748b; margin-top: 0.15rem; }
+  .unmapped-section { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.5rem 0; }
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
+  .stat-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 1rem; text-align: center; }
+  .stat-card .num { font-size: 1.5rem; font-weight: 800; color: #1e293b; }
+  .stat-card .lbl { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; }
+  .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; font-size: 0.75rem; color: #94a3b8; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div class="page">
+  <!-- Header -->
+  <div class="header">
+    <h1>{{ project_name }}</h1>
+    <div class="subtitle">Compliance-Mapped Report &mdash; Security Assessment</div>
+  </div>
+
+  <!-- Meta -->
+  <div class="meta-row">
+    <div class="meta-item"><div class="label">Generated</div><div class="value">{{ generated_at }}</div></div>
+    <div class="meta-item"><div class="label">Auditor</div><div class="value">{{ auditor }}</div></div>
+    <div class="meta-item"><div class="label">Total Findings</div><div class="value">{{ total_findings }}</div></div>
+    <div class="meta-item"><div class="label">Overall Risk</div><div class="value">{{ risk_rating }}</div></div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-grid">
+    <div class="stat-card"><div class="num">{{ severity_counts.critical }}</div><div class="lbl">Critical</div></div>
+    <div class="stat-card"><div class="num">{{ severity_counts.high }}</div><div class="lbl">High</div></div>
+    <div class="stat-card"><div class="num">{{ severity_counts.medium }}</div><div class="lbl">Medium</div></div>
+    <div class="stat-card"><div class="num">{{ severity_counts.low + severity_counts.info }}</div><div class="lbl">Low / Info</div></div>
+  </div>
+
+  {# Build framework → control_id → [findings] mapping #}
+  {% set frameworks = namespace(data={}) %}
+  {% for f in findings %}
+    {% if f.framework and f.control_id %}
+      {# We can't mutate dicts in Jinja2 easily, so we output per-framework sections below #}
+    {% endif %}
+  {% endfor %}
+
+  {# Collect distinct frameworks #}
+  {% set fw_names = findings | map(attribute='framework') | select | unique | list %}
+
+  {% if fw_names %}
+  <h2>Findings by Framework &amp; Control</h2>
+
+  {% for fw in fw_names %}
+  {% set fw_findings = findings | selectattr('framework', 'equalto', fw) | list %}
+  {% if fw_findings %}
+  <div class="framework-section">
+    <h2 style="margin-top:1rem;">{{ fw }}</h2>
+
+    {# Group by control_id #}
+    {% set ctrl_ids = fw_findings | map(attribute='control_id') | select | unique | list %}
+
+    {% for ctrl in ctrl_ids %}
+    {% set ctrl_findings = fw_findings | selectattr('control_id', 'equalto', ctrl) | list %}
+    <div class="control-group">
+      <div class="control-header">
+        <span class="control-id">{{ ctrl }}</span>
+        <span class="control-count">{{ ctrl_findings | length }} finding(s)</span>
+      </div>
+      {% for f in ctrl_findings %}
+      <div class="control-finding">
+        <span class="sev-badge {{ f.severity }}">{{ f.severity }}</span>
+        <div>
+          <div class="finding-title">{{ f.title }}</div>
+          {% if f.description %}
+          <div class="finding-desc">{{ f.description | truncate(160) }}</div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+
+    {# Findings without a control_id #}
+    {% set no_ctrl = fw_findings | rejectattr('control_id') | list %}
+    {% if no_ctrl %}
+    <div class="control-group">
+      <div class="control-header">
+        <span class="control-id">No Control ID</span>
+        <span class="control-count">{{ no_ctrl | length }}</span>
+      </div>
+      {% for f in no_ctrl %}
+      <div class="control-finding">
+        <span class="sev-badge {{ f.severity }}">{{ f.severity }}</span>
+        <div>
+          <div class="finding-title">{{ f.title }}</div>
+          {% if f.description %}<div class="finding-desc">{{ f.description | truncate(160) }}</div>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+
+  {# Findings with no framework mapping #}
+  {% set unmapped = findings | rejectattr('framework') | list %}
+  {% if unmapped %}
+  <h2>Unmapped Findings</h2>
+  <p style="font-size:0.83rem;color:#64748b;margin-bottom:0.75rem;">These findings were not mapped to a compliance framework. Review the Technical Detail report for remediation guidance.</p>
+  <div class="unmapped-section">
+    {% for f in unmapped %}
+    <div class="control-finding">
+      <span class="sev-badge {{ f.severity }}">{{ f.severity }}</span>
+      <div>
+        <div class="finding-title">{{ f.title }}</div>
+        {% if f.description %}<div class="finding-desc">{{ f.description | truncate(160) }}</div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if not fw_names and not unmapped %}
+  <p style="color:#64748b;font-size:0.9rem;margin-top:1rem;">No findings were recorded for this assessment.</p>
+  {% endif %}
+
+  <div class="footer">
+    <span>{{ project_name }} &mdash; Compliance-Mapped Report</span>
+    <span>Generated {{ generated_at }} &middot; {{ generated_by }}</span>
+  </div>
+</div>
+</body>
+</html>

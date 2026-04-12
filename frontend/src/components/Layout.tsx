@@ -2,6 +2,8 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import CommandPalette from './CommandPalette'
 import NotificationBell from './NotificationBell'
+import ActiveUsers from './ActiveUsers'
+import { useAppStore } from '@/stores/appStore'
 import { useAINarrative } from '../contexts/AINarrativeContext'
 import {
   LayoutDashboard,
@@ -26,6 +28,8 @@ import {
   FileSearch,
   Radio,
   Cpu,
+  GitBranch,
+  Clock,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -76,9 +80,10 @@ const NAV_GROUPS: NavGroup[] = [
     color: 'text-red-400',
     icon: <Swords size={13} />,
     items: [
-      { to: '/pentest',   label: 'Pentest Workbench', icon: <Swords size={18} /> },
-      { to: '/c2',        label: 'C2 Console',        icon: <Terminal size={18} /> },
-      { to: '/playbooks', label: 'Playbooks',         icon: <BookOpen size={18} /> },
+      { to: '/pentest',      label: 'Pentest Workbench', icon: <Swords size={18} /> },
+      { to: '/c2',           label: 'C2 Console',        icon: <Terminal size={18} /> },
+      { to: '/playbooks',    label: 'Playbooks',         icon: <BookOpen size={18} /> },
+      { to: '/attack-paths', label: 'Attack Paths',      icon: <GitBranch size={18} /> },
     ],
   },
   {
@@ -101,6 +106,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/agents',    label: 'Agents',        icon: <Cpu size={18} /> },
       { to: '/listeners', label: 'Listeners',     icon: <Radio size={18} /> },
       { to: '/vulns',     label: 'Vuln Tracker',  icon: <ShieldAlert size={18} /> },
+      { to: '/cve-watch', label: 'CVE Watch',     icon: <ShieldAlert size={18} /> },
+      { to: '/timeline',  label: 'Timeline',      icon: <Clock size={18} /> },
       { to: '/logs',      label: 'Log Analysis',  icon: <FileSearch size={18} /> },
     ],
   },
@@ -145,11 +152,14 @@ export default function Layout() {
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('seraph_nav_collapsed') === 'true')
   const { generating, progress, done, dismissDone } = useAINarrative()
-  const isOnReports = useLocation().pathname === '/reports'
+  const location = useLocation()
+  const isOnReports = location.pathname === '/reports'
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const location = useLocation()
+  const { selectedProject } = useAppStore()
+  // Derive current page label from pathname for presence announcements
+  const currentPage = location.pathname.replace(/^\//, '') || 'dashboard'
 
   // Group open/closed state — persisted to localStorage, auto-opens the active group
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
@@ -362,7 +372,13 @@ export default function Layout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto dot-grid page-enter" style={{ background: 'var(--bg-base)' }}>
+      <main className="flex-1 overflow-y-auto dot-grid page-enter relative" style={{ background: 'var(--bg-base)' }}>
+        {/* Presence indicator — top-right corner, only when a project is selected */}
+        {selectedProject && (
+          <div className="absolute top-3 right-4 z-10">
+            <ActiveUsers projectId={selectedProject.id} page={currentPage} />
+          </div>
+        )}
         <Outlet />
       </main>
 

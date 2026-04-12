@@ -140,29 +140,56 @@ def run_module(module_path: str, options: dict, payload: str = "") -> dict:
 
         mod = client.modules.use(mod_type, mod_name)
 
-        # Payload options cannot be set on the module object — pass them to execute() as kwargs
-        _PAYLOAD_OPTIONS = {"LHOST", "LPORT", "LURI", "EXITFUNC", "RHOST"}
-        module_opts = {}
-        execute_opts = {}
+        # pymetasploit3's execute() ONLY reads 'payload' from kwargs — all other kwargs
+        # (LHOST, LPORT, etc.) are silently dropped.  The correct way to pass ALL options
+        # is to write them into mod.runoptions (the underlying _runopts dict) before calling
+        # execute().  mod[key] = val uses a validated __setitem__ that rejects payload-level
+        # options like LHOST, so we fall back to direct dict access for those.
+        # Also: __setitem__ raises TypeError for string values on integer-typed options (like
+        # RPORT="139"), so we pre-coerce known integer options before setting.
+        _int_opts = {k for k, v in mod._moptions.items() if v.get("type") in ("integer", "float")}
         for key, val in options.items():
             if isinstance(val, str) and val.lower() in ("true", "false"):
                 val = val.lower() == "true"
-            if key in _PAYLOAD_OPTIONS:
-                execute_opts[key] = val
-            else:
-                module_opts[key] = val
+            elif isinstance(val, str) and key in _int_opts:
+                try:
+                    val = int(val)
+                except ValueError:
+                    pass
+            try:
+                mod[key] = val          # validated path — works for module options
+            except (KeyError, ValueError, TypeError):
+                mod.runoptions[key] = val   # direct path — for payload options (LHOST etc.)
 
-        for key, val in module_opts.items():
-            if key == "SESSION" and isinstance(val, str):
-                val = int(val)
-            mod[key] = val
+        # If the module has a SRVPORT option and the resolved port is already bound,
+        # find a free port automatically rather than failing with Rex::BindFailed.
+        if "SRVPORT" in mod._moptions:
+            import socket as _sock
+            srvport = int(mod.runoptions.get("SRVPORT", 8080))
+            try:
+                with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                    _s.bind(("0.0.0.0", srvport))
+            except OSError:
+                # Port in use — find a free one starting above 35000
+                free = srvport
+                for p in range(35000, 65000):
+                    try:
+                        with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                            _s.bind(("0.0.0.0", p))
+                        free = p
+                        break
+                    except OSError:
+                        continue
+                mod.runoptions["SRVPORT"] = free
+                logger.info(f"SRVPORT {srvport} in use — using {free} instead")
 
-        sessions_before = set(client.sessions.list.keys()) if isinstance(client.sessions.list, dict) else set()
+        _sl = client.sessions.list
+        sessions_before = set(_sl.keys()) if isinstance(_sl, dict) else set()
 
         if payload and mod_type == "exploit":
-            result = mod.execute(payload=payload, **execute_opts)
+            result = mod.execute(payload=payload)
         else:
-            result = mod.execute(**execute_opts)
+            result = mod.execute()
 
         logger.info(f"MSF execute result for {module_path}: {result}")
 
@@ -239,7 +266,7 @@ def run_module(module_path: str, options: dict, payload: str = "") -> dict:
         done = threading.Event()
 
         def _poll():
-            deadline = time.time() + 4
+            deadline = time.time() + 20
             while time.time() < deadline:
                 time.sleep(0.3)
                 try:
@@ -254,7 +281,7 @@ def run_module(module_path: str, options: dict, payload: str = "") -> dict:
             done.set()
 
         threading.Thread(target=_poll, daemon=True).start()
-        done.wait(timeout=5)
+        done.wait(timeout=21)
 
         sessions_after = client.sessions.list if isinstance(client.sessions.list, dict) else {}
         new_session = sessions_after.get(new_sids_list[0]) if new_sids_list else None
@@ -357,6 +384,9 @@ def generate_payload(
     fmt: str = "elf",
     arch: str = "x86_64",
     platform: str = "linux",
+    encoder: str | None = None,
+    iterations: int = 1,
+    bad_chars: str | None = None,
     extra_opts: dict = None,
 ) -> bytes | None:
     """
@@ -394,6 +424,24 @@ def generate_payload(
         "-a", arch,
         "--platform", platform,
     ]
+
+    # Evasion options
+    _ALLOWED_ENCODERS = {
+        "x86/shikata_ga_nai", "x86/countdown", "x86/jmp_call_additive",
+        "x86/fnstenv_mov", "x86/bloxor", "x86/alpha_upper", "x86/alpha_mixed",
+        "x64/xor", "x64/xor_dynamic", "x64/zutto_dekiru",
+        "cmd/powershell_base64",
+        "none",
+    }
+    if encoder and encoder != "none":
+        if not re.match(r'^[\w/]+$', encoder) or encoder not in _ALLOWED_ENCODERS:
+            raise ValueError(f"Invalid encoder: {encoder}")
+        cmd.extend(["-e", encoder, "-i", str(max(1, min(iterations, 20)))])
+    if bad_chars:
+        # bad_chars should be hex bytes like \x00\x0a
+        if not re.match(r'^(\\x[0-9a-fA-F]{2})+$', bad_chars.replace(' ', '')):
+            raise ValueError("Invalid bad_chars format — use \\x00\\x0a style")
+        cmd.extend(["-b", bad_chars])
 
     if extra_opts:
         for k, v in extra_opts.items():

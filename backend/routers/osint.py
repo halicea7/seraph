@@ -2,10 +2,11 @@ import json
 import shutil
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from database import Scan, get_db
+from services.validators import validate_domain, validate_pentest_command
 
 router = APIRouter(prefix="/osint", tags=["osint"])
 
@@ -45,6 +46,23 @@ class OSINTRunRequest(BaseModel):
     domain: str
     tool_name: str
     command: str
+
+    @field_validator("domain")
+    @classmethod
+    def _check_domain(cls, v: str) -> str:
+        return validate_domain(v)
+
+    @field_validator("tool_name")
+    @classmethod
+    def _check_tool_name(cls, v: str) -> str:
+        if v not in OSINT_TOOLS:
+            raise ValueError(f"Unknown OSINT tool: {v!r}")
+        return v
+
+    @field_validator("command")
+    @classmethod
+    def _check_command(cls, v: str) -> str:
+        return validate_pentest_command(v)
 
 
 @router.post("/run")

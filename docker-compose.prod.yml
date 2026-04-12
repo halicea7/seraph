@@ -1,0 +1,92 @@
+# Production Docker Compose — run with:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Prerequisites:
+#   1. Copy .env.example to .env and fill in all required values.
+#   2. Ensure SERAPH_SECRET_KEY, MSF_RPC_PASSWORD, and POSTGRES_PASSWORD are set.
+
+version: '3.9'
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: seraph
+      POSTGRES_USER: seraph
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seraph -d seraph"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Seraph backend ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        PRODUCTION: "1"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SERAPH_DATABASE_URL: postgresql+psycopg2://seraph:${POSTGRES_PASSWORD}@db:5432/seraph
+      SERAPH_SECRET_KEY: ${SERAPH_SECRET_KEY:?SERAPH_SECRET_KEY is required}
+      SERAPH_RP_ID: ${SERAPH_RP_ID:-localhost}
+      SERAPH_RP_ORIGINS: ${SERAPH_RP_ORIGINS:-http://localhost:8000}
+      SERAPH_RATE_LIMIT_REQUESTS: ${SERAPH_RATE_LIMIT_REQUESTS:-300}
+      SERAPH_RATE_LIMIT_WINDOW: ${SERAPH_RATE_LIMIT_WINDOW:-60}
+      MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-}
+      SLIVER_CONFIG: ${SLIVER_CONFIG:-}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - seraph_results:/seraph_results
+      - seraph_reports:/app/reports
+    networks:
+      - internal
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/projects"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Nginx reverse proxy + frontend ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${SERAPH_PORT:-8080}:80"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  seraph_results:
+  seraph_reports:

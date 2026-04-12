@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>moire</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; overflow: hidden; font-family: monospace; }
+  #wrap { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+  canvas { display: block; flex: 1; min-height: 0; }
+  #hud {
+    background: #0a0a0f;
+    padding: 8px 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 22px;
+    border-top: 1px solid #111;
+    flex-shrink: 0;
+  }
+  .c { display: flex; align-items: center; gap: 7px; }
+  .c label { font-size: 10px; color: #2a4a2a; letter-spacing: .06em; white-space: nowrap; }
+  .c input[type=range] { width: 90px; accent-color: #22cc44; }
+  .c span { font-size: 10px; color: #44ee66; width: 32px; }
+  #hint { font-size: 10px; color: #1a3a1a; letter-spacing: .05em; align-self: center; margin-left: auto; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div id="hud">
+    <div class="c"><label>SPEED</label><input type="range" id="spd" min="0.1" max="3" step="0.05" value="1"><span id="sV">1.00</span></div>
+    <div class="c"><label>FREQ</label><input type="range" id="frq" min="0.1" max="0.8" step="0.01" value="0.3"><span id="fV">.30</span></div>
+    <div class="c"><label>THRESHOLD</label><input type="range" id="thr" min="0.02" max="0.45" step="0.01" value="0.15"><span id="tV">.15</span></div>
+    <div class="c"><label>ORBIT</label><input type="range" id="orb" min="0.1" max="0.45" step="0.01" value="0.3"><span id="oV">.30</span></div>
+    <span id="hint">click + drag to grab wave 3</span>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('cv');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('wrap');
+
+// Character density ramp — exact from sebland.com/textflow source
+const CHARS = ' .,-~:;=!*#';
+
+let speed = 1, freq = 0.3, thr = 0.15, orb = 0.3;
+let t = 0;
+let mx = -1, my = -1, mouseDown = false;
+const CW = 8, CH = 14;
+let COLS = 0, ROWS = 0;
+
+function resize() {
+  canvas.width  = canvas.offsetWidth;
+  canvas.height = canvas.offsetHeight;
+  COLS = Math.floor(canvas.width  / CW);
+  ROWS = Math.floor(canvas.height / CH);
+  ctx.font = CW + 'px monospace';
+  ctx.textBaseline = 'top';
+}
+
+function draw() {
+  t += 0.016 * speed;
+
+  const e = COLS, rows = ROWS;
+
+  ctx.fillStyle = '#0a0a0f';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Three orbiting wave centers — ported directly from Nt() in draw-BfJYObk5.js
+  const nx = e * 0.5 + Math.cos(t * 0.3)  * e    * orb;
+  const ny = rows * 0.5 + Math.sin(t * 0.4)  * rows * orb;
+  const ix = e * 0.5 + Math.cos(t * 0.37 + 2) * e    * (orb * 0.83);
+  const iy = rows * 0.5 + Math.sin(t * 0.29 + 2) * rows * (orb * 1.17);
+
+  // Third center: mouse when held, otherwise animated
+  const sx = mouseDown && mx >= 0
+    ? mx
+    : e * 0.5 + Math.sin(t * 0.23 + 4) * e * (orb * 1.17);
+  const sy = mouseDown && my >= 0
+    ? my
+    : rows * 0.5 + Math.cos(t * 0.31 + 4) * rows * (orb * 0.83);
+
+  // Slightly detuned frequencies — the mismatch is what creates interference bands
+  const f1 = freq;
+  const f2 = freq * 1.033; // ~.31 in the original
+  const f3 = freq * 0.967; // ~.29 in the original
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < e; col++) {
+
+      // 0.55 aspect correction from the original source
+      const fx = col * 0.55;
+
+      const pb = fx - nx * 0.55, hb = row - ny;
+      const gb = fx - ix * 0.55, _b = row - iy;
+      const vb = fx - sx * 0.55, yb = row - sy;
+
+      const dist1 = Math.sqrt(pb * pb + hb * hb);
+      const dist2 = Math.sqrt(gb * gb + _b * _b);
+      const dist3 = Math.sqrt(vb * vb + yb * yb);
+
+      // Three interfering circular waves
+      let C = Math.sin(dist1 * f1 + t)
+            + Math.sin(dist2 * f2 - t * 0.7)
+            + Math.sin(dist3 * f3 + t * 0.5);
+
+      C = (C + 3) / 6; // normalise to 0..1
+
+      // Hard threshold — only render the interference bands
+      if (C < thr || C > (1 - thr)) continue;
+
+      // Brightness peaks at C = 0.5
+      let w = Math.abs(C - 0.5) * 2;
+      w = 1 - w;
+
+      const charIdx = Math.min(CHARS.length - 1, w * CHARS.length | 0);
+      const ch = CHARS[charIdx];
+      if (ch === ' ') continue;
+
+      const g = (100 + w * 155) | 0;
+      const b = (50  + w * 50)  | 0;
+      ctx.fillStyle = `rgba(0,${g},${b * 0.5 | 0},${0.3 + w * 0.7})`;
+      ctx.fillText(ch, col * CW, row * CH);
+    }
+  }
+
+  requestAnimationFrame(draw);
+}
+
+// Input bindings
+function bind(id, key, outId, fmt) {
+  document.getElementById(id).addEventListener('input', e => {
+    window[key] = parseFloat(e.target.value);
+    document.getElementById(outId).textContent = fmt(window[key]);
+  });
+}
+document.getElementById('spd').addEventListener('input', e => { speed = parseFloat(e.target.value); document.getElementById('sV').textContent = speed.toFixed(2); });
+document.getElementById('frq').addEventListener('input', e => { freq  = parseFloat(e.target.value); document.getElementById('fV').textContent = freq.toFixed(2); });
+document.getElementById('thr').addEventListener('input', e => { thr   = parseFloat(e.target.value); document.getElementById('tV').textContent = thr.toFixed(2); });
+document.getElementById('orb').addEventListener('input', e => { orb   = parseFloat(e.target.value); document.getElementById('oV').textContent = orb.toFixed(2); });
+
+// Mouse / touch — grab the third wave center
+function getPos(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (clientX - r.left) / CW, y: (clientY - r.top) / CH };
+}
+canvas.addEventListener('mousedown',  e => { mouseDown = true;  const p = getPos(e.clientX, e.clientY); mx = p.x; my = p.y; });
+canvas.addEventListener('mousemove',  e => { if (!mouseDown) return; const p = getPos(e.clientX, e.clientY); mx = p.x; my = p.y; });
+canvas.addEventListener('mouseup',    () => mouseDown = false);
+canvas.addEventListener('mouseleave', () => mouseDown = false);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); mouseDown = true;  const p = getPos(e.touches[0].clientX, e.touches[0].clientY); mx = p.x; my = p.y; }, { passive: false });
+canvas.addEventListener('touchmove',  e => { e.preventDefault(); const p = getPos(e.touches[0].clientX, e.touches[0].clientY); mx = p.x; my = p.y; }, { passive: false });
+canvas.addEventListener('touchend',   () => mouseDown = false);
+
+window.addEventListener('resize', resize);
+resize();
+draw();
+</script>
+</body>
+</html>

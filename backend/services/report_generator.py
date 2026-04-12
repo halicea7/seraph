@@ -81,6 +81,24 @@ def generate_report(
         "severity_risk": _SEVERITY_RISK,
     }
 
+    # HTML-native templates (no markdown conversion step)
+    _HTML_TEMPLATES = {
+        "executive_summary": "executive_summary.html.j2",
+        "technical_detail": "technical_detail.html.j2",
+        "compliance_mapped": "compliance_mapped.html.j2",
+    }
+
+    if report_type in _HTML_TEMPLATES:
+        tmpl = env.get_template(_HTML_TEMPLATES[report_type])
+        html_content = tmpl.render(**context)
+        return {
+            "title": f"{project_name} — {report_type.replace('_', ' ').title()}",
+            "markdown": "",   # not applicable for HTML-native templates
+            "html": html_content,
+            "risk_rating": risk_rating,
+            "severity_counts": severity_counts,
+        }
+
     template_name = "audit_report.md.j2" if report_type == "audit" else "pentest_report.md.j2"
     tmpl = env.get_template(template_name)
     markdown_content = tmpl.render(**context)

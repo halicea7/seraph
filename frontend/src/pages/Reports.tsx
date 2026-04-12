@@ -39,7 +39,7 @@ export default function Reports() {
   const [narrative, setNarrative] = useState<string>('')
   const [narrativeSavedAt, setNarrativeSavedAt] = useState<string>('')
   const [narrativeStyle, setNarrativeStyle] = useState<'executive' | 'technical'>('executive')
-  const [template, setTemplate] = useState<'executive' | 'technical'>('technical')
+  const [template, setTemplate] = useState<'executive_summary' | 'technical_detail' | 'compliance_mapped'>('technical_detail')
   const [narrativeError, setNarrativeError] = useState<string>('')
   const [auditor, setAuditor] = useState<string>(user?.full_name || user?.username || '')
 
@@ -152,13 +152,26 @@ export default function Reports() {
     if (!selectedProject) return
     setGenerating(true)
     try {
-      const params = new URLSearchParams({ format, template, auditor: auditor || 'Seraph (Automated)' })
-      const res = await fetch(`${BASE_URL}/audit/reports/download/${selectedProject}?${params}`)
-      const blob = await res.blob()
+      // HTML-native templates go through generate+download; markdown-based go through direct download
+      const isHtmlNative = template === 'executive_summary' || template === 'technical_detail' || template === 'compliance_mapped'
+      let blob: Blob
+      if (isHtmlNative && format === 'html') {
+        const res = await fetch(`${BASE_URL}/audit/reports/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: selectedProject, report_type: template, auditor: auditor || 'Seraph (Automated)' }),
+        })
+        const data = await res.json()
+        blob = new Blob([data.html || ''], { type: 'text/html' })
+      } else {
+        const params = new URLSearchParams({ format, auditor: auditor || 'Seraph (Automated)' })
+        const res = await fetch(`${BASE_URL}/audit/reports/download/${selectedProject}?${params}`)
+        blob = await res.blob()
+      }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `seraph_${template}_report_${selectedProject.slice(0, 8)}.${format === 'markdown' ? 'md' : 'html'}`
+      a.download = `seraph_${template}_${selectedProject.slice(0, 8)}.${format === 'markdown' ? 'md' : 'html'}`
       a.click()
       URL.revokeObjectURL(url)
     } catch {
@@ -172,8 +185,8 @@ export default function Reports() {
     if (!selectedProject) return
     setGenerating(true)
     try {
-      const data = await generateReport(selectedProject, 'audit', auditor || 'Seraph (Automated)')
-      setReportPreview(data.markdown || '')
+      const data = await generateReport(selectedProject, template, auditor || 'Seraph (Automated)')
+      setReportPreview(data.html || data.markdown || '')
       setActiveTab('report')
     } catch {
       // ignore
@@ -184,7 +197,7 @@ export default function Reports() {
 
   const severityCounts = stats?.severity_counts || {}
 
-  const displayFindings = template === 'executive'
+  const displayFindings = template === 'executive_summary'
     ? findings.filter(f => f.severity === 'critical' || f.severity === 'high')
     : findings
 
@@ -290,18 +303,25 @@ export default function Reports() {
         {/* Template picker */}
         <div className="flex gap-1 glass rounded-lg p-1">
           <button
-            onClick={() => setTemplate('executive')}
-            className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${template === 'executive' ? 'bg-blue-600/30 text-blue-300 border border-blue-500/30' : 'text-slate-400 hover:text-slate-200'}`}
-            title="Critical & high findings only, summary format"
+            onClick={() => setTemplate('executive_summary')}
+            className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${template === 'executive_summary' ? 'bg-blue-600/30 text-blue-300 border border-blue-500/30' : 'text-slate-400 hover:text-slate-200'}`}
+            title="Risk overview, key findings, no technical detail"
           >
             Executive Summary
           </button>
           <button
-            onClick={() => setTemplate('technical')}
-            className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${template === 'technical' ? 'bg-cyan-600/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200'}`}
-            title="All findings with full details"
+            onClick={() => setTemplate('technical_detail')}
+            className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${template === 'technical_detail' ? 'bg-cyan-600/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200'}`}
+            title="All findings with evidence and remediation"
           >
             Technical Detail
+          </button>
+          <button
+            onClick={() => setTemplate('compliance_mapped')}
+            className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${template === 'compliance_mapped' ? 'bg-purple-600/20 text-purple-300 border border-purple-500/30' : 'text-slate-400 hover:text-slate-200'}`}
+            title="Findings organized by NIST/CIS/PCI control"
+          >
+            Compliance Mapped
           </button>
         </div>
 
@@ -372,7 +392,7 @@ export default function Reports() {
           onClick={() => setActiveTab('findings')}
           className={`px-4 py-1.5 rounded text-sm font-medium transition-colors ${activeTab === 'findings' ? 'bg-blue-600 text-white shadow-glow-blue' : 'text-slate-400 hover:text-slate-200'}`}
         >
-          Findings ({displayFindings.length}{template === 'executive' ? `/${findings.length}` : ''})
+          Findings ({displayFindings.length}{template === 'executive_summary' ? `/${findings.length}` : ''})
         </button>
         <button
           onClick={() => setActiveTab('report')}
@@ -391,7 +411,7 @@ export default function Reports() {
       {/* Content */}
       {activeTab === 'findings' && (
         <>
-          {template === 'executive' && findings.length > 0 && (
+          {template === 'executive_summary' && findings.length > 0 && (
             <div className="rounded-lg px-4 py-2.5 text-xs text-blue-300 border border-blue-700/30 flex items-center gap-2" style={{ background: 'rgba(37,99,235,0.08)' }}>
               Executive template active — showing {displayFindings.length} of {findings.length} findings (critical & high only)
             </div>
@@ -404,7 +424,7 @@ export default function Reports() {
         <div className="glass rounded-xl p-6">
           {reportPreview ? (
             <>
-              {template === 'executive' && (
+              {template === 'executive_summary' && (
                 <div className="mb-4 p-4 rounded-lg border border-blue-700/20" style={{ background: 'rgba(37,99,235,0.06)' }}>
                   <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1">Executive Summary</p>
                   <p className="text-xs text-slate-400">

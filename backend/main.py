@@ -1,10 +1,13 @@
 import os
+import time
+import asyncio
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
@@ -26,6 +29,7 @@ from routers.credentials import router as credentials_router
 from routers.evidence import router as evidence_router
 from routers.ai import router as ai_router
 from routers.auth import router as auth_router
+from routers.passkeys import router as passkeys_router
 from routers.playbooks import router as playbooks_router
 from routers.vulns import router as vulns_router
 from routers.logs import router as logs_router
@@ -34,6 +38,9 @@ from routers.demo import router as demo_router
 from routers.notifications import router as notifications_router
 from routers.listeners import router as listeners_router
 from routers.agents import router as agents_router
+from routers.webhooks import router as webhooks_router
+from routers.attack_paths import router as attack_paths_router
+from routers.cve_watch import router as cve_watch_router
 from services.tool_registry import detect_tools, initialize_registry
 from services.scheduler import initialize_scheduler
 from services.playbook_runner import seed_builtin_playbooks
@@ -75,14 +82,146 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow all origins for development
+# CORS — restrict to the same origins trusted by WebAuthn (SERAPH_RP_ORIGINS).
+# Defaults cover both the Vite dev server (:22123) and the production port (:8000).
+_cors_origins = [o.strip() for o in settings.rp_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+# ── Rate limiting middleware ──────────────────────────────────────────────────
+
+# Simple sliding-window rate limiter.
+# Configurable via env vars:
+#   SERAPH_RATE_LIMIT_REQUESTS  — max requests per window (default: 300)
+#   SERAPH_RATE_LIMIT_WINDOW    — window in seconds (default: 60)
+#   SERAPH_RATE_LIMIT_BURST     — burst multiplier for authenticated requests (default: 5)
+#
+# Routes exempted from rate limiting:
+#   - WebSocket connections (/ws/*)
+#   - Static assets (/assets/*)
+#   - Health check (/)
+
+_rate_window = int(os.environ.get("SERAPH_RATE_LIMIT_WINDOW", "60"))
+_rate_max = int(os.environ.get("SERAPH_RATE_LIMIT_REQUESTS", "300"))
+# Per-IP request timestamps (pruned when old)
+_rate_store: dict[str, list[float]] = defaultdict(list)
+_rate_lock = asyncio.Lock()
+
+
+def _get_client_ip(request: Request) -> str:
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    path = request.url.path
+    # Exempt WebSocket upgrades and static assets
+    if path.startswith("/ws/") or path.startswith("/assets/") or path == "/":
+        return await call_next(request)
+
+    ip = _get_client_ip(request)
+    now = time.monotonic()
+    cutoff = now - _rate_window
+
+    async with _rate_lock:
+        # Prune old timestamps
+        timestamps = _rate_store[ip]
+        _rate_store[ip] = [t for t in timestamps if t > cutoff]
+        count = len(_rate_store[ip])
+
+        if count >= _rate_max:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please slow down."},
+                headers={"Retry-After": str(_rate_window)},
+            )
+        _rate_store[ip].append(now)
+
+    return await call_next(request)
+
+
+# ── Audit log middleware ──────────────────────────────────────────────────────
+#
+# Writes one row to audit_log for every mutating API request (POST/PUT/PATCH/DELETE)
+# that hits /api/v1/*. Reads are NOT logged to keep the table small.
+# The JWT is decoded to extract user_id without going through the full auth stack.
+
+_AUDIT_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_AUDIT_PATH_PREFIX = "/api/v1/"
+_AUDIT_SKIP_PATHS = {
+    "/api/v1/auth/login",   # already logged by brute-force tracker
+    "/api/v1/auth/logout",
+}
+
+
+def _extract_user_id_from_request(request: Request) -> str | None:
+    """Peek at the Authorization header and decode the JWT jti/sub without validation."""
+    from services.auth_service import decode_token
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth.removeprefix("Bearer ").strip()
+    try:
+        payload = decode_token(token)
+        return str(payload.get("sub", ""))
+    except Exception:
+        return None
+
+
+def _derive_resource(path: str) -> tuple[str | None, str | None]:
+    """Return (resource_type, resource_id) from a URL path like /api/v1/projects/abc123."""
+    parts = [p for p in path.split("/") if p]
+    # parts[0]="api", [1]="v1", [2]=resource_type, [3]=id (optional)
+    rtype = parts[2] if len(parts) > 2 else None
+    rid = parts[3] if len(parts) > 3 else None
+    return rtype, rid
+
+
+@app.middleware("http")
+async def audit_log_middleware(request: Request, call_next):
+    method = request.method
+    path = request.url.path
+
+    # Only audit mutating requests to /api/v1/
+    if method not in _AUDIT_METHODS or not path.startswith(_AUDIT_PATH_PREFIX) or path in _AUDIT_SKIP_PATHS:
+        return await call_next(request)
+
+    response = await call_next(request)
+
+    # Only log successful mutations (2xx)
+    if response.status_code < 200 or response.status_code >= 300:
+        return response
+
+    try:
+        from database import SessionLocal, AuditLog as _AuditLog
+        user_id = _extract_user_id_from_request(request)
+        ip = _get_client_ip(request)
+        rtype, rid = _derive_resource(path)
+        db = SessionLocal()
+        try:
+            db.add(_AuditLog(
+                action=f"{method} {path}",
+                user_id=user_id,
+                resource_type=rtype,
+                resource_id=rid,
+                ip_address=ip,
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass  # audit failures never block requests
+
+    return response
+
 
 # ── API routers ───────────────────────────────────────────────────────────────
 
@@ -105,6 +244,7 @@ app.include_router(credentials_router, prefix=API_PREFIX)
 app.include_router(evidence_router, prefix=API_PREFIX)
 app.include_router(ai_router, prefix=API_PREFIX)
 app.include_router(auth_router, prefix=API_PREFIX)
+app.include_router(passkeys_router, prefix=API_PREFIX)
 app.include_router(playbooks_router, prefix=API_PREFIX)
 app.include_router(vulns_router, prefix=API_PREFIX)
 app.include_router(logs_router, prefix=API_PREFIX)
@@ -113,6 +253,9 @@ app.include_router(demo_router, prefix=API_PREFIX)
 app.include_router(notifications_router, prefix=API_PREFIX)
 app.include_router(listeners_router, prefix=API_PREFIX)
 app.include_router(agents_router, prefix=API_PREFIX)
+app.include_router(webhooks_router, prefix=API_PREFIX)
+app.include_router(attack_paths_router, prefix=API_PREFIX)
+app.include_router(cve_watch_router, prefix=API_PREFIX)
 
 
 # ── Settings / tools endpoint ─────────────────────────────────────────────────
@@ -188,7 +331,7 @@ def get_auto_probe_settings(db=None):
             return row.value if row else default
         return {
             "enabled": _get("auto_probe_enabled", "false") == "true",
-            "tools": _json.loads(_get("auto_probe_tools", '["whois","nmap","nikto","testssl"]')),
+            "tools": _json.loads(_get("auto_probe_tools", '["whois","rustscan","nmap","nikto","testssl","nuclei","feroxbuster"]')),
             "intensity": _get("auto_probe_intensity", "standard"),
         }
     finally:

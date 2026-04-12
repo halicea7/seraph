@@ -10,9 +10,10 @@ from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
-from database import SessionLocal, Scan, Credential, Notification
+from database import SessionLocal, Scan, Credential, Notification, Target, Project
 from services.executor import run_command_streaming
 from services.ssh_executor import run_script_over_ssh, REMOTE_CATEGORIES
+from services.scope_service import check_scope
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
@@ -105,6 +106,24 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
             await websocket.send_json({"type": "error", "data": "Scan not found"})
             await websocket.close()
             return
+
+        # ── Scope enforcement ────────────────────────────────────────────────
+        if scan.target_id:
+            _tgt = db.query(Target).filter(Target.id == scan.target_id).first()
+            if _tgt and _tgt.project_id:
+                _proj = db.query(Project).filter(Project.id == _tgt.project_id).first()
+                if _proj:
+                    in_scope, reason = check_scope(_tgt.hostname_or_ip, _proj.scope_json)
+                    if not in_scope:
+                        await websocket.send_json({
+                            "type": "error",
+                            "data": f"[SCOPE BLOCK] {_tgt.hostname_or_ip} is out of scope: {reason}",
+                        })
+                        scan.status = "failed"
+                        scan.raw_output = f"Scope block: {reason}"
+                        db.commit()
+                        await websocket.close()
+                        return
 
         # Wait for the client to send the script to execute
         data = await websocket.receive_json()
@@ -286,9 +305,15 @@ async def websocket_cracking(websocket: WebSocket, job_id: str):
             await websocket.close()
             return
 
-        # Write hashes to temp file
+        # Write hashes to temp file.
+        # For john: label each line with its index ("0:hash\n1:hash\n") so that
+        # `john --show` returns "0:plaintext:..." instead of "?:plaintext:..."
+        # allowing us to map each plaintext back to the original hash value.
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, prefix="seraph_hashes_") as f:
-            f.write("\n".join(hashes) + "\n")
+            if tool == "john":
+                f.write("\n".join(f"{i}:{h}" for i, h in enumerate(hashes)) + "\n")
+            else:
+                f.write("\n".join(hashes) + "\n")
             hash_file = f.name
 
         out_file = f"/tmp/seraph_cracked_{job_id[:8]}.txt"
@@ -337,10 +362,23 @@ async def websocket_cracking(websocket: WebSocket, job_id: str):
                             capture_output=True, text=True, timeout=15,
                         )
                         for line in result.stdout.splitlines():
-                            if ":" in line and not line.startswith("0 password"):
-                                parts = line.split(":")
-                                if len(parts) >= 2:
-                                    cracked_pairs.append({"hash": parts[0], "plain": parts[1]})
+                            # Format: "index:plaintext:..." or summary "N password hashes cracked"
+                            if ":" not in line:
+                                continue
+                            parts = line.split(":")
+                            if len(parts) < 2:
+                                continue
+                            label = parts[0]
+                            plain = parts[1]
+                            # Skip john's summary line
+                            if not plain or label.endswith(" password"):
+                                continue
+                            # Map label (index) back to original hash
+                            try:
+                                orig_hash = hashes[int(label)]
+                            except (ValueError, IndexError):
+                                orig_hash = label  # fallback: use label as-is
+                            cracked_pairs.append({"hash": orig_hash, "plain": plain})
                     except Exception:
                         pass
 
@@ -379,6 +417,38 @@ async def websocket_cracking(websocket: WebSocket, job_id: str):
                     os.unlink(path)
                 except Exception:
                     pass
+
+
+@router.websocket("/ws/wordlists/install/{bundle_id}")
+async def websocket_wordlist_install(websocket: WebSocket, bundle_id: str):
+    """Stream wordlist bundle installation (apt-get + gunzip)."""
+    await websocket.accept()
+    try:
+        from routers.cracking import WORDLIST_BUNDLES
+        bundle = next((b for b in WORDLIST_BUNDLES if b["id"] == bundle_id), None)
+        if not bundle:
+            await websocket.send_json({"type": "error", "data": f"Unknown bundle: {bundle_id}"})
+            await websocket.close()
+            return
+
+        for cmd in bundle["commands"]:
+            await websocket.send_json({"type": "stdout", "data": f"$ {cmd}\r\n"})
+            async for msg in run_command_streaming(cmd):
+                await websocket.send_json(msg)
+
+        installed = os.path.exists(bundle["dest"])
+        await websocket.send_json({
+            "type": "done",
+            "installed": installed,
+            "dest": bundle["dest"] if installed else "",
+        })
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": str(e)})
+        except Exception:
+            pass
 
 
 @router.websocket("/ws/osint/{scan_id}")
@@ -617,26 +687,37 @@ _TOOL_PKGS: dict[str, dict[str, str]] = {
     "nikto":        {"apt": "nikto",            "dnf": "nikto",          "pacman": "nikto",       "brew": "nikto",         "apk": "nikto",      "zypper": "nikto"},
     "testssl":      {"apt": "testssl.sh",       "pacman": "testssl.sh",  "brew": "testssl"},
     "lynis":        {"apt": "lynis",            "dnf": "lynis",          "pacman": "lynis",       "brew": "lynis",         "zypper": "lynis"},
-    "openscap":     {"apt": "openscap-scanner", "dnf": "openscap-scanner", "zypper": "openscap"},
+    "oscap":        {"apt": "libopenscap8 openscap-scanner", "dnf": "openscap-scanner", "zypper": "openscap"},
     "masscan":      {"apt": "masscan",          "dnf": "masscan",        "pacman": "masscan",     "brew": "masscan"},
     "gobuster":     {"apt": "gobuster",         "brew": "gobuster",      "go": "github.com/OJ/gobuster/v3@latest"},
     "sqlmap":       {"apt": "sqlmap",           "dnf": "sqlmap",         "pacman": "sqlmap",      "brew": "sqlmap"},
     "hydra":        {"apt": "hydra",            "dnf": "hydra",          "pacman": "hydra",       "brew": "hydra"},
     "whois":        {"apt": "whois",            "dnf": "whois",          "pacman": "whois",       "brew": "whois"},
     "dig":          {"apt": "dnsutils",         "dnf": "bind-utils",     "pacman": "bind",        "brew": "bind",          "apk": "bind-tools", "zypper": "bind-utils"},
-    "theHarvester": {"apt": "theharvester",     "brew": "theharvester"},
+    "theHarvester": {},
     "subfinder":    {"brew": "subfinder",       "go": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"},
-    "enum4linux":   {"apt": "enum4linux",       "pacman": "enum4linux"},
+    "enum4linux":   {},
     "smbclient":    {"apt": "smbclient",        "dnf": "samba-client",   "pacman": "smbclient",   "brew": "samba"},
     "netdiscover":  {"apt": "netdiscover",      "dnf": "netdiscover"},
     "wfuzz":        {"apt": "wfuzz",            "brew": "wfuzz"},
     "xsser":        {"apt": "xsser"},
     "weevely":      {"apt": "weevely"},
-    "searchsploit": {"apt": "exploitdb",        "pacman": "exploitdb",   "brew": "exploitdb"},
-    "aws":          {"apt": "awscli",           "dnf": "awscli",         "pacman": "aws-cli",     "brew": "awscli",        "zypper": "aws-cli"},
+    "searchsploit": {},
+    "aws":          {"brew": "awscli",           "pip": "awscli"},
     "hashcat":      {"apt": "hashcat",          "dnf": "hashcat",        "pacman": "hashcat",     "brew": "hashcat"},
     "john":         {"apt": "john",             "dnf": "john",           "pacman": "john",        "brew": "john"},
-    "ffuf":         {"brew": "ffuf",            "go": "github.com/ffuf/ffuf/v2@latest"},
+    "ffuf":              {"brew": "ffuf",            "go": "github.com/ffuf/ffuf/v2@latest"},
+    "rustscan":          {"snap": "rustscan"},
+    "nuclei":            {"brew": "nuclei",          "go": "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"},
+    "feroxbuster":       {"brew": "feroxbuster"},
+    "kerbrute":          {"go": "github.com/ropnop/kerbrute@latest"},
+    "nxc":               {"pip": "netexec"},
+    "impacket-GetUserSPNs":  {"pip": "impacket"},
+    "impacket-GetNPUsers":   {"pip": "impacket"},
+    "impacket-secretsdump":  {"pip": "impacket"},
+    "impacket-psexec":       {"pip": "impacket"},
+    "impacket-wmiexec":      {"pip": "impacket"},
+    "responder":             {},
 }
 
 
@@ -672,6 +753,15 @@ def _detect_pkg_manager() -> str:
 
 
 def _get_install_command(tool_name: str) -> str | None:
+    import shutil as _shutil
+    from services.tool_registry import _install_hint
+
+    # Use the centralized hint first; skip bare URLs (not executable)
+    hint = _install_hint(tool_name)
+    if hint and not hint.startswith("http"):
+        return hint
+
+    # Fallback: _TOOL_PKGS covers extra tools not in tool_registry
     pkgs = _TOOL_PKGS.get(tool_name)
     if not pkgs:
         return None
@@ -690,10 +780,19 @@ def _get_install_command(tool_name: str) -> str | None:
             return f"sudo zypper install -y {pkg}"
         if mgr == "brew":
             return f"brew install {pkg}"
-    # Fall back to go install if available
     go_path = pkgs.get("go")
     if go_path:
         return f"go install {go_path}"
+    snap_pkg = pkgs.get("snap")
+    if snap_pkg and _shutil.which("snap"):
+        return f"sudo snap install {snap_pkg}"
+    cargo_pkg = pkgs.get("cargo")
+    if cargo_pkg and _shutil.which("cargo"):
+        return f"cargo install {cargo_pkg}"
+    pip_pkg = pkgs.get("pip")
+    if pip_pkg:
+        pip_bin = _shutil.which("pip3") or _shutil.which("pip") or "pip3"
+        return f"{pip_bin} install {pip_pkg}"
     return None
 
 
@@ -717,3 +816,116 @@ async def websocket_install(websocket: WebSocket, tool_name: str):
             await websocket.send_json({"type": "error", "data": str(e)})
         except Exception:
             pass
+
+
+# ── Presence / multi-user awareness ──────────────────────────────────────────
+#
+# Clients connect to /ws/presence/{project_id}?user=<display_name>
+# On connect: announces join to all peers in the project room.
+# On disconnect: announces leave.
+# Heartbeat ping every 20s keeps the connection alive through proxies.
+# Each message received from clients is re-broadcast as-is to all peers
+# (supports "cursor" or "typing" events from the frontend).
+
+# Map of project_id → {client_id: {"ws": WebSocket, "user": str, "page": str}}
+_presence_rooms: dict[str, dict[str, dict]] = {}
+
+
+async def _presence_broadcast(project_id: str, event: dict, exclude: str | None = None) -> None:
+    """Broadcast a presence event to all clients in a project room."""
+    room = _presence_rooms.get(project_id, {})
+    dead: list[str] = []
+    for cid, info in room.items():
+        if cid == exclude:
+            continue
+        try:
+            await info["ws"].send_json(event)
+        except Exception:
+            dead.append(cid)
+    for cid in dead:
+        room.pop(cid, None)
+
+
+@router.websocket("/ws/presence/{project_id}")
+async def websocket_presence(websocket: WebSocket, project_id: str, user: str = "anonymous"):
+    """
+    Real-time presence channel for a project.
+
+    Query params:
+      user — display name for this session (defaults to "anonymous")
+
+    Message types sent TO client:
+      {"type": "presence_snapshot", "users": [{id, user, page}]}
+      {"type": "presence_join",     "id": str, "user": str, "page": str}
+      {"type": "presence_leave",    "id": str, "user": str}
+      {"type": "presence_update",   "id": str, "user": str, "page": str}
+      {"type": "ping"}
+
+    Message types received FROM client:
+      {"type": "page", "page": str}  — current page/section the user is on
+    """
+    await websocket.accept()
+
+    # Sanitise display name
+    user = str(user)[:64].strip() or "anonymous"
+    client_id = str(uuid.uuid4())
+
+    # Join room
+    if project_id not in _presence_rooms:
+        _presence_rooms[project_id] = {}
+    _presence_rooms[project_id][client_id] = {"ws": websocket, "user": user, "page": ""}
+
+    # Send snapshot of current users to the new joiner
+    room = _presence_rooms[project_id]
+    snapshot = [
+        {"id": cid, "user": info["user"], "page": info["page"]}
+        for cid, info in room.items()
+        if cid != client_id
+    ]
+    try:
+        await websocket.send_json({"type": "presence_snapshot", "users": snapshot})
+    except Exception:
+        _presence_rooms[project_id].pop(client_id, None)
+        return
+
+    # Announce join to other clients
+    await _presence_broadcast(project_id, {
+        "type": "presence_join",
+        "id": client_id,
+        "user": user,
+        "page": "",
+    }, exclude=client_id)
+
+    try:
+        while True:
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=25.0)
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    continue
+                if msg.get("type") == "page":
+                    new_page = str(msg.get("page", ""))[:128]
+                    if project_id in _presence_rooms and client_id in _presence_rooms[project_id]:
+                        _presence_rooms[project_id][client_id]["page"] = new_page
+                    await _presence_broadcast(project_id, {
+                        "type": "presence_update",
+                        "id": client_id,
+                        "user": user,
+                        "page": new_page,
+                    }, exclude=client_id)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        if project_id in _presence_rooms:
+            _presence_rooms[project_id].pop(client_id, None)
+            if not _presence_rooms[project_id]:
+                del _presence_rooms[project_id]
+        # Announce leave
+        await _presence_broadcast(project_id, {
+            "type": "presence_leave",
+            "id": client_id,
+            "user": user,
+        })

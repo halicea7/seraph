@@ -4,6 +4,7 @@ Maps findings (CVEs, service versions, port/service patterns) to Metasploit modu
 No LLM required.
 """
 from __future__ import annotations
+import re
 from dataclasses import dataclass, field
 
 
@@ -26,7 +27,7 @@ CVE_MAP: dict[str, dict] = {
     # vsftpd 2.3.4 backdoor
     "CVE-2011-2523": {
         "module": "exploit/unix/ftp/vsftpd_234_backdoor",
-        "payload": "cmd/unix/bind_netcat",
+        "payload": "",
         "options": {"RPORT": "21"},
         "description": "vsftpd 2.3.4 contains a backdoor introduced via a compromised source tarball. Connecting to port 21 with a smiley-face username triggers a root shell on port 6200.",
         "confidence": "high",
@@ -81,7 +82,7 @@ CVE_MAP: dict[str, dict] = {
     "CVE-2011-3556": {
         "module": "exploit/multi/misc/java_rmi_server",
         "payload": "java/meterpreter/reverse_tcp",
-        "options": {"RPORT": "1099"},
+        "options": {"RPORT": "1099", "SRVPORT": "35567"},
         "description": "Java RMI Server insecure deserialization allows remote code execution.",
         "confidence": "high",
         "post": [],
@@ -149,7 +150,7 @@ SERVICE_MAP: list[dict] = [
         "keywords": ["vsftpd 2.3.4", "vsftpd_234", "vsftpd234"],
         "ports": {21},
         "module": "exploit/unix/ftp/vsftpd_234_backdoor",
-        "payload": "cmd/unix/bind_netcat",
+        "payload": "",
         "options": {"RPORT": "21"},
         "description": "vsftpd 2.3.4 backdoor detected by version string.",
         "confidence": "high",
@@ -319,6 +320,29 @@ PORT_FALLBACK: dict[int, dict] = {
 }
 
 
+_SS_TITLE_RE = re.compile(r"(\d+)\s+exploit\(s\)\s+found\s+for\s+(.+)", re.IGNORECASE)
+_CVE_RE = re.compile(r"CVE-\d{4}-\d+", re.IGNORECASE)
+
+
+def _parse_searchsploit_findings(findings) -> list[dict]:
+    """Extract service name and embedded CVEs from searchsploit-generated findings."""
+    results = []
+    for f in findings:
+        m = _SS_TITLE_RE.search(f.title or "")
+        if not m:
+            continue
+        edb_count = int(m.group(1))
+        service = m.group(2).strip()
+        cves = {c.upper() for c in _CVE_RE.findall(f.evidence or "")}
+        results.append({
+            "finding": f,
+            "service": service,
+            "cves": cves,
+            "edb_count": edb_count,
+        })
+    return results
+
+
 def _normalise(text: str) -> str:
     return text.lower().replace("-", " ").replace("_", " ")
 
@@ -377,6 +401,43 @@ def plan(targets, findings, lhost: str = "") -> dict:
                 "match_reason": f"CVE match: {cve}",
                 "post_modules": entry.get("post", []),
             }, f.title, f.severity)
+
+    # 1b. Searchsploit findings — mine CVEs from evidence and match service keywords
+    for ss in _parse_searchsploit_findings(findings):
+        f = ss["finding"]
+        reason_suffix = f"Exploit-DB: {ss['edb_count']} public exploit(s) for {ss['service']}"
+
+        # CVEs embedded in exploit titles → CVE_MAP (high confidence)
+        for cve in ss["cves"]:
+            if cve not in CVE_MAP:
+                continue
+            entry = CVE_MAP[cve]
+            _add({
+                "module": entry["module"],
+                "payload": entry["payload"],
+                "options": entry["options"],
+                "description": entry["description"],
+                "confidence": "high",
+                "match_reason": f"{cve} confirmed by {reason_suffix}",
+                "post_modules": entry.get("post", []),
+            }, f.title, f.severity)
+
+        # Service name → SERVICE_MAP keyword match (medium confidence)
+        service_norm = _normalise(ss["service"])
+        for rule in SERVICE_MAP:
+            if rule["module"] in seen_modules:
+                continue
+            if any(kw in service_norm for kw in rule["keywords"]):
+                opts = rule["options"].copy()
+                _add({
+                    "module": rule["module"],
+                    "payload": rule["payload"],
+                    "options": opts,
+                    "description": rule["description"],
+                    "confidence": "medium",
+                    "match_reason": reason_suffix,
+                    "post_modules": rule.get("post", []),
+                }, f.title, f.severity)
 
     # 2. Keyword matches from finding title/description
     for f in findings:

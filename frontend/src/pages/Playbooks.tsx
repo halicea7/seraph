@@ -169,6 +169,9 @@ export default function Playbooks() {
   const [saving, setSaving] = useState(false)
   const [editingPlaybookId, setEditingPlaybookId] = useState<string | null>(null)
   const [builderError, setBuilderError] = useState('')
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+  const [showFlowPreview, setShowFlowPreview] = useState(false)
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const runGroups = useMemo(() => buildGroups(steps), [steps])
@@ -388,6 +391,34 @@ export default function Playbooks() {
 
   function updateStep(i: number, patch: Partial<BuilderStep>) {
     setBuilderSteps(prev => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s))
+  }
+
+  function handleDragStart(i: number) {
+    setDragIdx(i)
+  }
+
+  function handleDragOver(e: React.DragEvent, i: number) {
+    e.preventDefault()
+    setDragOverIdx(i)
+  }
+
+  function handleDrop(e: React.DragEvent, targetIdx: number) {
+    e.preventDefault()
+    if (dragIdx === null || dragIdx === targetIdx) {
+      setDragIdx(null); setDragOverIdx(null); return
+    }
+    setBuilderSteps(prev => {
+      const next = [...prev]
+      const [moved] = next.splice(dragIdx, 1)
+      next.splice(targetIdx, 0, moved)
+      return next
+    })
+    if (editingIdx === dragIdx) setEditingIdx(targetIdx)
+    setDragIdx(null); setDragOverIdx(null)
+  }
+
+  function handleDragEnd() {
+    setDragIdx(null); setDragOverIdx(null)
   }
 
   function toApiStep(s: BuilderStep) {
@@ -808,9 +839,19 @@ export default function Playbooks() {
                 <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   Steps ({builderSteps.length})
                 </span>
-                <span className="text-[10px] text-slate-500">
-                  Parallel steps run simultaneously within their group
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-600">Drag to reorder</span>
+                  <button
+                    onClick={() => setShowFlowPreview(p => !p)}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                      showFlowPreview
+                        ? 'text-cyan-400 border-cyan-500/40 bg-cyan-500/10'
+                        : 'text-slate-500 border-slate-700/40 hover:text-slate-300'
+                    }`}
+                  >
+                    {showFlowPreview ? 'Hide' : 'Flow'} preview
+                  </button>
+                </div>
               </div>
 
               {builderSteps.length === 0 && (
@@ -839,11 +880,20 @@ export default function Playbooks() {
                         return (
                           <div
                             key={si}
+                            draggable
+                            onDragStart={() => handleDragStart(si)}
+                            onDragOver={e => handleDragOver(e, si)}
+                            onDrop={e => handleDrop(e, si)}
+                            onDragEnd={handleDragEnd}
                             onClick={() => setEditingIdx(si)}
-                            className={`rounded-lg border px-3 py-2.5 cursor-pointer transition-all ${
-                              isEditing
-                                ? 'border-cyan-500/50 bg-cyan-500/5'
-                                : 'border-cyan-900/20 hover:border-cyan-900/40'
+                            className={`rounded-lg border px-3 py-2.5 cursor-grab active:cursor-grabbing transition-all ${
+                              dragOverIdx === si && dragIdx !== si
+                                ? 'border-cyan-500/70 bg-cyan-500/10 scale-[1.01]'
+                                : dragIdx === si
+                                  ? 'opacity-40 border-dashed border-slate-600'
+                                  : isEditing
+                                    ? 'border-cyan-500/50 bg-cyan-500/5'
+                                    : 'border-cyan-900/20 hover:border-cyan-900/40'
                             }`}
                           >
                             <div className="flex items-center gap-2">
@@ -916,6 +966,56 @@ export default function Playbooks() {
               >
                 <Plus size={13} /> Add Step
               </button>
+
+              {/* Flow diagram preview */}
+              {showFlowPreview && builderSteps.length > 0 && (
+                <div className="mt-3 rounded-lg border border-slate-800 p-4 space-y-1" style={{ background: '#060b14' }}>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Execution flow</div>
+                  {builderGroups.map((group, gi) => (
+                    <div key={gi} className="space-y-1">
+                      {/* Connector arrow between groups */}
+                      {gi > 0 && (
+                        <div className="flex justify-center py-0.5">
+                          <div className="flex flex-col items-center gap-0">
+                            <div className="w-px h-3 bg-slate-700" />
+                            <div className="w-0 h-0" style={{ borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderTop: '5px solid #334155' }} />
+                          </div>
+                        </div>
+                      )}
+                      {/* Group: parallel steps side-by-side, sequential single */}
+                      <div className={`flex gap-2 ${group.length > 1 ? 'border border-purple-500/20 rounded-lg p-2 bg-purple-500/5' : ''}`}>
+                        {group.length > 1 && (
+                          <div className="flex items-center pr-1">
+                            <span className="text-[9px] text-purple-400 font-mono rotate-[-90deg] whitespace-nowrap" style={{ writingMode: 'vertical-rl' }}>∥ parallel</span>
+                          </div>
+                        )}
+                        {group.map((si, i) => {
+                          const s = builderSteps[si]
+                          return (
+                            <div key={si} className="flex items-center gap-1 flex-1 min-w-0">
+                              {i > 0 && <div className="w-4 h-px bg-purple-500/40 flex-shrink-0" />}
+                              <div
+                                className={`flex-1 min-w-0 rounded border px-2 py-1.5 text-center cursor-pointer transition-colors ${
+                                  editingIdx === si
+                                    ? 'border-cyan-500/60 bg-cyan-500/10'
+                                    : 'border-slate-700/60 hover:border-slate-600'
+                                }`}
+                                onClick={() => setEditingIdx(si)}
+                                style={{ background: editingIdx === si ? undefined : '#0a1020' }}
+                              >
+                                <div className="text-[10px] font-semibold text-slate-300 truncate">{s.name || `Step ${si + 1}`}</div>
+                                {s.conditional && (
+                                  <div className="text-[8px] text-amber-400">◆ cond.</div>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Step editor */}

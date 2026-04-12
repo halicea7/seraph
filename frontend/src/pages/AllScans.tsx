@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft, Zap, Search, GitCompare, X, Plus, Minus, Equal,
-  Terminal as TerminalIcon, Loader, Cpu,
+  Terminal as TerminalIcon, Loader, Cpu, Trash2, Ban,
 } from 'lucide-react'
 
 interface ScanRow {
@@ -43,17 +43,19 @@ interface DiffResult {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  completed: '#22c55e',
-  running:   '#3b82f6',
-  pending:   '#64748b',
-  failed:    '#ef4444',
+  completed:  '#22c55e',
+  running:    '#3b82f6',
+  pending:    '#64748b',
+  failed:     '#ef4444',
+  cancelled:  '#f59e0b',
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  completed: 'bg-green-500/15 text-green-400 border border-green-500/30',
-  running:   'bg-blue-500/15 text-blue-400 border border-blue-500/30',
-  pending:   'bg-slate-500/15 text-slate-400 border border-slate-500/20',
-  failed:    'bg-red-500/15 text-red-400 border border-red-500/30',
+  completed:  'bg-green-500/15 text-green-400 border border-green-500/30',
+  running:    'bg-blue-500/15 text-blue-400 border border-blue-500/30',
+  pending:    'bg-slate-500/15 text-slate-400 border border-slate-500/20',
+  failed:     'bg-red-500/15 text-red-400 border border-red-500/30',
+  cancelled:  'bg-amber-500/15 text-amber-400 border border-amber-500/30',
 }
 
 const SEV_COLOR: Record<string, string> = {
@@ -83,6 +85,8 @@ export default function AllScans() {
   const [drawerLoading, setDrawerLoading] = useState(false)
   const [parseLoading, setParseLoading] = useState(false)
   const [parseMsg, setParseMsg] = useState('')
+  const [cancelLoading, setCancelLoading] = useState(false)
+  const [deleteLoading, setDeleteLoading] = useState(false)
 
   function updateFilter(status: string, q: string) {
     const params: Record<string, string> = {}
@@ -137,6 +141,32 @@ export default function AllScans() {
       .then(d => setParseMsg(`${d.parsed ?? 0} findings parsed`))
       .catch(() => setParseMsg('Parse failed'))
       .finally(() => setParseLoading(false))
+  }
+
+  async function cancelScan(scanId: string) {
+    setCancelLoading(true)
+    try {
+      const res = await fetch(`/api/v1/scans/${scanId}/cancel`, { method: 'POST' })
+      if (res.ok) {
+        setScans(prev => prev.map(s => s.id === scanId ? { ...s, status: 'cancelled' } : s))
+        setDrawerScan(prev => prev?.id === scanId ? { ...prev, status: 'cancelled' } : prev)
+      }
+    } finally {
+      setCancelLoading(false)
+    }
+  }
+
+  async function deleteScan(scanId: string) {
+    setDeleteLoading(true)
+    try {
+      const res = await fetch(`/api/v1/scans/${scanId}`, { method: 'DELETE' })
+      if (res.ok) {
+        setScans(prev => prev.filter(s => s.id !== scanId))
+        setDrawerScan(null)
+      }
+    } finally {
+      setDeleteLoading(false)
+    }
   }
 
   function openDrawer(scan: ScanRow) {
@@ -369,6 +399,26 @@ export default function AllScans() {
                 </button>
               )}
               {parseMsg && <span className="text-xs text-green-400">{parseMsg}</span>}
+              {(drawerScan.status === 'running' || drawerScan.status === 'pending') && (
+                <button
+                  onClick={() => cancelScan(drawerScan.id)}
+                  disabled={cancelLoading}
+                  title="Cancel this scan"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-amber-600/15 text-amber-400 border border-amber-600/25 hover:bg-amber-600/25 transition-colors disabled:opacity-50"
+                >
+                  {cancelLoading ? <Loader size={11} className="animate-spin" /> : <Ban size={11} />}
+                  {cancelLoading ? 'Cancelling…' : 'Cancel'}
+                </button>
+              )}
+              <button
+                onClick={() => deleteScan(drawerScan.id)}
+                disabled={deleteLoading}
+                title="Delete this scan and all its findings"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-red-600/15 text-red-400 border border-red-600/25 hover:bg-red-600/25 transition-colors disabled:opacity-50"
+              >
+                {deleteLoading ? <Loader size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                {deleteLoading ? 'Deleting…' : 'Delete'}
+              </button>
               <button onClick={() => setDrawerScan(null)} className="text-slate-500 hover:text-slate-200 transition-colors">
                 <X size={16} />
               </button>
