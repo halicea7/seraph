@@ -26,18 +26,18 @@ export default defineConfig({
       : undefined,
     proxy: {
       '/api': {
-        target: `${backendProto}://localhost:8000`,
+        target: `${backendProto}://localhost:8002`,
         changeOrigin: true,
         secure: false,
       },
       '/ws': {
-        target: `${wsProto}://localhost:8000`,
+        target: `${wsProto}://localhost:8002`,
         ws: true,
         changeOrigin: true,
         secure: false,
       },
       '/a': {
-        target: `${backendProto}://localhost:8000`,
+        target: `${backendProto}://localhost:8002`,
         changeOrigin: true,
         secure: false,
       },

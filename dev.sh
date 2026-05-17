@@ -65,7 +65,7 @@ if [ "$USE_HTTPS" = true ]; then
     PROTO="https"
     echo -e "  ${GREEN}[https] Certificates found — TLS enabled${RESET}"
 fi
-echo -e "  ${CYAN}Backend${RESET}  →  ${PROTO}://localhost:8000"
+echo -e "  ${CYAN}Backend${RESET}  →  ${PROTO}://localhost:8002"
 echo -e "  ${GREEN}Frontend${RESET} →  ${PROTO}://localhost:22123"
 echo ""
 
@@ -183,7 +183,7 @@ cleanup() {
     fi
 
     # Release ports in case anything is still holding them
-    fuser -k 8000/tcp 2>/dev/null || true
+    fuser -k 8002/tcp 2>/dev/null || true
     fuser -k 22123/tcp 2>/dev/null || true
 
     echo -e "${GREEN}[dev] Done.${RESET}"
@@ -197,14 +197,14 @@ trap cleanup EXIT INT TERM
     if [ "$USE_HTTPS" = true ]; then
         SSL_ARGS="--ssl-keyfile $KEY_FILE --ssl-certfile $CERT_FILE"
     fi
-    python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 $SSL_ARGS 2>&1 | prefix "backend" "$CYAN"
+    python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8002 $SSL_ARGS 2>&1 | prefix "backend" "$CYAN"
 ) &
 BACKEND_PID=$!
 
 # Wait for backend to be ready before starting frontend
 echo -e "${CYAN}[dev] Waiting for backend...${RESET}"
 for i in $(seq 1 30); do
-    if curl -sf -k "${PROTO}://127.0.0.1:8000/api/v1/auth/setup-required" > /dev/null 2>&1; then
+    if curl -sf -k "${PROTO}://127.0.0.1:8002/api/v1/auth/setup-required" > /dev/null 2>&1; then
         echo -e "${GREEN}[dev] Backend ready${RESET}"
         break
     fi
