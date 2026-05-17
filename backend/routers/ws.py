@@ -18,6 +18,27 @@ from services.scope_service import check_scope
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
 
+# ── Operator command audit log ────────────────────────────────────────────────
+_CMD_LOG_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'operator_commands.log')
+os.makedirs(os.path.dirname(_CMD_LOG_PATH), exist_ok=True)
+_cmd_log = logging.getLogger('seraph.operator_commands')
+if not _cmd_log.handlers:
+    _fh = logging.FileHandler(_CMD_LOG_PATH)
+    _fh.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+    _cmd_log.addHandler(_fh)
+    _cmd_log.setLevel(logging.DEBUG)
+    _cmd_log.propagate = False
+
+
+def _log_command(scan_id: str, raw_script: str) -> None:
+    has_sudo = raw_script.lstrip().startswith('sudo ')
+    _cmd_log.info(
+        '[scan=%s] sudo=%s | %s',
+        scan_id,
+        has_sudo,
+        raw_script[:300].replace('\n', ' '),
+    )
+
 # ── Global event broadcast ────────────────────────────────────────────────────
 
 _event_clients: set[asyncio.Queue] = set()
@@ -137,6 +158,8 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
             await websocket.send_json({"type": "error", "data": "No script provided"})
             await websocket.close()
             return
+
+        _log_command(scan_id, script_content)
 
         # Determine whether this scan uses SSH remote execution
         config = {}
