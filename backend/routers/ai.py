@@ -252,6 +252,25 @@ Based strictly on the findings above, describe realistic attack paths an adversa
         raise HTTPException(503, str(exc))
 
 
+class ChatRequest(BaseModel):
+    messages: list[dict]
+    model: Optional[str] = None
+
+
+@router.post("/chat")
+def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
+    """Generic LLM chat — used by the AI Operator for arbitrary message sequences."""
+    endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
+    model = req.model or _get(db, "ai_model", DEFAULT_MODEL)
+    if not model:
+        raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
+    try:
+        content = chat_complete(endpoint, model, req.messages, **load_llm_params(db))
+        return {"content": content}
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+
+
 @router.get("/narrate/{project_id}")
 def get_saved_narratives(project_id: str, db: Session = Depends(get_db)):
     """Return previously saved narratives for a project."""
