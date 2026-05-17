@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from database import get_db, AppSetting, Project, Target, Scan, Finding
-from services.ai_client import fetch_models, chat_complete, load_llm_params
+from services.ai_client import fetch_models, fetch_tool_capable_models, chat_complete, load_llm_params
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -104,6 +104,17 @@ def list_models(db: Session = Depends(get_db)):
     endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
     try:
         models = fetch_models(endpoint)
+        return {"models": models}
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+
+
+@router.get("/tool-models")
+def list_tool_capable_models(db: Session = Depends(get_db)):
+    """Return only models that support tool/function calling."""
+    endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
+    try:
+        models = fetch_tool_capable_models(endpoint)
         return {"models": models}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))

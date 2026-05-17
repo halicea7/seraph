@@ -51,6 +51,42 @@ def fetch_models(endpoint: str) -> list[str]:
         raise RuntimeError(f"Cannot reach LLM at {endpoint}: {exc}") from exc
 
 
+def fetch_tool_capable_models(endpoint: str) -> list[str]:
+    """Return only model IDs whose Ollama capabilities include 'tools'.
+
+    Uses /api/tags to list models then /api/show per model.
+    Falls back to returning all models if the endpoint is not Ollama-native.
+    """
+    base = _base(endpoint)
+    tags_url = f"{base}/api/tags"
+    try:
+        with urllib.request.urlopen(tags_url, timeout=5) as resp:
+            data = json.loads(resp.read())
+            all_models: list[str] = [m["name"] for m in data.get("models", [])]
+    except Exception:
+        # Not a native Ollama endpoint — fall back to /v1/models with no filtering
+        return fetch_models(endpoint)
+
+    capable: list[str] = []
+    for name in all_models:
+        try:
+            payload = json.dumps({"name": name}).encode()
+            req = urllib.request.Request(
+                f"{base}/api/show",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                info = json.loads(resp.read())
+                caps: list[str] = info.get("capabilities", [])
+                if "tools" in caps:
+                    capable.append(name)
+        except Exception:
+            pass
+    return capable
+
+
 def chat_complete(
     endpoint: str,
     model: str,
