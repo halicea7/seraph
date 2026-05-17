@@ -18,6 +18,13 @@ from services.auth_service import (
     validate_password_strength,
     TOKEN_EXPIRE_HOURS,
 )
+from services.api_tokens import (
+    generate_token,
+    create_token_record,
+    list_tokens,
+    revoke_token,
+    validate_token,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -77,16 +84,22 @@ def get_current_user(
 ) -> User:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Try JWT first
     payload = decode_token(token)
-    if not payload:
+    if payload:
+        jti = payload.get("jti")
+        if jti and _is_revoked(jti, db):
+            raise HTTPException(status_code=401, detail="Token has been revoked")
+        user = db.query(User).filter(User.id == payload.get("sub")).first()
+        if not user or not user.is_active:
+            raise HTTPException(status_code=401, detail="User not found or inactive")
+        return user
+
+    # Fall back to API token (srph_...)
+    user = validate_token(token, db)
+    if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    # Reject revoked tokens (explicit logout or admin invalidation)
-    jti = payload.get("jti")
-    if jti and _is_revoked(jti, db):
-        raise HTTPException(status_code=401, detail="Token has been revoked")
-    user = db.query(User).filter(User.id == payload.get("sub")).first()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
     return user
 
 
@@ -291,3 +304,52 @@ def delete_user(
     db.delete(user)
     db.commit()
     return {"deleted": user_id}
+
+
+# ── API Tokens (for Chronos / non-browser clients) ────────────────────────────
+
+class CreateTokenRequest(BaseModel):
+    name: str
+
+
+def _token_dict(t) -> dict:
+    return {
+        "id": t.id,
+        "name": t.name,
+        "prefix": t.prefix,
+        "created_at": str(t.created_at),
+        "last_used_at": str(t.last_used_at) if t.last_used_at else None,
+    }
+
+
+@router.post("/tokens", status_code=201)
+def create_api_token(
+    req: CreateTokenRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Token name is required")
+    plaintext, token_hash, prefix = generate_token()
+    record = create_token_record(current_user.id, name, token_hash, prefix, db)
+    return {**_token_dict(record), "token": plaintext}
+
+
+@router.get("/tokens")
+def get_api_tokens(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return [_token_dict(t) for t in list_tokens(current_user.id, db)]
+
+
+@router.delete("/tokens/{token_id}")
+def delete_api_token(
+    token_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not revoke_token(token_id, current_user.id, db):
+        raise HTTPException(404, "Token not found")
+    return {"deleted": token_id}

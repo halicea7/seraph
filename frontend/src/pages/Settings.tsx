@@ -424,6 +424,14 @@ export default function Settings() {
   const [passkeyError, setPasskeyError] = useState('')
   const [newPasskeyName, setNewPasskeyName] = useState('iCloud Keychain')
 
+  // API Token state
+  interface ApiTokenRow { id: string; name: string; prefix: string; created_at: string; last_used_at: string | null }
+  const [apiTokens, setApiTokens] = useState<ApiTokenRow[]>([])
+  const [newTokenName, setNewTokenName] = useState('')
+  const [tokenGenerating, setTokenGenerating] = useState(false)
+  const [revealedToken, setRevealedToken] = useState<string | null>(null)
+  const [tokenCopied, setTokenCopied] = useState(false)
+
   // Webhook state
   interface WebhookRow { id: string; name: string; url: string; events: string[]; active: boolean; created_at: string }
   const [webhooks, setWebhooks] = useState<WebhookRow[]>([])
@@ -450,6 +458,7 @@ export default function Settings() {
     loadAiConfig()
     loadProbeConfig()
     loadPasskeys()
+    loadApiTokens()
     loadWebhooks()
     if (currentUser?.role === 'admin') {
       loadUsers()
@@ -462,6 +471,48 @@ export default function Settings() {
       const res = await fetch('/api/v1/passkeys/', { headers: { Authorization: `Bearer ${authToken}` } })
       if (res.ok) setPasskeys(await res.json())
     } catch { /* ignore */ }
+  }
+
+  async function loadApiTokens() {
+    try {
+      const res = await fetch('/api/v1/auth/tokens', { headers: { Authorization: `Bearer ${authToken}` } })
+      if (res.ok) setApiTokens(await res.json())
+    } catch { /* ignore */ }
+  }
+
+  async function handleGenerateToken() {
+    if (!newTokenName.trim()) return
+    setTokenGenerating(true)
+    setRevealedToken(null)
+    try {
+      const res = await fetch('/api/v1/auth/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ name: newTokenName.trim() }),
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      setRevealedToken(data.token)
+      setNewTokenName('')
+      await loadApiTokens()
+    } finally {
+      setTokenGenerating(false)
+    }
+  }
+
+  async function handleRevokeToken(id: string) {
+    await fetch(`/api/v1/auth/tokens/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+    setApiTokens(prev => prev.filter(t => t.id !== id))
+  }
+
+  function handleCopyToken() {
+    if (!revealedToken) return
+    navigator.clipboard.writeText(revealedToken)
+    setTokenCopied(true)
+    setTimeout(() => setTokenCopied(false), 2000)
   }
 
   async function handleRegisterPasskey() {
@@ -1480,6 +1531,92 @@ export default function Settings() {
                 {passkeys.length > 0 ? 'Add Another Passkey' : 'Register Passkey'}
               </button>
             </div>
+          </div>
+
+          {/* API Tokens */}
+          <div className="glass rounded-xl p-5 space-y-4">
+            <div className="flex items-center gap-2 text-slate-300">
+              <KeyRound size={15} className="text-cyan-400" />
+              <h3 className="text-sm font-semibold">API Tokens</h3>
+              <span className="ml-auto text-xs text-slate-500">For Chronos and other clients</span>
+            </div>
+
+            {/* Revealed token — shown once after generation */}
+            {revealedToken && (
+              <div className="rounded-lg p-3 space-y-2 border border-amber-700/40" style={{ background: 'rgba(120,53,15,0.2)' }}>
+                <p className="text-xs text-amber-400 font-medium">Copy this token now — it won't be shown again.</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-xs text-slate-200 font-mono break-all select-all">{revealedToken}</code>
+                  <button
+                    onClick={handleCopyToken}
+                    className="shrink-0 p-1.5 rounded text-slate-400 hover:text-cyan-400 transition-colors"
+                    title="Copy"
+                  >
+                    {tokenCopied ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
+                  </button>
+                  <button
+                    onClick={() => setRevealedToken(null)}
+                    className="shrink-0 p-1.5 rounded text-slate-400 hover:text-slate-200 transition-colors"
+                    title="Dismiss"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Existing tokens */}
+            {apiTokens.length > 0 && (
+              <div className="space-y-2">
+                {apiTokens.map(t => (
+                  <div key={t.id} className="flex items-center gap-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-slate-200 font-medium truncate">{t.name}</p>
+                      <p className="text-xs text-slate-500 font-mono">
+                        srph_{t.prefix}…
+                        {t.last_used_at
+                          ? <span className="ml-2 not-italic">last used {new Date(t.last_used_at).toLocaleDateString()}</span>
+                          : <span className="ml-2 not-italic">never used</span>
+                        }
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleRevokeToken(t.id)}
+                      className="shrink-0 text-slate-600 hover:text-red-400 transition-colors"
+                      title="Revoke token"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Generate new token */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newTokenName}
+                onChange={e => setNewTokenName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleGenerateToken()}
+                placeholder='Token name (e.g. "Chronos — Laptop")'
+                className="flex-1 rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none"
+                style={{ background: '#090d14' }}
+              />
+              <button
+                onClick={handleGenerateToken}
+                disabled={tokenGenerating || !newTokenName.trim()}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40 transition-all"
+                style={{ background: 'linear-gradient(135deg,#0891b2,#0e7490)', boxShadow: '0 0 12px rgba(6,182,212,0.2)' }}
+              >
+                {tokenGenerating ? <Loader size={13} className="animate-spin" /> : <KeyRound size={13} />}
+                Generate
+              </button>
+            </div>
+
+            {apiTokens.length === 0 && !revealedToken && (
+              <p className="text-xs text-slate-600 text-center">No tokens yet. Generate one to connect Chronos.</p>
+            )}
           </div>
 
           {/* User management (admin only) */}

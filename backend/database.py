@@ -435,6 +435,18 @@ class RevokedToken(Base):
     expires_at = Column(DateTime, nullable=False)    # used for periodic cleanup
 
 
+class ApiToken(Base):
+    """Long-lived API tokens for non-browser clients (e.g. Chronos)."""
+    __tablename__ = "api_tokens"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, nullable=False)            # user-supplied label e.g. "Chronos — Alex"
+    token_hash = Column(String, unique=True, nullable=False)   # SHA-256 of plaintext
+    prefix = Column(String, nullable=False)          # first 8 chars after "srph_" for display
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+
 class HardeningReport(Base):
     __tablename__ = "hardening_reports"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -520,7 +532,7 @@ def _migrate():
         "ALTER TABLE findings ADD COLUMN exploit_chain_json TEXT",
         "ALTER TABLE findings ADD COLUMN fp_reason TEXT",
         "ALTER TABLE webhook_configs ADD COLUMN secret VARCHAR",
-        # webhook_deliveries and fp_suppression_rules created by create_all
+        # webhook_deliveries, fp_suppression_rules, api_tokens created by create_all
     ]
     with engine.connect() as conn:
         for sql in migrations:

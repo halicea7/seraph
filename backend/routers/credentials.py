@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
-from database import Credential, get_db
+from database import Credential, User, get_db
+from routers.auth import get_current_user
 from services.validators import (
     VALID_CRED_SOURCES,
     VALID_CRED_TYPES,
@@ -45,7 +46,11 @@ class CredentialCreate(BaseModel):
 
 
 @router.get("")
-def list_credentials(project_id: str, db: Session = Depends(get_db)):
+def list_credentials(
+    project_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     return (
         db.query(Credential)
         .filter(Credential.project_id == project_id)
@@ -55,7 +60,11 @@ def list_credentials(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("", status_code=201)
-def create_credential(req: CredentialCreate, db: Session = Depends(get_db)):
+def create_credential(
+    req: CredentialCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     cred = Credential(**req.model_dump())
     db.add(cred)
     db.commit()
@@ -64,7 +73,11 @@ def create_credential(req: CredentialCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/keys")
-def list_key_credentials(project_id: str, db: Session = Depends(get_db)):
+def list_key_credentials(
+    project_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     """Return SSH key credentials for a project — secret field omitted."""
     creds = (
         db.query(Credential)
@@ -85,7 +98,11 @@ def list_key_credentials(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/{cred_id}", status_code=204)
-def delete_credential(cred_id: str, db: Session = Depends(get_db)):
+def delete_credential(
+    cred_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     cred = db.query(Credential).filter(Credential.id == cred_id).first()
     if not cred:
         raise HTTPException(404, "Credential not found")

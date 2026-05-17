@@ -84,7 +84,10 @@ app = FastAPI(
 
 # CORS — restrict to the same origins trusted by WebAuthn (SERAPH_RP_ORIGINS).
 # Defaults cover both the Vite dev server (:22123) and the production port (:8000).
+# Add SERAPH_EXTRA_CORS_ORIGINS="null" to allow Electron/Chronos (Origin: null).
 _cors_origins = [o.strip() for o in settings.rp_origins.split(",") if o.strip()]
+if settings.extra_cors_origins:
+    _cors_origins += [o.strip() for o in settings.extra_cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,

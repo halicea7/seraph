@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # localhost variants so both the dev server (22123) and production (8000) work.
     rp_id: str = "localhost"
     rp_origins: str = "http://localhost:8000,https://localhost:8000,http://localhost:22123,https://localhost:22123"
+    # Extra CORS origins beyond rp_origins — comma-separated.
+    # Add "null" here to allow Electron/Chronos requests (Origin: null).
+    extra_cors_origins: str = ""
     tools: list[str] = [
         "nmap",
         "nikto",
