@@ -4,7 +4,7 @@
 #   • apt  : nmap, masscan, hydra, sqlmap, john, hashcat, lynis, openscap,
 #             whois, dig, samba/ldap (enum4linux deps)
 #   • bin  : testssl.sh, gobuster, ffuf, subfinder, nuclei, feroxbuster,
-#             kerbrute, amass, rustscan
+#             kerbrute, rustscan
 #   • pipx : theHarvester, netexec (nxc), wafw00f
 #   • pip  : impacket (GetUserSPNs, GetNPUsers, secretsdump, psexec, wmiexec),
 #             awscli
@@ -113,18 +113,7 @@ RUN set -e; \
          -o /usr/local/bin/kerbrute; \
     chmod +x /usr/local/bin/kerbrute
 
-# ── 9. amass ─────────────────────────────────────────────────────────────────
-RUN set -e; \
-    VER=$(curl -fsSL https://api.github.com/repos/owasp-amass/amass/releases/latest \
-          | grep '"tag_name"' | cut -d'"' -f4); \
-    curl -fsSL "https://github.com/owasp-amass/amass/releases/download/${VER}/amass_Linux_amd64.zip" \
-         -o /tmp/amass.zip; \
-    unzip -j /tmp/amass.zip "amass_Linux_amd64/amass" -d /usr/local/bin || \
-    unzip -j /tmp/amass.zip "*/amass" -d /usr/local/bin; \
-    chmod +x /usr/local/bin/amass; \
-    rm /tmp/amass.zip
-
-# ── 10. rustscan ─────────────────────────────────────────────────────────────
+# ── 9. rustscan ──────────────────────────────────────────────────────────────
 RUN set -e; \
     VER=$(curl -fsSL https://api.github.com/repos/RustScan/RustScan/releases/latest \
           | grep '"tag_name"' | cut -d'"' -f4); \
