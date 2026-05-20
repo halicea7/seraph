@@ -109,22 +109,22 @@ else
     -d '{"name":"Demo Lab — Live Targets","description":"Vulnerable Docker containers running alongside Seraph. Use these as scan targets to test Seraph capabilities live."}' \
     | jq -r '.id')
 
-  # DVWA — reachable as 'dvwa' on the shared Docker network from inside the backend container
+  # DVWA — 10.13.37.10
   curl -sf -X POST "$API/projects/$PROJECT_ID/targets" \
     "${AUTH[@]}" \
-    -d '{"hostname_or_ip":"dvwa","target_type":"web_app","ports":"80","notes":"Damn Vulnerable Web App — browse at http://localhost:8888 (admin/password)"}' \
+    -d '{"hostname_or_ip":"10.13.37.10","target_type":"web_app","ports":"80","notes":"Damn Vulnerable Web App — browse at http://localhost:8888 (admin/password)"}' \
     >/dev/null
 
-  # Juice Shop
+  # Juice Shop — 10.13.37.20
   curl -sf -X POST "$API/projects/$PROJECT_ID/targets" \
     "${AUTH[@]}" \
-    -d '{"hostname_or_ip":"juiceshop","target_type":"web_app","ports":"3000","notes":"OWASP Juice Shop — browse at http://localhost:3001"}' \
+    -d '{"hostname_or_ip":"10.13.37.20","target_type":"web_app","ports":"3000","notes":"OWASP Juice Shop — browse at http://localhost:3001"}' \
     >/dev/null
 
-  # Metasploitable 2 — internal only, no host port exposure
+  # Metasploitable 2 — 10.13.37.100 (internal only, no host port exposure)
   curl -sf -X POST "$API/projects/$PROJECT_ID/targets" \
     "${AUTH[@]}" \
-    -d '{"hostname_or_ip":"metasploitable","target_type":"linux_host","ports":"21,22,23,25,80,139,445,3306,5432,8180","notes":"Metasploitable 2 — internal Docker network only (msfadmin/msfadmin)"}' \
+    -d '{"hostname_or_ip":"10.13.37.100","target_type":"linux_host","ports":"21,22,23,25,80,139,445,3306,5432,8180","notes":"Metasploitable 2 — internal network only (msfadmin/msfadmin)"}' \
     >/dev/null
 
   ok "Live targets project created."
@@ -139,10 +139,10 @@ echo
 echo -e "  ${BOLD}Seraph${RESET}          http://localhost:5173"
 echo -e "  ${BOLD}Credentials${RESET}     ${ADMIN_USER} / ${ADMIN_PASS}"
 echo
-echo -e "  ${BOLD}Vulnerable targets${RESET}"
-echo -e "    DVWA            http://localhost:8888   (admin / password)"
-echo -e "    Juice Shop      http://localhost:3001"
-echo -e "    Metasploitable  internal only           (msfadmin / msfadmin)"
+echo -e "  ${BOLD}Vulnerable targets${RESET}  (subnet 10.13.37.0/24)"
+echo -e "    10.13.37.10     DVWA          http://localhost:8888   (admin / password)"
+echo -e "    10.13.37.20     Juice Shop    http://localhost:3001"
+echo -e "    10.13.37.100    Metasploitable  internal only         (msfadmin / msfadmin)"
 echo
 echo -e "  ${BOLD}In Seraph${RESET}"
 echo -e "    - Open the '${BOLD}Demo Lab — Live Targets${RESET}' project to scan the containers"

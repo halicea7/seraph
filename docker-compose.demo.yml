@@ -1,9 +1,14 @@
 version: '3.9'
 
 # ─── Seraph Demo Stack ───────────────────────────────────────────────────────
-# Runs the Seraph backend + frontend alongside two intentionally vulnerable
-# containers. All services share seraph_demo_net so the backend can reach
-# the vulnerable targets by hostname when running scans.
+# Runs the Seraph backend + frontend alongside intentionally vulnerable
+# containers on an isolated 10.13.37.0/24 subnet. Targets appear in Seraph
+# as real IPs so the demo feels like an actual engagement.
+#
+# IP layout:
+#   10.13.37.10   DVWA          (web app — SQLi, XSS, brute force, etc.)
+#   10.13.37.20   Juice Shop    (OWASP Top 10 challenges)
+#   10.13.37.100  Metasploitable 2  (multi-service Linux host)
 #
 #   Start:    ./demo.sh          (recommended — seeds data automatically)
 #   Manual:   docker compose -f docker-compose.demo.yml up -d --build
@@ -48,7 +53,7 @@ services:
       - seraph_demo_net
     restart: unless-stopped
 
-  # ── Damn Vulnerable Web Application ──────────────────────────────────────
+  # ── Damn Vulnerable Web Application — 10.13.37.10 ────────────────────────
   # Browse: http://localhost:8888  (admin / password)
   # Covers: SQLi, XSS, CSRF, file upload, command injection, brute force
   dvwa:
@@ -56,10 +61,11 @@ services:
     ports:
       - "8888:80"
     networks:
-      - seraph_demo_net
+      seraph_demo_net:
+        ipv4_address: 10.13.37.10
     restart: unless-stopped
 
-  # ── OWASP Juice Shop ─────────────────────────────────────────────────────
+  # ── OWASP Juice Shop — 10.13.37.20 ───────────────────────────────────────
   # Browse: http://localhost:3001
   # Covers: OWASP Top 10, broken auth, insecure deserialization, XXE
   juiceshop:
@@ -67,23 +73,27 @@ services:
     ports:
       - "3001:3000"
     networks:
-      - seraph_demo_net
+      seraph_demo_net:
+        ipv4_address: 10.13.37.20
     restart: unless-stopped
 
-  # ── Metasploitable 2 ─────────────────────────────────────────────────────
+  # ── Metasploitable 2 — 10.13.37.100 ──────────────────────────────────────
   # Full Linux host with dozens of deliberately vulnerable services.
-  # No ports are exposed to the host — reachable only from within the
-  # seraph_demo_net Docker network (i.e. from Seraph's backend when scanning).
+  # No ports exposed to the host — internal network only.
   # SSH: msfadmin / msfadmin
   metasploitable:
     image: tleemcjr/metasploitable2
     networks:
-      - seraph_demo_net
+      seraph_demo_net:
+        ipv4_address: 10.13.37.100
     restart: unless-stopped
 
 networks:
   seraph_demo_net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 10.13.37.0/24
 
 volumes:
   seraph_data:
