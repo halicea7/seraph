@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Host compliance audit
     lynis \
     # OpenSCAP (oscap binary + scanner)
-    libopenscap8 openscap-scanner \
+    libopenscap25 openscap-scanner \
     # SMB / LDAP support (required by enum4linux)
     samba-common-bin ldap-utils smbclient \
     # pipx (for theHarvester, nxc, wafw00f)
