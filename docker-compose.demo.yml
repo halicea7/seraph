@@ -1,0 +1,94 @@
+version: '3.9'
+
+# ─── Seraph Demo Stack ───────────────────────────────────────────────────────
+# Runs the Seraph backend + frontend alongside two intentionally vulnerable
+# containers. All services share seraph_demo_net so the backend can reach
+# the vulnerable targets by hostname when running scans.
+#
+#   Start:    ./demo.sh          (recommended — seeds data automatically)
+#   Manual:   docker compose -f docker-compose.demo.yml up -d --build
+#   Teardown: docker compose -f docker-compose.demo.yml down -v
+
+services:
+
+  # ── Seraph backend ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - seraph_data:/app/data
+      - seraph_results:/seraph_results
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - seraph_demo_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/projects"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Seraph frontend ───────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - seraph_demo_net
+    restart: unless-stopped
+
+  # ── Damn Vulnerable Web Application ──────────────────────────────────────
+  # Browse: http://localhost:8888  (admin / password)
+  # Covers: SQLi, XSS, CSRF, file upload, command injection, brute force
+  dvwa:
+    image: vulnerables/web-dvwa
+    ports:
+      - "8888:80"
+    networks:
+      - seraph_demo_net
+    restart: unless-stopped
+
+  # ── OWASP Juice Shop ─────────────────────────────────────────────────────
+  # Browse: http://localhost:3001
+  # Covers: OWASP Top 10, broken auth, insecure deserialization, XXE
+  juiceshop:
+    image: bkimminich/juice-shop
+    ports:
+      - "3001:3000"
+    networks:
+      - seraph_demo_net
+    restart: unless-stopped
+
+  # ── Metasploitable 2 (optional, ~1 GB — uncomment to enable) ─────────────
+  # A full Linux host with dozens of deliberately vulnerable services.
+  # SSH: msfadmin / msfadmin
+  #
+  # metasploitable:
+  #   image: tleemcjr/metasploitable2
+  #   ports:
+  #     - "2222:22"    # SSH  (msfadmin / msfadmin)
+  #     - "8021:21"    # FTP
+  #     - "8023:23"    # Telnet
+  #     - "8090:80"    # HTTP
+  #   networks:
+  #     - seraph_demo_net
+  #   restart: unless-stopped
+
+networks:
+  seraph_demo_net:
+    driver: bridge
+
+volumes:
+  seraph_data:
+  seraph_results:
