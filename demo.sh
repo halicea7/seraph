@@ -46,7 +46,7 @@ require docker
 require curl
 require jq
 
-docker info &>/dev/null           || die "Docker daemon is not running. Start Docker and retry."
+docker info &>/dev/null           || die "Cannot reach Docker daemon. If Docker is installed, your user may not be in the docker group.\n       Fix: sudo usermod -aG docker \$USER && newgrp docker"
 docker compose version &>/dev/null || die "Docker Compose plugin not found. Install it and retry."
 
 # ── Start containers ──────────────────────────────────────────────────────────
