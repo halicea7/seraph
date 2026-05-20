@@ -1,14 +1,14 @@
 # Seraph Backend — Production / Dev image
 #
 # Includes every tool Seraph can invoke at runtime:
-#   • apt  : nmap, masscan, nikto, hydra, sqlmap, john, hashcat, lynis, openscap,
+#   • apt  : nmap, masscan, hydra, sqlmap, john, hashcat, lynis, openscap,
 #             whois, dig, samba/ldap (enum4linux deps)
 #   • bin  : testssl.sh, gobuster, ffuf, subfinder, nuclei, feroxbuster,
 #             kerbrute, amass, rustscan
 #   • pipx : theHarvester, netexec (nxc), wafw00f
 #   • pip  : impacket (GetUserSPNs, GetNPUsers, secretsdump, psexec, wmiexec),
 #             awscli
-#   • git  : enum4linux (Perl), searchsploit/exploitdb, Responder
+#   • git  : nikto, enum4linux (Perl), searchsploit/exploitdb, Responder
 #   • sys  : WeasyPrint PDF deps (pango, cairo, gdk-pixbuf, fonts, gi)
 #
 # Build args:
@@ -33,8 +33,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl wget git unzip ca-certificates gnupg perl file \
     # Network recon
     nmap masscan whois dnsutils iputils-ping \
-    # Web scanners
-    nikto \
     # Credential / password auditing
     hydra john hashcat \
     # SQL injection
@@ -42,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Host compliance audit
     lynis \
     # OpenSCAP (oscap binary + scanner)
-    libopenscap25 openscap-scanner \
+    openscap-scanner \
     # SMB / LDAP support (required by enum4linux)
     samba-common-bin ldap-utils smbclient \
     # pipx (for theHarvester, nxc, wafw00f)
@@ -136,7 +134,12 @@ RUN set -e; \
     dpkg -i /tmp/rustscan.deb; \
     rm /tmp/rustscan.deb
 
-# ── 11. enum4linux (Perl script) ──────────────────────────────────────────────
+# ── 11. nikto (removed from Debian repos — install from source) ──────────────
+RUN git clone --depth=1 https://github.com/sullo/nikto.git /opt/nikto && \
+    ln -sf /opt/nikto/program/nikto.pl /usr/local/bin/nikto && \
+    chmod +x /opt/nikto/program/nikto.pl
+
+# ── 12. enum4linux (Perl script) ──────────────────────────────────────────────
 RUN curl -fsSL \
     https://raw.githubusercontent.com/CiscoCXSecurity/enum4linux/master/enum4linux.pl \
     -o /usr/local/bin/enum4linux && chmod +x /usr/local/bin/enum4linux
