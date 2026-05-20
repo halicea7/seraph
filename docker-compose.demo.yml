@@ -70,20 +70,16 @@ services:
       - seraph_demo_net
     restart: unless-stopped
 
-  # ── Metasploitable 2 (optional, ~1 GB — uncomment to enable) ─────────────
-  # A full Linux host with dozens of deliberately vulnerable services.
+  # ── Metasploitable 2 ─────────────────────────────────────────────────────
+  # Full Linux host with dozens of deliberately vulnerable services.
+  # No ports are exposed to the host — reachable only from within the
+  # seraph_demo_net Docker network (i.e. from Seraph's backend when scanning).
   # SSH: msfadmin / msfadmin
-  #
-  # metasploitable:
-  #   image: tleemcjr/metasploitable2
-  #   ports:
-  #     - "2222:22"    # SSH  (msfadmin / msfadmin)
-  #     - "8021:21"    # FTP
-  #     - "8023:23"    # Telnet
-  #     - "8090:80"    # HTTP
-  #   networks:
-  #     - seraph_demo_net
-  #   restart: unless-stopped
+  metasploitable:
+    image: tleemcjr/metasploitable2
+    networks:
+      - seraph_demo_net
+    restart: unless-stopped
 
 networks:
   seraph_demo_net:

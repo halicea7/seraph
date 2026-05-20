@@ -121,6 +121,12 @@ else
     -d '{"hostname_or_ip":"juiceshop","target_type":"web_app","ports":"3000","notes":"OWASP Juice Shop — browse at http://localhost:3001"}' \
     >/dev/null
 
+  # Metasploitable 2 — internal only, no host port exposure
+  curl -sf -X POST "$API/projects/$PROJECT_ID/targets" \
+    "${AUTH[@]}" \
+    -d '{"hostname_or_ip":"metasploitable","target_type":"linux_host","ports":"21,22,23,25,80,139,445,3306,5432,8180","notes":"Metasploitable 2 — internal Docker network only (msfadmin/msfadmin)"}' \
+    >/dev/null
+
   ok "Live targets project created."
 fi
 
@@ -136,6 +142,7 @@ echo
 echo -e "  ${BOLD}Vulnerable targets${RESET}"
 echo -e "    DVWA            http://localhost:8888   (admin / password)"
 echo -e "    Juice Shop      http://localhost:3001"
+echo -e "    Metasploitable  internal only           (msfadmin / msfadmin)"
 echo
 echo -e "  ${BOLD}In Seraph${RESET}"
 echo -e "    - Open the '${BOLD}Demo Lab — Live Targets${RESET}' project to scan the containers"
