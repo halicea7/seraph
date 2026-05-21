@@ -258,3 +258,43 @@ def get_by_tactic(tactic: str, limit: int = 20) -> list[dict]:
         return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+def list_tactics() -> list[str]:
+    """Return all distinct tactic values in the index."""
+    try:
+        with _conn() as c:
+            rows = c.execute("SELECT DISTINCT tactic FROM attack_techniques ORDER BY tactic").fetchall()
+        tactics: set[str] = set()
+        for row in rows:
+            for t in (row["tactic"] or "").split(","):
+                t = t.strip()
+                if t:
+                    tactics.add(t)
+        return sorted(tactics)
+    except Exception:
+        return []
+
+
+def browse(tactic: str = "", limit: int = 50, offset: int = 0) -> dict:
+    """Paginated browse of all techniques, optionally filtered by tactic."""
+    try:
+        with _conn() as c:
+            if tactic:
+                total = c.execute(
+                    "SELECT COUNT(*) FROM attack_techniques WHERE tactic LIKE ?",
+                    (f"%{tactic}%",),
+                ).fetchone()[0]
+                rows = c.execute(
+                    "SELECT * FROM attack_techniques WHERE tactic LIKE ? ORDER BY technique_id LIMIT ? OFFSET ?",
+                    (f"%{tactic}%", limit, offset),
+                ).fetchall()
+            else:
+                total = c.execute("SELECT COUNT(*) FROM attack_techniques").fetchone()[0]
+                rows = c.execute(
+                    "SELECT * FROM attack_techniques ORDER BY technique_id LIMIT ? OFFSET ?",
+                    (limit, offset),
+                ).fetchall()
+        return {"total": total, "results": [dict(r) for r in rows]}
+    except Exception:
+        return {"total": 0, "results": []}

@@ -14,6 +14,8 @@ from services.attack_index import (
     get_status,
     get_by_id,
     get_by_tactic,
+    list_tactics,
+    browse,
     search,
     sync,
     _sync_lock,
@@ -58,3 +60,19 @@ def get_technique(technique_id: str):
 def list_by_tactic(tactic: str, limit: int = Query(20, ge=1, le=50)):
     results = get_by_tactic(tactic, limit=limit)
     return {"tactic": tactic, "results": results, "count": len(results)}
+
+
+@router.get("/tactics")
+def get_tactics():
+    """Return all distinct tactics in the index."""
+    return {"tactics": list_tactics()}
+
+
+@router.get("/browse")
+def browse_techniques(
+    tactic: str = Query("", description="Filter by tactic slug"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """Paginated browse of all indexed techniques."""
+    return browse(tactic=tactic, limit=limit, offset=offset)
