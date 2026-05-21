@@ -23,6 +23,10 @@ def list_playbooks(db: Session = Depends(get_db)):
             steps = json.loads(p.steps_json)
         except Exception:
             steps = []
+        try:
+            techniques = json.loads(p.mitre_techniques or "[]")
+        except Exception:
+            techniques = []
         result.append({
             "id": p.id,
             "name": p.name,
@@ -30,6 +34,7 @@ def list_playbooks(db: Session = Depends(get_db)):
             "is_builtin": p.is_builtin,
             "step_count": len(steps),
             "steps": steps,
+            "mitre_techniques": techniques,
             "created_at": str(p.created_at),
         })
     return result
@@ -39,6 +44,7 @@ class CreatePlaybookRequest(BaseModel):
     name: str
     description: str = ""
     steps: list[dict]
+    mitre_techniques: list[str] = []
 
 
 @router.post("", status_code=201)
@@ -48,6 +54,7 @@ def create_playbook(req: CreatePlaybookRequest, db: Session = Depends(get_db)):
         name=req.name,
         description=req.description,
         steps_json=json.dumps(req.steps),
+        mitre_techniques=json.dumps(req.mitre_techniques),
         is_builtin=False,
     )
     db.add(pb)
@@ -59,6 +66,7 @@ class UpdatePlaybookRequest(BaseModel):
     name: str
     description: str = ""
     steps: list[dict]
+    mitre_techniques: list[str] = []
 
 
 @router.put("/{playbook_id}")
@@ -72,6 +80,7 @@ def update_playbook(playbook_id: str, req: UpdatePlaybookRequest,
     pb.name = req.name
     pb.description = req.description
     pb.steps_json = json.dumps(req.steps)
+    pb.mitre_techniques = json.dumps(req.mitre_techniques)
     db.commit()
     return {"id": pb.id, "name": pb.name}
 

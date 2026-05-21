@@ -253,6 +253,7 @@ class Playbook(Base):
     name = Column(String, nullable=False)
     description = Column(Text, default="")
     steps_json = Column(Text, nullable=False)   # JSON array of step configs
+    mitre_techniques = Column(Text, default="[]")  # JSON array of T-IDs
     is_builtin = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     runs = relationship("PlaybookRun", back_populates="playbook", cascade="all, delete-orphan")
@@ -534,6 +535,7 @@ def _migrate():
         "ALTER TABLE findings ADD COLUMN fp_reason TEXT",
         "ALTER TABLE webhook_configs ADD COLUMN secret VARCHAR",
         "ALTER TABLE projects ADD COLUMN scratchpad TEXT DEFAULT ''",
+        "ALTER TABLE playbooks ADD COLUMN mitre_techniques TEXT DEFAULT '[]'",
         # webhook_deliveries, fp_suppression_rules, api_tokens created by create_all
     ]
     with engine.connect() as conn:
