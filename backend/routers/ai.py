@@ -268,6 +268,48 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
 
 
+def _attack_context_block(messages: list[dict]) -> str:
+    """Search ATT&CK index based on the last user message and return a formatted context block."""
+    try:
+        from services.attack_index import search as atk_search, get_status
+        if get_status().get("count", 0) == 0:
+            return ""
+        last_user = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                content = m.get("content", "")
+                last_user = content if isinstance(content, str) else " ".join(
+                    p.get("text", "") for p in content if isinstance(p, dict)
+                )
+                break
+        if len(last_user.strip()) < 5:
+            return ""
+        results = atk_search(last_user.strip(), limit=4)
+        if not results:
+            return ""
+        lines = ["[MITRE ATT&CK — relevant techniques for this query]"]
+        for t in results:
+            lines.append(f"\n{t['technique_id']}: {t['name']}  |  tactic: {t['tactic']}")
+            if t["description"]:
+                lines.append(f"  {t['description'][:280]}")
+            if t["detection"]:
+                lines.append(f"  Detection hint: {t['detection'][:180]}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _inject_attack_context(messages: list[dict], context: str) -> list[dict]:
+    if not context:
+        return messages
+    msgs = list(messages)
+    for i, m in enumerate(msgs):
+        if m.get("role") == "system":
+            msgs[i] = {**m, "content": m["content"] + f"\n\n{context}"}
+            return msgs
+    return [{"role": "system", "content": context}] + msgs
+
+
 @router.post("/chat")
 def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     """Generic LLM chat — used by the AI Operator for arbitrary message sequences."""
@@ -275,8 +317,10 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     model = req.model or _get(db, "ai_model", DEFAULT_MODEL)
     if not model:
         raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
+    context = _attack_context_block(req.messages)
+    messages = _inject_attack_context(req.messages, context)
     try:
-        content = chat_complete(endpoint, model, req.messages, **load_llm_params(db))
+        content = chat_complete(endpoint, model, messages, **load_llm_params(db))
         return {"content": content}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
