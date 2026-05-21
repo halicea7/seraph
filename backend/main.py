@@ -41,10 +41,12 @@ from routers.agents import router as agents_router
 from routers.webhooks import router as webhooks_router
 from routers.attack_paths import router as attack_paths_router
 from routers.cve_watch import router as cve_watch_router
+from routers.attack import router as attack_router
 from services.tool_registry import detect_tools, initialize_registry
 from services.scheduler import initialize_scheduler
 from services.playbook_runner import seed_builtin_playbooks
 from services.listener_manager import initialize_listeners
+from services.attack_index import ensure_fts_table, sync_if_empty
 
 
 def _reset_stale_scans():
@@ -72,6 +74,8 @@ async def lifespan(app: FastAPI):
     initialize_scheduler()
     initialize_listeners()
     seed_builtin_playbooks()
+    ensure_fts_table()
+    sync_if_empty()
     yield
     # Shutdown (nothing to clean up)
 
@@ -260,6 +264,7 @@ app.include_router(agents_router, prefix=API_PREFIX)
 app.include_router(webhooks_router, prefix=API_PREFIX)
 app.include_router(attack_paths_router, prefix=API_PREFIX)
 app.include_router(cve_watch_router, prefix=API_PREFIX)
+app.include_router(attack_router, prefix=API_PREFIX)
 
 
 # ── Settings / tools endpoint ─────────────────────────────────────────────────
