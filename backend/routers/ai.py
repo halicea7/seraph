@@ -299,15 +299,49 @@ def _attack_context_block(messages: list[dict]) -> str:
         return ""
 
 
-def _inject_attack_context(messages: list[dict], context: str) -> list[dict]:
-    if not context:
+def _ptes_context_block(messages: list[dict]) -> str:
+    """Search PTES index based on the last user message and return a formatted context block."""
+    try:
+        from services.ptes_index import search as ptes_search, get_status
+        if get_status().get("count", 0) == 0:
+            return ""
+        last_user = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                content = m.get("content", "")
+                last_user = content if isinstance(content, str) else " ".join(
+                    p.get("text", "") for p in content if isinstance(p, dict)
+                )
+                break
+        if len(last_user.strip()) < 5:
+            return ""
+        results = ptes_search(last_user.strip(), limit=2)
+        if not results:
+            return ""
+        lines = ["[PTES — relevant methodology guidance]"]
+        for r in results:
+            lines.append(f"\n{r['phase_name']} › {r['section']}")
+            lines.append(f"  {r['content'][:300]}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _inject_context(messages: list[dict], *blocks: str) -> list[dict]:
+    combined = "\n\n".join(b for b in blocks if b)
+    if not combined:
         return messages
     msgs = list(messages)
     for i, m in enumerate(msgs):
         if m.get("role") == "system":
-            msgs[i] = {**m, "content": m["content"] + f"\n\n{context}"}
+            msgs[i] = {**m, "content": m["content"] + f"\n\n{combined}"}
             return msgs
-    return [{"role": "system", "content": context}] + msgs
+    return [{"role": "system", "content": combined}] + msgs
+
+
+# keep old name as alias so existing callers don't break
+def _inject_attack_context(messages: list[dict], context: str) -> list[dict]:
+    return _inject_context(messages, context)
 
 
 @router.post("/chat")
@@ -317,8 +351,9 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     model = req.model or _get(db, "ai_model", DEFAULT_MODEL)
     if not model:
         raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
-    context = _attack_context_block(req.messages)
-    messages = _inject_attack_context(req.messages, context)
+    atk_ctx  = _attack_context_block(req.messages)
+    ptes_ctx = _ptes_context_block(req.messages)
+    messages = _inject_context(req.messages, atk_ctx, ptes_ctx)
     try:
         content = chat_complete(endpoint, model, messages, **load_llm_params(db))
         return {"content": content}
