@@ -41,7 +41,8 @@ class Project(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    scope_json = Column(Text, nullable=True)   # {"include": ["10.0.0.0/8"], "exclude": []}
+    scope_json  = Column(Text, nullable=True)   # {"include": ["10.0.0.0/8"], "exclude": []}
+    scratchpad  = Column(Text, default="")
 
     targets = relationship(
         "Target", back_populates="project", cascade="all, delete-orphan"
@@ -532,6 +533,7 @@ def _migrate():
         "ALTER TABLE findings ADD COLUMN exploit_chain_json TEXT",
         "ALTER TABLE findings ADD COLUMN fp_reason TEXT",
         "ALTER TABLE webhook_configs ADD COLUMN secret VARCHAR",
+        "ALTER TABLE projects ADD COLUMN scratchpad TEXT DEFAULT ''",
         # webhook_deliveries, fp_suppression_rules, api_tokens created by create_all
     ]
     with engine.connect() as conn:

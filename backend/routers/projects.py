@@ -301,6 +301,24 @@ def delete_project(project_id: str, db: Session = Depends(get_db)):
     db.commit()
 
 
+@router.get("/{project_id}/scratchpad")
+def get_scratchpad(project_id: str, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"content": project.scratchpad or ""}
+
+
+@router.put("/{project_id}/scratchpad")
+def save_scratchpad(project_id: str, payload: dict, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.scratchpad = payload.get("content", "")
+    db.commit()
+    return {"content": project.scratchpad}
+
+
 @router.get("/{project_id}/scans")
 def get_project_scans(project_id: str, db: Session = Depends(get_db)):
     """Get all scans for a project (across all targets)."""
