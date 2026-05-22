@@ -58,6 +58,7 @@ class Settings(BaseSettings):
         "impacket-wmiexec",
         "responder",
         "wafw00f",
+        "sherlock",
     ]
 
 

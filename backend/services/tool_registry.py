@@ -60,6 +60,8 @@ TOOL_META: Dict[str, Dict] = {
                           "note": "sudo git clone https://github.com/lgandx/Responder /opt/responder && sudo ln -sf /opt/responder/Responder.py /usr/local/bin/responder && sudo chmod +x /usr/local/bin/responder"},
     "wafw00f":              {"label": "wafw00f",              "apt": None,  "brew": None,           "url": "https://github.com/EnableSecurity/wafw00f",
                           "note": "pipx install wafw00f"},
+    "sherlock":             {"label": "Sherlock",             "apt": None,  "brew": None,           "url": "https://github.com/sherlock-project/sherlock",
+                          "note": "pip install sherlock-project"},
 }
 
 
@@ -131,6 +133,11 @@ def detect_tools() -> Dict[str, Dict]:
         # Some tools (e.g. pip-installed impacket in a venv) use a different binary name
         if path is None and meta.get("alt_binary"):
             path = shutil.which(meta["alt_binary"], path=search_path)
+        # Sherlock may be importable as a module even without a CLI shim
+        if path is None and tool == "sherlock":
+            import importlib.util as _ilu
+            if _ilu.find_spec("sherlock_project"):
+                path = sys.executable  # mark as available via python -m
         available = path is not None
         version: Optional[str] = None
 
