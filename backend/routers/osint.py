@@ -1,11 +1,13 @@
+import importlib.util
 import json
+import re
 import shutil
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
-from database import Scan, get_db
+from database import Scan, SherlockJob, get_db
 from services.validators import validate_domain, validate_pentest_command
 
 router = APIRouter(prefix="/osint", tags=["osint"])
@@ -64,6 +66,55 @@ class OSINTRunRequest(BaseModel):
     def _check_command(cls, v: str) -> str:
         return validate_pentest_command(v)
 
+
+# ── Sherlock ──────────────────────────────────────────────────────────────────
+
+def _sherlock_command(username: str) -> str | None:
+    if shutil.which("sherlock"):
+        return f"sherlock {username} --no-color"
+    if importlib.util.find_spec("sherlock_project"):
+        return f"python3 -m sherlock_project {username} --no-color"
+    return None
+
+
+@router.get("/sherlock/status")
+def sherlock_status():
+    available = bool(shutil.which("sherlock")) or bool(importlib.util.find_spec("sherlock_project"))
+    return {"available": available}
+
+
+class SherlockRunRequest(BaseModel):
+    project_id: str
+    username: str
+
+    @field_validator("username")
+    @classmethod
+    def _check_username(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r'^[a-zA-Z0-9._-]{1,50}$', v):
+            raise ValueError("Username must be 1–50 alphanumeric/._- characters")
+        return v
+
+
+@router.post("/sherlock/run")
+def run_sherlock(req: SherlockRunRequest, db: Session = Depends(get_db)):
+    command = _sherlock_command(req.username)
+    if not command:
+        raise HTTPException(503, "Sherlock is not installed. Run: pip install sherlock-project")
+
+    job = SherlockJob(
+        project_id=req.project_id or None,
+        username=req.username,
+        command=command,
+        status="pending",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return {"job_id": job.id}
+
+
+# ── Domain OSINT ──────────────────────────────────────────────────────────────
 
 @router.post("/run")
 def run_osint(req: OSINTRunRequest, db: Session = Depends(get_db)):

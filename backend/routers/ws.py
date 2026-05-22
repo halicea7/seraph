@@ -589,6 +589,82 @@ async def websocket_osint(websocket: WebSocket, scan_id: str):
         db.close()
 
 
+@router.websocket("/ws/sherlock/{job_id}")
+async def websocket_sherlock(websocket: WebSocket, job_id: str):
+    """Run a sherlock username search and stream output with parsed profile results."""
+    await websocket.accept()
+    db = SessionLocal()
+    try:
+        from database import SherlockJob
+        import re as _re
+
+        job = db.query(SherlockJob).filter(SherlockJob.id == job_id).first()
+        if not job:
+            await websocket.send_json({"type": "error", "data": "Job not found"})
+            await websocket.close()
+            return
+
+        command = job.command or ""
+        username = job.username
+
+        if not command:
+            await websocket.send_json({"type": "error", "data": "No command in job record"})
+            await websocket.close()
+            return
+
+        job.status = "running"
+        job.started_at = datetime.utcnow()
+        db.commit()
+
+        full_output: list[str] = []
+        client_connected = True
+
+        async for message in run_command_streaming(command):
+            if message["type"] in ("stdout", "stderr"):
+                full_output.append(message["data"])
+            elif message["type"] == "exit":
+                raw = "".join(full_output)
+                job.status = "completed" if message["code"] == 0 else "failed"
+                job.completed_at = datetime.utcnow()
+                job.raw_output = raw
+
+                profiles = []
+                for line in raw.splitlines():
+                    m = _re.match(r'^\[\+\] (.+?):\s+(https?://\S+)', line)
+                    if m:
+                        profiles.append({"site": m.group(1), "url": m.group(2)})
+
+                job.results_json = json.dumps(profiles)
+                db.commit()
+
+                if client_connected:
+                    try:
+                        await websocket.send_json({
+                            "type": "results",
+                            "username": username,
+                            "profiles": profiles,
+                            "total_found": len(profiles),
+                        })
+                    except (WebSocketDisconnect, Exception):
+                        client_connected = False
+
+            if client_connected:
+                try:
+                    await websocket.send_json(message)
+                except (WebSocketDisconnect, Exception):
+                    client_connected = False
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": str(e)})
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 @router.websocket("/ws/c2/{seraph_session_id}")
 async def websocket_c2(websocket: WebSocket, seraph_session_id: str):
     """Interactive WebSocket terminal for a C2 session."""

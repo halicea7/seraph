@@ -220,6 +220,20 @@ class CrackingJob(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class SherlockJob(Base):
+    __tablename__ = "sherlock_jobs"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    username = Column(String, nullable=False)
+    status = Column(String, default="pending")  # pending, running, completed, failed
+    command = Column(String, nullable=True)
+    raw_output = Column(Text, nullable=True)
+    results_json = Column(Text, nullable=True)  # JSON array of {site, url}
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
 class Credential(Base):
     __tablename__ = "credentials"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
