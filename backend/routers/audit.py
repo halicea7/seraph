@@ -1,10 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
+import csv
+import io
 import json
+import re
 import uuid
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +22,17 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 _categories_path = Path(__file__).parent.parent / "data" / "scan_categories.json"
 with open(_categories_path) as f:
     SCAN_CATEGORIES = json.load(f)
+
+# Load CIS controls for cross-referencing CIS-CAT imports
+_cis_controls_path = Path(__file__).parent.parent / "data" / "cis_controls.json"
+with open(_cis_controls_path) as f:
+    _CIS_CONTROLS_DATA = json.load(f).get("controls", [])
+# Build a lookup: numeric prefix (e.g. "1") → control dict
+_CIS_CTRL_BY_NUM: dict = {}
+for _ctrl in _CIS_CONTROLS_DATA:
+    _num = _ctrl.get("id", "").replace("CIS-", "")
+    if _num:
+        _CIS_CTRL_BY_NUM[_num] = _ctrl
 
 
 @router.get("/categories")
@@ -353,3 +368,186 @@ def download_pdf_report(project_id: str, db: Session = Depends(get_db)):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="seraph_{project_id[:8]}_report.pdf"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# CIS-CAT Import
+# ---------------------------------------------------------------------------
+
+_XCCDF_NS = "{http://checklists.nist.gov/xccdf/1.2}"
+_CISCAT_SEVERITY_MAP = {"high": "high", "medium": "medium", "low": "low", "info": "info", "unknown": "info"}
+
+
+def _ciscat_severity(raw: str) -> str:
+    return _CISCAT_SEVERITY_MAP.get((raw or "").lower(), "medium")
+
+
+def _extract_cis_num(rule_id: str) -> str:
+    """Pull the leading numeric section from a CIS-CAT rule ID, e.g. '1.1.1' → '1'."""
+    m = re.search(r'rule_(\d+)', rule_id.lower())
+    return m.group(1) if m else ""
+
+
+def _enrich_from_cis(rule_id: str) -> tuple[str, str]:
+    """Return (description, remediation) from CIS controls data, or empty strings."""
+    top = _extract_cis_num(rule_id)
+    ctrl = _CIS_CTRL_BY_NUM.get(top)
+    if not ctrl:
+        return "", ""
+    desc = ctrl.get("description", "")
+    remediations = ctrl.get("safeguards", [])
+    remediation = "\n".join(remediations) if remediations else ""
+    return desc, remediation
+
+
+def _parse_xccdf(content: bytes) -> list[dict]:
+    """Parse XCCDF 1.2 XML and return list of rule dicts."""
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError as e:
+        raise HTTPException(400, f"Invalid XML: {e}")
+
+    results = []
+    # Support both <Benchmark> wrapping a <TestResult> and a bare <TestResult>
+    for rule_result in root.iter(f"{_XCCDF_NS}rule-result"):
+        rule_id = rule_result.get("idref", "")
+        severity_raw = rule_result.get("severity", "medium")
+        result_el = rule_result.find(f"{_XCCDF_NS}result")
+        status = result_el.text.strip().lower() if result_el is not None else "unknown"
+        # Extract title from ident or idref tail
+        title_el = rule_result.find(f"{_XCCDF_NS}title")
+        title = title_el.text if title_el is not None else rule_id.split("_rule_")[-1].replace("_", " ").title()[:120]
+        results.append({"rule_id": rule_id, "title": title, "status": status, "severity": severity_raw})
+    return results
+
+
+def _parse_ciscat_json(content: bytes) -> list[dict]:
+    """Parse CIS-CAT Pro JSON output."""
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"Invalid JSON: {e}")
+    raw_results = data.get("ruleResults", data.get("results", []))
+    out = []
+    for r in raw_results:
+        out.append({
+            "rule_id": r.get("ruleId", r.get("id", "")),
+            "title": r.get("ruleTitle", r.get("title", ""))[:200],
+            "status": (r.get("result", "unknown")).lower(),
+            "severity": r.get("severity", "medium"),
+        })
+    return out
+
+
+def _parse_ciscat_csv(content: bytes) -> list[dict]:
+    """Parse CIS-CAT CSV output (Section #, Recommendation #, Profile, Title, Status, ...)."""
+    text = content.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    # Normalise header names
+    out = []
+    for row in reader:
+        norm = {k.strip().lower(): v for k, v in row.items()}
+        rule_id = norm.get("rule id", norm.get("recommendation #", norm.get("id", "")))
+        title = norm.get("title", norm.get("recommendation", rule_id))[:200]
+        status = norm.get("status", norm.get("result", "unknown")).lower()
+        if status in ("passed", "pass"):
+            status = "pass"
+        elif status in ("failed", "fail"):
+            status = "fail"
+        severity = norm.get("severity", "medium")
+        out.append({"rule_id": rule_id, "title": title, "status": status, "severity": severity})
+    return out
+
+
+@router.post("/import/ciscat")
+async def import_ciscat_report(
+    file: UploadFile = File(...),
+    project_id: str = Form(...),
+    target_id: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Import a CIS-CAT benchmark report (XCCDF XML, JSON, or CSV) as Findings."""
+    target = db.query(Target).filter(Target.id == target_id).first()
+    if not target:
+        raise HTTPException(404, "Target not found")
+    if target.project_id != project_id:
+        raise HTTPException(400, "Target does not belong to the given project")
+
+    content = await file.read()
+    fname = (file.filename or "").lower()
+
+    if fname.endswith(".xml"):
+        rule_results = _parse_xccdf(content)
+    elif fname.endswith(".json"):
+        rule_results = _parse_ciscat_json(content)
+    elif fname.endswith(".csv"):
+        rule_results = _parse_ciscat_csv(content)
+    else:
+        # Try to auto-detect
+        stripped = content.lstrip()
+        if stripped.startswith(b"<"):
+            rule_results = _parse_xccdf(content)
+        elif stripped.startswith(b"{") or stripped.startswith(b"["):
+            rule_results = _parse_ciscat_json(content)
+        else:
+            rule_results = _parse_ciscat_csv(content)
+
+    if not rule_results:
+        raise HTTPException(400, "No rule results found in the uploaded file")
+
+    scan = Scan(
+        id=str(uuid.uuid4()),
+        target_id=target_id,
+        scan_type="ciscat_import",
+        module="audit",
+        status="completed",
+        config_json=json.dumps({"source_file": file.filename, "project_id": project_id}),
+        started_at=datetime.utcnow(),
+        completed_at=datetime.utcnow(),
+    )
+    db.add(scan)
+    db.flush()
+
+    counts = {"pass": 0, "fail": 0, "notapplicable": 0, "other": 0}
+    findings_created = []
+    for rr in rule_results:
+        status = rr["status"]
+        if status in ("pass", "passed"):
+            counts["pass"] += 1
+            sev = "info"
+        elif status in ("fail", "failed", "error"):
+            counts["fail"] += 1
+            sev = _ciscat_severity(rr.get("severity", "medium"))
+        elif status in ("notapplicable", "not applicable", "na", "n/a", "informational"):
+            counts["notapplicable"] += 1
+            sev = "info"
+        else:
+            counts["other"] += 1
+            sev = "info"
+
+        enrich_desc, enrich_rem = _enrich_from_cis(rr["rule_id"])
+        f = Finding(
+            id=str(uuid.uuid4()),
+            scan_id=scan.id,
+            severity=sev,
+            title=rr["title"] or rr["rule_id"],
+            description=enrich_desc or None,
+            control_id=rr["rule_id"],
+            framework="CIS-CAT",
+            remediation=enrich_rem or None,
+            status="open" if status in ("fail", "failed", "error") else "accepted",
+            tags=f"ciscat,{status}",
+        )
+        db.add(f)
+        findings_created.append(f)
+
+    db.commit()
+
+    total = len(rule_results)
+    return {
+        "scan_id": scan.id,
+        "imported": total,
+        "pass": counts["pass"],
+        "fail": counts["fail"],
+        "notapplicable": counts["notapplicable"],
+    }

@@ -218,6 +218,57 @@ class CrackingJob(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+    server_id = Column(String, nullable=True)   # CrackingServer.id if remote job
+
+
+class CrackingServer(Base):
+    __tablename__ = "cracking_servers"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    host = Column(String, nullable=False)
+    port = Column(Integer, default=22)
+    ssh_user = Column(String, nullable=False)
+    key_credential_id = Column(String, ForeignKey("credentials.id", ondelete="SET NULL"), nullable=True)
+    remote_workdir = Column(String, default="/tmp/seraph_crack")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class C2Node(Base):
+    __tablename__ = "c2_nodes"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    c2_type = Column(String, default="msf")         # msf | sliver
+    host = Column(String, nullable=False)
+    port = Column(Integer, nullable=False)
+    password = Column(EncryptedText, default="")
+    ssl = Column(Boolean, default=False)
+    status = Column(String, default="unknown")       # unknown | connected | unreachable | pending
+    last_checked = Column(DateTime, nullable=True)
+    source = Column(String, default="manual")        # manual | ec2
+    cloud_instance_id = Column(String, nullable=True)
+    notes = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CloudC2Instance(Base):
+    __tablename__ = "cloud_c2_instances"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    provider = Column(String, default="aws")
+    instance_id = Column(String, nullable=True)      # AWS: i-0abc123def456
+    region = Column(String, nullable=False)
+    public_ip = Column(String, nullable=True)
+    status = Column(String, default="pending")       # pending|launching|running|configuring|ready|stopped|terminated|error
+    c2_type = Column(String, default="msf")          # msf | sliver
+    ami_id = Column(String, nullable=True)
+    instance_type = Column(String, default="t3.medium")
+    key_name = Column(String, nullable=True)
+    sg_id = Column(String, nullable=True)
+    ssh_key_credential_id = Column(String, ForeignKey("credentials.id", ondelete="SET NULL"), nullable=True)
+    node_id = Column(String, nullable=True)          # C2Node.id after provisioning
+    provision_log = Column(Text, default="")
+    error_msg = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class SherlockJob(Base):
@@ -550,7 +601,8 @@ def _migrate():
         "ALTER TABLE webhook_configs ADD COLUMN secret VARCHAR",
         "ALTER TABLE projects ADD COLUMN scratchpad TEXT DEFAULT ''",
         "ALTER TABLE playbooks ADD COLUMN mitre_techniques TEXT DEFAULT '[]'",
-        # webhook_deliveries, fp_suppression_rules, api_tokens created by create_all
+        "ALTER TABLE cracking_jobs ADD COLUMN server_id VARCHAR",
+        # webhook_deliveries, fp_suppression_rules, api_tokens, cracking_servers, c2_nodes, cloud_c2_instances created by create_all
     ]
     with engine.connect() as conn:
         for sql in migrations:

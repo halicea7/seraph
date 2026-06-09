@@ -6,8 +6,9 @@ import shutil
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from typing import Optional
 
-from database import CrackingJob, get_db
+from database import Credential, CrackingJob, CrackingServer, get_db
 
 router = APIRouter(prefix="/cracking", tags=["cracking"])
 
@@ -121,6 +122,8 @@ class CrackingRunRequest(BaseModel):
     wordlist: str = ""
     mask: str = ""                     # hashcat -a 3 mask e.g. ?d?d?d?d?d?d?d?d
     credential_ids: list[str] = []
+    server_id: str = ""                # CrackingServer.id — empty means run locally
+    remote_wordlist: str = ""          # wordlist path on the remote server
 
 
 @router.post("/run")
@@ -145,6 +148,7 @@ def run_cracking(req: CrackingRunRequest, db: Session = Depends(get_db)):
         project_id=req.project_id or None,
         tool=req.tool,
         status="pending",
+        server_id=req.server_id or None,
         config_json=json.dumps({
             "tool": req.tool,
             "command": command,
@@ -153,9 +157,71 @@ def run_cracking(req: CrackingRunRequest, db: Session = Depends(get_db)):
             "attack_mode": req.attack_mode,
             "credential_ids": req.credential_ids,
             "project_id": req.project_id,
+            "server_id": req.server_id,
+            "remote_wordlist": req.remote_wordlist,
+            "hash_type": req.hash_type,
         }),
     )
     db.add(job)
     db.commit()
     db.refresh(job)
     return {"job_id": job.id}
+
+
+# ── Cracking Server CRUD ────────────────────────────────────────────────────
+
+class CrackingServerCreate(BaseModel):
+    name: str
+    host: str
+    port: int = 22
+    ssh_user: str
+    key_credential_id: Optional[str] = None
+    remote_workdir: str = "/tmp/seraph_crack"
+
+
+@router.get("/servers")
+def list_cracking_servers(db: Session = Depends(get_db)):
+    servers = db.query(CrackingServer).order_by(CrackingServer.created_at).all()
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "host": s.host,
+            "port": s.port,
+            "ssh_user": s.ssh_user,
+            "key_credential_id": s.key_credential_id,
+            "remote_workdir": s.remote_workdir,
+            "created_at": s.created_at,
+        }
+        for s in servers
+    ]
+
+
+@router.post("/servers")
+def create_cracking_server(req: CrackingServerCreate, db: Session = Depends(get_db)):
+    if req.key_credential_id:
+        cred = db.query(Credential).filter(Credential.id == req.key_credential_id).first()
+        if not cred:
+            raise HTTPException(404, "Credential not found")
+    server = CrackingServer(
+        name=req.name,
+        host=req.host,
+        port=req.port,
+        ssh_user=req.ssh_user,
+        key_credential_id=req.key_credential_id or None,
+        remote_workdir=req.remote_workdir,
+    )
+    db.add(server)
+    db.commit()
+    db.refresh(server)
+    return {"id": server.id, "name": server.name}
+
+
+@router.delete("/servers/{server_id}")
+def delete_cracking_server(server_id: str, db: Session = Depends(get_db)):
+    server = db.query(CrackingServer).filter(CrackingServer.id == server_id).first()
+    if not server:
+        raise HTTPException(404, "Server not found")
+    db.delete(server)
+    db.commit()
+    return {"ok": True}

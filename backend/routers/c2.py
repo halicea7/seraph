@@ -7,7 +7,8 @@ import json
 import uuid
 from datetime import datetime
 
-from database import get_db, AppSetting, C2Session, LootEntry, C2Task, Target, Project
+from database import get_db, AppSetting, C2Node, C2Session, LootEntry, C2Task, Target, Project
+from services.vault import encrypt as vault_encrypt, decrypt as vault_decrypt
 import services.msf_client as msf
 
 
@@ -1654,3 +1655,148 @@ def kill_sliver_session(session_id: str):
     if "error" in result:
         raise HTTPException(400, result["error"])
     return result
+
+
+# ── C2 Node Registry ──────────────────────────────────────────────────────────
+
+class C2NodeCreate(BaseModel):
+    name: str
+    c2_type: str = "msf"       # msf | sliver
+    host: str
+    port: int
+    password: str = ""
+    ssl: bool = False
+    notes: str = ""
+
+
+def _node_to_dict(node: C2Node) -> dict:
+    return {
+        "id": node.id,
+        "name": node.name,
+        "c2_type": node.c2_type,
+        "host": node.host,
+        "port": node.port,
+        "ssl": node.ssl,
+        "status": node.status,
+        "last_checked": node.last_checked.isoformat() if node.last_checked else None,
+        "source": node.source,
+        "cloud_instance_id": node.cloud_instance_id,
+        "notes": node.notes,
+        "created_at": node.created_at.isoformat() if node.created_at else None,
+    }
+
+
+@router.get("/nodes")
+def list_c2_nodes(db: DBSession = Depends(get_db)):
+    nodes = db.query(C2Node).order_by(C2Node.created_at).all()
+    return [_node_to_dict(n) for n in nodes]
+
+
+@router.get("/nodes/active")
+def get_active_node(db: DBSession = Depends(get_db)):
+    node_id = _get_setting(db, "c2_active_node_id", "")
+    return {"active_node_id": node_id}
+
+
+@router.post("/nodes")
+def create_c2_node(req: C2NodeCreate, db: DBSession = Depends(get_db)):
+    node = C2Node(
+        name=req.name,
+        c2_type=req.c2_type,
+        host=req.host,
+        port=req.port,
+        password=req.password,   # EncryptedText column handles AES-256-GCM automatically
+        ssl=req.ssl,
+        notes=req.notes,
+        source="manual",
+    )
+    db.add(node)
+    db.commit()
+    db.refresh(node)
+    return _node_to_dict(node)
+
+
+@router.delete("/nodes/{node_id}")
+def delete_c2_node(node_id: str, db: DBSession = Depends(get_db)):
+    node = db.query(C2Node).filter(C2Node.id == node_id).first()
+    if not node:
+        raise HTTPException(404, "Node not found")
+    # Clear active node if it's being deleted
+    active = _get_setting(db, "c2_active_node_id", "")
+    if active == node_id:
+        _set_setting(db, "c2_active_node_id", "")
+    db.delete(node)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/nodes/{node_id}/connect")
+def connect_c2_node(node_id: str, db: DBSession = Depends(get_db)):
+    node = db.query(C2Node).filter(C2Node.id == node_id).first()
+    if not node:
+        raise HTTPException(404, "Node not found")
+
+    password = node.password or ""
+
+    if node.c2_type == "msf":
+        result = msf.connect(
+            host=node.host,
+            port=node.port,
+            password=password,
+            ssl=node.ssl,
+        )
+        if "error" in result:
+            node.status = "unreachable"
+            node.last_checked = datetime.utcnow()
+            db.commit()
+            return {"ok": False, "status": "unreachable", "error": result["error"]}
+    elif node.c2_type == "sliver":
+        import services.sliver_client as sliver_svc
+        result = sliver_svc.connect()
+        if "error" in result:
+            node.status = "unreachable"
+            node.last_checked = datetime.utcnow()
+            db.commit()
+            return {"ok": False, "status": "unreachable", "error": result["error"]}
+    else:
+        raise HTTPException(400, f"Unknown c2_type: {node.c2_type}")
+
+    node.status = "connected"
+    node.last_checked = datetime.utcnow()
+    db.commit()
+    _set_setting(db, "c2_active_node_id", node_id)
+    db.commit()
+    return {"ok": True, "status": "connected", "error": None}
+
+
+@router.post("/nodes/{node_id}/check")
+def check_c2_node(node_id: str, db: DBSession = Depends(get_db)):
+    """Health-check a node without switching the active connection."""
+    import time
+    node = db.query(C2Node).filter(C2Node.id == node_id).first()
+    if not node:
+        raise HTTPException(404, "Node not found")
+
+    password = node.password or ""
+    t0 = time.time()
+    try:
+        if node.c2_type == "msf":
+            result = msf.connect(host=node.host, port=node.port, password=password, ssl=node.ssl)
+            ok = "error" not in result
+        else:
+            ok = True  # Sliver: assume reachable if configured
+    except Exception:
+        ok = False
+
+    latency_ms = int((time.time() - t0) * 1000)
+    node.status = "connected" if ok else "unreachable"
+    node.last_checked = datetime.utcnow()
+    db.commit()
+    return {"status": node.status, "latency_ms": latency_ms}
+
+
+@router.post("/nodes/disconnect")
+def disconnect_c2_nodes(db: DBSession = Depends(get_db)):
+    _set_setting(db, "c2_active_node_id", "")
+    db.commit()
+    return {"ok": True}

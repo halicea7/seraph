@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 import tempfile
 import stat as stat_mod
 import json
@@ -309,7 +310,7 @@ async def websocket_cracking(websocket: WebSocket, job_id: str):
     out_file: str | None = None
 
     try:
-        from database import CrackingJob, Credential
+        from database import CrackingJob, CrackingServer, Credential
         job = db.query(CrackingJob).filter(CrackingJob.id == job_id).first()
         if not job:
             await websocket.send_json({"type": "error", "data": "Job not found"})
@@ -322,10 +323,112 @@ async def websocket_cracking(websocket: WebSocket, job_id: str):
         command_tmpl = config.get("command", "")
         wordlist = config.get("wordlist", "")
         credential_ids = config.get("credential_ids", [])
+        server_id = config.get("server_id", "")
+        remote_wordlist = config.get("remote_wordlist", "") or "/usr/share/wordlists/rockyou.txt"
+        hash_type = config.get("hash_type", "0")
 
         if not hashes or not command_tmpl:
             await websocket.send_json({"type": "error", "data": "Missing hashes or command"})
             await websocket.close()
+            return
+
+        # ── Remote cracking branch (SSH) ─────────────────────────────────────
+        if server_id:
+            srv = db.query(CrackingServer).filter(CrackingServer.id == server_id).first()
+            if not srv:
+                await websocket.send_json({"type": "error", "data": "Cracking server not found"})
+                await websocket.close()
+                return
+
+            key_pem = ""
+            if srv.key_credential_id:
+                key_cred = db.query(Credential).filter(Credential.id == srv.key_credential_id).first()
+                if key_cred:
+                    key_pem = key_cred.secret or ""
+
+            workdir = f"{srv.remote_workdir}/{job_id[:8]}"
+            hash_lines = "\n".join(hashes)
+
+            if tool == "hashcat":
+                crack_cmd = (
+                    f"hashcat -m {hash_type} -a 0 $WORKDIR/hashes.txt {remote_wordlist} "
+                    f"--outfile $WORKDIR/out.txt --outfile-format 2 --status --status-timer 10 --force 2>&1 || true"
+                )
+                parse_block = "cat $WORKDIR/out.txt 2>/dev/null || true"
+            else:
+                crack_cmd = (
+                    f"john --wordlist={remote_wordlist} $WORKDIR/hashes.txt 2>&1 || true && "
+                    f"john --show $WORKDIR/hashes.txt 2>/dev/null || true"
+                )
+                parse_block = "john --show $WORKDIR/hashes.txt 2>/dev/null || true"
+
+            remote_script = f"""#!/bin/bash
+set -e
+WORKDIR={workdir}
+mkdir -p $WORKDIR
+cat > $WORKDIR/hashes.txt << 'HASHEOF'
+{hash_lines}
+HASHEOF
+{crack_cmd}
+echo '=== SERAPH_CRACKED_RESULTS ==='
+{parse_block}
+rm -rf $WORKDIR
+"""
+            job.status = "running"
+            job.started_at = datetime.utcnow()
+            db.commit()
+
+            full_output: list[str] = []
+            exit_code = 0
+            async for message in run_script_over_ssh(srv.host, srv.ssh_user, key_pem, remote_script, port=srv.port):
+                if message["type"] == "exit":
+                    exit_code = message.get("code", 0)
+                    await websocket.send_json(message)
+                else:
+                    await websocket.send_json(message)
+                    full_output.append(message.get("data", ""))
+
+            raw = "".join(full_output)
+            job.status = "completed"
+            job.completed_at = datetime.utcnow()
+            job.raw_output = raw
+            db.commit()
+
+            # Parse cracked pairs from delimiter-separated section
+            cracked_pairs: list[dict] = []
+            if "=== SERAPH_CRACKED_RESULTS ===" in raw:
+                results_section = raw.split("=== SERAPH_CRACKED_RESULTS ===", 1)[1]
+                for line in results_section.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if tool == "hashcat" and ":" in line:
+                        h, _, plain = line.partition(":")
+                        cracked_pairs.append({"hash": h, "plain": plain})
+                    elif tool == "john" and ":" in line:
+                        parts = line.split(":")
+                        if len(parts) >= 2 and not parts[0].endswith(" password"):
+                            # john --show format: hash:plain:...
+                            cracked_pairs.append({"hash": parts[0], "plain": parts[1]})
+
+            vault_updated = 0
+            if cracked_pairs and credential_ids:
+                creds = db.query(Credential).filter(Credential.id.in_(credential_ids)).all()
+                hash_to_plain = {p["hash"]: p["plain"] for p in cracked_pairs}
+                for cred in creds:
+                    plain = hash_to_plain.get(cred.secret)
+                    if plain:
+                        cred.secret = plain
+                        cred.cred_type = "password"
+                        vault_updated += 1
+                db.commit()
+
+            await websocket.send_json({
+                "type": "results",
+                "cracked": len(cracked_pairs),
+                "pairs": cracked_pairs[:50],
+                "vault_updated": vault_updated,
+            })
             return
 
         # Write hashes to temp file.
@@ -1028,3 +1131,198 @@ async def websocket_presence(websocket: WebSocket, project_id: str, user: str = 
             "id": client_id,
             "user": user,
         })
+
+
+
+# ── EC2 C2 Provisioning WebSocket ─────────────────────────────────────────────
+
+@router.websocket("/ws/cloud/provision/{instance_db_id}")
+async def websocket_cloud_provision(websocket: WebSocket, instance_db_id: str):
+    """Stream EC2 C2 node provisioning: poll for running state → wait for SSH → install C2 software."""
+    await websocket.accept()
+    db = SessionLocal()
+
+    async def send(msg: str, level: str = "info") -> None:
+        await websocket.send_json({"type": "stdout", "data": f"[{level.upper()}] {msg}"})
+
+    try:
+        from database import CloudC2Instance, C2Node, Credential
+        inst = db.query(CloudC2Instance).filter(CloudC2Instance.id == instance_db_id).first()
+        if not inst:
+            await send("Instance not found", "error")
+            return
+
+        if not inst.instance_id:
+            await send("No AWS instance ID — was the instance launched?", "error")
+            return
+
+        # ── 1. Get boto3 session ────────────────────────────────────────────
+        from routers.cloud import _get_boto3_session, _UBUNTU_AMIS
+        boto_session = _get_boto3_session(db)
+        ec2 = boto_session.client("ec2", region_name=inst.region)
+
+        # ── 2. Poll until running ───────────────────────────────────────────
+        await send(f"Waiting for instance {inst.instance_id} to reach running state…")
+        inst.status = "launching"
+        db.commit()
+
+        for attempt in range(60):  # up to 5 min (5s × 60)
+            await asyncio.sleep(5)
+            try:
+                resp = ec2.describe_instances(InstanceIds=[inst.instance_id])
+                state = resp["Reservations"][0]["Instances"][0]["State"]["Name"]
+                pub_ip = resp["Reservations"][0]["Instances"][0].get("PublicIpAddress", "")
+            except Exception as e:
+                await send(f"AWS poll error: {e}", "warning")
+                continue
+
+            await send(f"  state={state}  ip={pub_ip or '(pending)'}")
+            if state == "running" and pub_ip:
+                inst.public_ip = pub_ip
+                inst.status = "running"
+                db.commit()
+                await send(f"Instance is running at {pub_ip}")
+                break
+        else:
+            inst.status = "error"
+            inst.error_msg = "Timed out waiting for instance to reach running state"
+            db.commit()
+            await send("Timed out waiting for running state", "error")
+            await websocket.send_json({"type": "exit", "code": 1})
+            return
+
+        # ── 3. Wait for SSH ─────────────────────────────────────────────────
+        import socket as _socket
+        await send(f"Waiting for SSH on {inst.public_ip}:22…")
+        inst.status = "configuring"
+        db.commit()
+        ssh_ready = False
+        for _ in range(36):  # up to 3 min
+            await asyncio.sleep(5)
+            try:
+                s = _socket.create_connection((inst.public_ip, 22), timeout=5)
+                s.close()
+                ssh_ready = True
+                break
+            except Exception:
+                await send("  SSH not yet available, retrying…")
+        if not ssh_ready:
+            inst.status = "error"
+            inst.error_msg = "SSH did not become available"
+            db.commit()
+            await send("SSH timed out", "error")
+            await websocket.send_json({"type": "exit", "code": 1})
+            return
+        await send("SSH is available!")
+
+        # ── 4. Load SSH key ─────────────────────────────────────────────────
+        key_pem = ""
+        if inst.ssh_key_credential_id:
+            key_cred = db.query(Credential).filter(Credential.id == inst.ssh_key_credential_id).first()
+            if key_cred:
+                key_pem = key_cred.secret or ""
+
+        # ── 5. Build provisioning script ────────────────────────────────────
+        rpc_password = secrets.token_hex(16)
+
+        if inst.c2_type == "msf":
+            c2_setup = f"""
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y ufw curl wget
+curl -fsSL https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb | bash
+ufw default deny incoming
+ufw allow 22/tcp
+ufw allow 55553/tcp
+ufw allow 4444/tcp
+ufw --force enable
+msfrpcd -P {rpc_password} -S -a 0.0.0.0 -p 55553 -f &
+echo "MSF RPC started on port 55553"
+"""
+        else:
+            c2_setup = f"""
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y ufw curl wget
+curl -sSfL https://sliver.sh/install | bash
+ufw default deny incoming
+ufw allow 22/tcp
+ufw allow 31337/tcp
+ufw allow 8443/tcp
+ufw allow 443/tcp
+ufw --force enable
+sliver-server daemon --host 0.0.0.0 --port 31337 &
+echo "Sliver daemon started on port 31337"
+"""
+
+        provision_script = f"""#!/bin/bash
+set -e
+echo "=== Seraph C2 Provisioning Started ==="
+{c2_setup}
+echo "=== Provisioning Complete ==="
+"""
+
+        # ── 6. Execute over SSH ─────────────────────────────────────────────
+        await send(f"Running provisioning script ({inst.c2_type.upper()} setup)…")
+        log_lines: list[str] = []
+        exit_code = 0
+        async for message in run_script_over_ssh(inst.public_ip, "ubuntu", key_pem, provision_script):
+            await websocket.send_json(message)
+            if message["type"] in ("stdout", "stderr"):
+                log_lines.append(message.get("data", ""))
+            elif message["type"] == "exit":
+                exit_code = message.get("code", 0)
+
+        inst.provision_log = "".join(log_lines)
+
+        if exit_code != 0:
+            inst.status = "error"
+            inst.error_msg = f"Provisioning script exited with code {exit_code}"
+            db.commit()
+            await websocket.send_json({"type": "exit", "code": exit_code})
+            return
+
+        # ── 7. Register as C2 Node ──────────────────────────────────────────
+        msf_port = 55553 if inst.c2_type == "msf" else 31337
+        node = C2Node(
+            name=inst.name,
+            c2_type=inst.c2_type,
+            host=inst.public_ip,
+            port=msf_port,
+            password=rpc_password,
+            ssl=True if inst.c2_type == "msf" else False,
+            source="ec2",
+            cloud_instance_id=inst.id,
+            status="unknown",
+            notes=f"Provisioned from EC2 instance {inst.instance_id}",
+        )
+        db.add(node)
+        db.flush()
+
+        inst.status = "ready"
+        inst.node_id = node.id
+        db.commit()
+
+        await send(f"C2 node registered — ID: {node.id}")
+        await send(f"Connect to it in the Infrastructure tab.")
+        await websocket.send_json({"type": "exit", "code": 0})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": str(e)})
+            await websocket.send_json({"type": "exit", "code": 1})
+        except Exception:
+            pass
+        try:
+            from database import CloudC2Instance
+            inst = db.query(CloudC2Instance).filter(CloudC2Instance.id == instance_db_id).first()
+            if inst:
+                inst.status = "error"
+                inst.error_msg = str(e)
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
