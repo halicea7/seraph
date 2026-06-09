@@ -215,7 +215,6 @@ def launch_instance(req: LaunchInstanceRequest, db: Session = Depends(get_db)):
             db.flush()
         except Exception:
             db.rollback()
-            first_proj = db.query(type(cred).__class__).first()  # type: ignore
             from database import Project
             proj = db.query(Project).first()
             if proj:

@@ -153,6 +153,17 @@ def save_nessus_config(req: NessusConfigRequest, db: Session = Depends(get_db)):
     return {"ok": True, "auth_type": auth_type}
 
 
+@router.get("/config")
+def get_nessus_config(db: Session = Depends(get_db)):
+    return {
+        "host": _get_setting(db, "nessus_host"),
+        "port": int(_get_setting(db, "nessus_port", "8834")),
+        "username": _get_setting(db, "nessus_username"),
+        "auth_type": _get_setting(db, "nessus_auth_type", "session"),
+        "verify_ssl": _get_setting(db, "nessus_verify_ssl", "false") == "true",
+    }
+
+
 @router.get("/scans")
 def list_nessus_scans(db: Session = Depends(get_db)):
     client = _load_client(db)
