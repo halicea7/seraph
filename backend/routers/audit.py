@@ -110,9 +110,12 @@ def download_script(scan_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/scans")
-def list_scans(db: Session = Depends(get_db)):
-    scans = db.query(Scan).filter(Scan.module == "audit").order_by(Scan.id.desc()).limit(50).all()
-    return scans
+def list_scans(project_id: Optional[str] = None, db: Session = Depends(get_db)):
+    query = db.query(Scan).filter(Scan.module == "audit")
+    if project_id:
+        target_ids = [t.id for t in db.query(Target).filter(Target.project_id == project_id).all()]
+        query = query.filter(Scan.target_id.in_(target_ids)) if target_ids else query.filter(False)
+    return query.order_by(Scan.id.desc()).limit(50).all()
 
 
 @router.get("/scans/{scan_id}")
@@ -228,8 +231,14 @@ def list_all_findings(project_id: Optional[str] = None, severity: Optional[str] 
     query = db.query(Finding)
     if severity:
         query = query.filter(Finding.severity == severity)
-    findings = query.order_by(Finding.id.desc()).limit(500).all()
-    return findings
+    if project_id:
+        target_ids = [t.id for t in db.query(Target).filter(Target.project_id == project_id).all()]
+        if target_ids:
+            scan_ids = [s.id for s in db.query(Scan).filter(Scan.target_id.in_(target_ids)).all()]
+            query = query.filter(Finding.scan_id.in_(scan_ids)) if scan_ids else query.filter(False)
+        else:
+            query = query.filter(False)
+    return query.order_by(Finding.id.desc()).limit(500).all()
 
 
 @router.get("/scans/{scan_id}/findings")
