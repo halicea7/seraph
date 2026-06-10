@@ -344,6 +344,68 @@ def get_project_scans(project_id: str, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/{project_id}/phases")
+def get_project_phases(project_id: str, db: Session = Depends(get_db)):
+    """Derive engagement phase status from the project's actual scan records."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    targets = db.query(Target).filter(Target.project_id == project_id).all()
+    target_ids = [t.id for t in targets]
+    scans = (
+        db.query(Scan).filter(Scan.target_id.in_(target_ids)).all()
+        if target_ids else []
+    )
+
+    phase_defs = [
+        ("recon",       "Recon",       {"nmap", "whois", "subfinder", "theharvester", "amass"}),
+        ("enum",        "Enumeration", {"nikto", "gobuster", "whatweb", "enum4linux", "crackmapexec", "wfuzz", "kerberoast", "asreproast"}),
+        ("exploit",     "Exploit",     {"sqlmap", "searchsploit", "nessus_import"}),
+        ("post_exploit","Post-Exploit",{"postex"}),
+    ]
+
+    result = []
+    for phase_id, phase_name, phase_types in phase_defs:
+        phase_scans = [
+            s for s in scans
+            if s.scan_type.lower() in phase_types
+            or (phase_id == "exploit" and s.scan_type.lower().startswith("msf"))
+        ]
+        tools_used = sorted({s.scan_type for s in phase_scans})
+        completed = [s for s in phase_scans if s.status == "completed"]
+        active    = [s for s in phase_scans if s.status in ("running", "pending")]
+
+        if active:
+            phase_status = "running"
+            progress = int(len(completed) / len(phase_scans) * 100) if phase_scans else 0
+        elif completed:
+            phase_status = "done"
+            progress = 100
+        else:
+            phase_status = "pending"
+            progress = 0
+
+        first_started = min(
+            (s.started_at for s in phase_scans if s.started_at), default=None
+        )
+        last_ended = max(
+            (s.completed_at for s in completed if s.completed_at), default=None
+        ) if phase_status == "done" else None
+
+        result.append({
+            "id": phase_id,
+            "name": phase_name,
+            "status": phase_status,
+            "tools": tools_used if tools_used else list(sorted(phase_types))[:2],
+            "started": first_started.isoformat() if first_started else None,
+            "ended": last_ended.isoformat() if last_ended else None,
+            "progress": progress,
+        })
+
+    return result
+
+
 # ── Target endpoints (nested under /projects/{id}/targets) ───────────────────
 
 
@@ -872,6 +934,77 @@ def diff_scans(a: str, b: str, db: Session = Depends(get_db)):
         "resolved":  [_serialize(map_a[k]) for k in resolved_keys],
         "unchanged": [_serialize(map_a[k]) for k in unchanged_keys],
     }
+
+
+# ── Activity feed endpoint ────────────────────────────────────────────────────
+
+
+@stats_router.get("/activity")
+def get_activity(project_id: Optional[str] = None, limit: int = 20, db: Session = Depends(get_db)):
+    """Return a flat activity feed for the given project (scans + findings + sessions)."""
+    if not project_id:
+        return []
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return []
+
+    targets = db.query(Target).filter(Target.project_id == project_id).all()
+    target_map = {t.id: t.hostname_or_ip for t in targets}
+    target_ids = list(target_map.keys())
+
+    entries: list[dict] = []
+
+    if target_ids:
+        scans = db.query(Scan).filter(Scan.target_id.in_(target_ids)).all()
+        for s in scans:
+            host = target_map.get(s.target_id, "unknown")
+            if s.completed_at:
+                entries.append({
+                    "id": f"scan-{s.id}",
+                    "timestamp": s.completed_at.isoformat(),
+                    "message": f"{s.scan_type} scan on {host} — {s.status}",
+                    "kind": "scan",
+                })
+            elif s.started_at:
+                entries.append({
+                    "id": f"scan-{s.id}",
+                    "timestamp": s.started_at.isoformat(),
+                    "message": f"{s.scan_type} scan on {host} — {s.status}",
+                    "kind": "scan",
+                })
+
+        scan_ids = [s.id for s in scans]
+        if scan_ids:
+            scan_ts_map = {s.id: (s.completed_at or s.started_at) for s in scans}
+            scan_target_map = {s.id: target_map.get(s.target_id, "unknown") for s in scans}
+            findings = db.query(Finding).filter(Finding.scan_id.in_(scan_ids)).all()
+            for f in findings:
+                ts = scan_ts_map.get(f.scan_id)
+                if not ts:
+                    continue
+                sev = (f.severity or "info").upper()
+                host = scan_target_map.get(f.scan_id, "unknown")
+                entries.append({
+                    "id": f"finding-{f.id}",
+                    "timestamp": ts.isoformat(),
+                    "message": f"{sev}: {f.title or 'Finding'} on {host}",
+                    "kind": "finding",
+                })
+
+        sessions = db.query(C2Session).filter(C2Session.project_id == project_id).all()
+        for s in sessions:
+            if s.established_at:
+                host = target_map.get(s.target_id, s.remote_host or "unknown")
+                entries.append({
+                    "id": f"session-{s.id}",
+                    "timestamp": s.established_at.isoformat(),
+                    "message": f"Session established: {host} ({s.session_type or 'unknown'})",
+                    "kind": "session",
+                })
+
+    entries.sort(key=lambda e: e["timestamp"], reverse=True)
+    return entries[:limit]
 
 
 # ── Engagement timeline endpoint ─────────────────────────────────────────────
