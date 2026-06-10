@@ -415,6 +415,8 @@ if FRONTEND_DIST.exists():
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(request: Request, full_path: str):
         """SPA fallback — serve index.html for all non-API routes."""
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail=f"API route not found: /{full_path}")
         index = FRONTEND_DIST / "index.html"
         if index.exists():
             return FileResponse(str(index))
