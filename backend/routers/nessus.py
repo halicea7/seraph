@@ -203,15 +203,40 @@ def get_nessus_scan(nessus_scan_id: int, db: Session = Depends(get_db)):
 
 
 class NessusImportRequest(BaseModel):
-    project_id: str
+    project_id: str = ""
+    project_name: str = ""
+    host_ids: list[int] = []
+
+
+def _detect_target_type(os_str: str) -> str:
+    s = os_str.lower()
+    if "windows" in s:
+        return "windows_host"
+    if any(x in s for x in ["cisco", "juniper", "fortinet", "palo alto", "vyos", "mikrotik"]):
+        return "network"
+    return "linux_host"
 
 
 @router.post("/scans/{nessus_scan_id}/import")
 def import_nessus_scan(nessus_scan_id: int, req: NessusImportRequest, db: Session = Depends(get_db)):
-    """Import all hosts + vulnerabilities from a Nessus scan as Seraph Findings."""
-    project = db.query(Project).filter(Project.id == req.project_id).first()
-    if not project:
-        raise HTTPException(404, "Project not found")
+    """Import selected hosts + vulnerabilities from a Nessus scan as Seraph Findings."""
+    # Resolve or create project
+    if req.project_id:
+        project = db.query(Project).filter(Project.id == req.project_id).first()
+        if not project:
+            raise HTTPException(404, "Project not found")
+        project_id = req.project_id
+    elif req.project_name.strip():
+        project = Project(
+            id=str(uuid.uuid4()),
+            name=req.project_name.strip(),
+            description="Imported from Nessus",
+        )
+        db.add(project)
+        db.flush()
+        project_id = project.id
+    else:
+        raise HTTPException(400, "Provide either project_id or project_name")
 
     client = _load_client(db)
     try:
@@ -222,31 +247,72 @@ def import_nessus_scan(nessus_scan_id: int, req: NessusImportRequest, db: Sessio
 
     scan_name = scan_data.get("info", {}).get("name", f"Nessus scan {nessus_scan_id}")
     hosts = scan_data.get("hosts") or []
+    filter_ids = set(req.host_ids) if req.host_ids else None
 
     scan_ids: list[str] = []
     findings_created = 0
     hosts_processed = 0
+    targets_created = 0
 
     for host in hosts:
         host_id = host.get("host_id")
+        if filter_ids is not None and host_id not in filter_ids:
+            continue
+
         hostname = host.get("hostname", f"host-{host_id}")
+
+        # Fetch per-host detail early — needed for target enrichment
+        host_data: dict = {}
+        try:
+            host_data = client.get(f"/scans/{nessus_scan_id}/hosts/{host_id}")
+        except Exception:
+            pass
+
+        host_info = host_data.get("info", {})
+        real_ip = host_info.get("host-ip", "").strip()
+        primary_id = real_ip or hostname
 
         # Find or create Target
         target = db.query(Target).filter(
-            Target.project_id == req.project_id,
-            Target.hostname_or_ip == hostname,
+            Target.project_id == project_id,
+            Target.hostname_or_ip == primary_id,
         ).first()
         if not target:
+            os_str = host_info.get("operating-system", "")
+            target_type = _detect_target_type(os_str)
+            notes_parts = []
+            if os_str:
+                notes_parts.append(f"OS: {os_str}")
+            fqdn = host_info.get("host-fqdn", "")
+            if fqdn and fqdn != primary_id:
+                notes_parts.append(f"FQDN: {fqdn}")
+            mac = host_info.get("mac-address", "")
+            if mac:
+                notes_parts.append(f"MAC: {mac}")
+            nb = host_info.get("netbios-name", "")
+            if nb:
+                notes_parts.append(f"NetBIOS: {nb}")
+            notes_parts.append("Source: Nessus import")
+
+            # Collect open ports from vulnerabilities
+            ports = sorted({
+                v.get("port") for v in (host_data.get("vulnerabilities") or [])
+                if v.get("port", 0) > 0
+            })
+
             target = Target(
                 id=str(uuid.uuid4()),
-                project_id=req.project_id,
-                hostname_or_ip=hostname,
-                target_type="linux_host",
+                project_id=project_id,
+                hostname_or_ip=primary_id,
+                target_type=target_type,
+                notes="\n".join(notes_parts),
+                ports=",".join(str(p) for p in ports) if ports else None,
             )
             db.add(target)
             db.flush()
+            targets_created += 1
 
-        # Create a Scan record for this host
+        # Create Scan record for this host
         scan = Scan(
             id=str(uuid.uuid4()),
             target_id=target.id,
@@ -261,19 +327,12 @@ def import_nessus_scan(nessus_scan_id: int, req: NessusImportRequest, db: Sessio
         db.flush()
         scan_ids.append(scan.id)
 
-        # Fetch per-host vulnerabilities
-        try:
-            host_data = client.get(f"/scans/{nessus_scan_id}/hosts/{host_id}")
-        except Exception:
-            continue
-
         for vuln in (host_data.get("vulnerabilities") or []):
             plugin_id = vuln.get("plugin_id")
             severity_int = vuln.get("severity", 0)
             severity = _NESSUS_SEV.get(severity_int, "info")
             plugin_name = vuln.get("plugin_name", f"Plugin {plugin_id}")
 
-            # Fetch plugin output for CVE data (best-effort)
             description = ""
             cve_id = None
             try:
@@ -281,7 +340,6 @@ def import_nessus_scan(nessus_scan_id: int, req: NessusImportRequest, db: Sessio
                 outputs = plugin_data.get("outputs") or []
                 if outputs:
                     description = outputs[0].get("plugin_output", "")
-                # CVE IDs are in plugin attributes
                 attrs = plugin_data.get("info", {}).get("plugindescription", {}).get("pluginattributes", {})
                 ref_info = attrs.get("ref_information", {})
                 refs = ref_info.get("ref", [])
@@ -314,4 +372,10 @@ def import_nessus_scan(nessus_scan_id: int, req: NessusImportRequest, db: Sessio
         hosts_processed += 1
 
     db.commit()
-    return {"scan_ids": scan_ids, "findings_created": findings_created, "hosts_processed": hosts_processed}
+    return {
+        "scan_ids": scan_ids,
+        "findings_created": findings_created,
+        "hosts_processed": hosts_processed,
+        "targets_created": targets_created,
+        "project_id": project_id,
+    }
