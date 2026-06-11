@@ -149,18 +149,64 @@ npm run build      # outputs to frontend/dist/
 
 ---
 
-### 2. Option C — Docker
+### 2. Option C — Docker (recommended for the desktop app)
+
+The all-in-one image bundles the backend API **and every supported security tool**
+(nmap, nuclei, nxc, impacket, responder, …) in one container, backed by SQLite. This
+is the intended way to run Seraph for the **SeraphElectron** desktop app, which connects
+to the backend over the network.
+
+**One command:**
 
 ```bash
-docker compose up --build
+./setup.sh
 ```
 
-| Service | URL |
-|---------|-----|
-| Web UI + API | `http://localhost:8000` |
-| API Docs | `http://localhost:8000/docs` |
+`setup.sh` is zero-prompt and idempotent. It:
 
-Data is persisted in named Docker volumes (`seraph_data`, `seraph_results`).
+1. Verifies Docker + Compose are installed and the daemon is reachable.
+2. Creates `.env` from `.env.example` (only on first run) and generates strong random
+   values for `SERAPH_SECRET_KEY`, `MSF_RPC_PASSWORD`, and `POSTGRES_PASSWORD`. Existing
+   values are **never** overwritten, so it's safe to re-run.
+3. Builds the image and starts the container (`docker compose up -d --build`).
+4. Waits for the API to become healthy, then prints the URL to connect.
+
+> **First build takes several minutes** — it pulls and compiles the full tool suite (image
+> is ~3.5 GB). Subsequent runs are cached and start in seconds.
+
+**Connecting the SeraphElectron desktop app:** open the app's **Connect** screen and enter
+the backend URL printed by `setup.sh`:
+
+| From | URL |
+|------|-----|
+| Same machine as the container | `http://localhost:8000` |
+| Another machine on your LAN | `http://<host-ip>:8000` |
+| API docs (browser) | `http://localhost:8000/docs` |
+
+CORS is already wide-open for the Electron app and the port binds all interfaces — no extra
+configuration needed. Create your admin account on the app's First-Run screen.
+
+> This image is **API-only** — it does not serve a browser web UI. The SeraphElectron app
+> is the frontend. (For a browser-served SPA, use the dev script in Option A or a manual
+> production build in Option B.)
+
+**Without `setup.sh`** (manual, or to change the port):
+
+```bash
+cp .env.example .env          # then set SERAPH_SECRET_KEY
+SERAPH_PORT=9000 docker compose up -d --build
+```
+
+**Managing the container:**
+
+```bash
+docker compose logs -f        # follow logs
+docker compose down           # stop (data persists in volumes)
+docker compose down -v        # stop AND wipe all data (fresh start)
+```
+
+Data is persisted in named Docker volumes (`seraph_data` for the SQLite DB, `seraph_results`,
+`seraph_reports`).
 
 ---
 
@@ -319,6 +365,87 @@ Captured Kerberos hashes (TGS-REP / AS-REP) are saved to the Credential Vault an
 - Always set `SERAPH_SECRET_KEY` to a long random value in any non-local deployment.
 - The database file (`backend/seraph.db`) and scan results (`backend/seraph_results/`) are gitignored and must never be committed — they may contain sensitive target data.
 - All scan execution happens server-side. Ensure the Seraph host has appropriate network access to targets in scope.
+
+---
+
+## Troubleshooting
+
+### `Docker is installed but the daemon isn't reachable`
+
+`setup.sh` aborts here when `docker info` fails. Two common causes:
+
+**1. The Docker daemon isn't running.** Start it (and enable it on boot so it survives a reboot):
+
+```bash
+sudo systemctl enable --now docker
+sudo systemctl is-active docker      # should print: active
+```
+
+**2. Your user isn't in the `docker` group.** The Docker socket is owned by `root:docker`, so
+without group membership every `docker` command is denied — which surfaces as "daemon isn't
+reachable". Add yourself and re-apply the group:
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker                        # applies the group to the current shell
+docker info >/dev/null && echo OK    # verify
+```
+
+(A full log out / log back in also works, and is needed for other shells.)
+
+**Quick check — which one is it?**
+
+```bash
+sudo systemctl is-active docker                                          # daemon up?
+id -nG | tr ' ' '\n' | grep -qx docker && echo "in group" || echo "NOT" # permissions?
+```
+
+**Unblock regardless of cause:** run the script with `sudo ./setup.sh`.
+
+### First build is slow / a tool says "skipped (optional)"
+
+The first build compiles the full tool suite and can take several minutes. Optional third-party
+tools are installed **best-effort** — if an upstream release asset is temporarily unavailable,
+the build logs `[build] <tool> skipped (optional)` and continues instead of failing. Seraph
+detects whatever ended up missing in **Settings → Tools**; re-run `docker compose build` later
+to pick it up.
+
+### Port 8000 is already in use
+
+Pick a different host port — the container still listens on 8000 internally:
+
+```bash
+SERAPH_PORT=9000 ./setup.sh          # or: SERAPH_PORT=9000 docker compose up -d --build
+```
+
+Then point the SeraphElectron Connect screen at `http://<host>:9000`.
+
+### The SeraphElectron app can't connect
+
+1. Confirm the API is healthy from the **same machine running the container**:
+   ```bash
+   curl http://localhost:8000/api/v1/auth/setup-required     # → {"required": ...}
+   ```
+2. Connecting from another machine? Use the host's **LAN IP**, not `localhost`
+   (`setup.sh` prints it), and make sure the host firewall allows inbound TCP on the port.
+3. `docker compose ps` should show the `seraph` service as `healthy`. If not, check
+   `docker compose logs -f`.
+
+### Sessions reset / "logged out" on every restart
+
+`SERAPH_SECRET_KEY` isn't set, so a random key is generated per process. `setup.sh` sets it for
+you; if you bypassed it, add a fixed value to `.env`:
+
+```bash
+python3 -c "import secrets; print('SERAPH_SECRET_KEY=' + secrets.token_hex(32))" >> .env
+```
+
+### Start completely fresh
+
+```bash
+docker compose down -v               # removes containers AND the data volumes
+./setup.sh                           # rebuild + recreate from scratch
+```
 
 ---
 
