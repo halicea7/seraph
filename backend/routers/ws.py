@@ -249,6 +249,65 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
         db.close()
 
 
+@router.websocket("/ws/hermes/{scan_id}")
+async def websocket_hermes(websocket: WebSocket, scan_id: str):
+    """Run a prepared Hermes Agent engagement and stream its transcript."""
+    await websocket.accept()
+    db = SessionLocal()
+    try:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan:
+            await websocket.send_json({"type": "error", "data": "Run not found"})
+            await websocket.close()
+            return
+
+        config = json.loads(scan.config_json or "{}")
+        command = config.get("command", "")
+        if not command:
+            await websocket.send_json({"type": "error", "data": "No command in run record"})
+            await websocket.close()
+            return
+
+        # Wait for the client's run signal (mirrors /ws/execute).
+        data = await websocket.receive_json()
+        if data.get("action") != "run":
+            await websocket.send_json({"type": "error", "data": "Expected action: run"})
+            await websocket.close()
+            return
+
+        scan.status = "running"
+        scan.started_at = datetime.utcnow()
+        db.commit()
+
+        full_output: list[str] = []
+        client_connected = True
+        async for message in run_command_streaming(command):
+            if message["type"] in ("stdout", "stderr"):
+                full_output.append(message["data"])
+            elif message["type"] == "exit":
+                scan.raw_output = "".join(full_output)[:500000]
+                scan.status = "completed" if message["code"] == 0 else "failed"
+                scan.completed_at = datetime.utcnow()
+                db.commit()
+                await broadcast_event({"type": "scan_update", "scan_id": scan_id,
+                                       "status": scan.status, "progress": 100})
+            if client_connected:
+                try:
+                    await websocket.send_json(message)
+                except (WebSocketDisconnect, Exception):
+                    client_connected = False
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": str(e)})
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 @router.websocket("/ws/pentest/{scan_id}")
 async def websocket_pentest(websocket: WebSocket, scan_id: str):
     """Execute a pentest tool command and stream output."""

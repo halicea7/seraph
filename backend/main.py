@@ -44,6 +44,7 @@ from routers.cve_watch import router as cve_watch_router
 from routers.attack import router as attack_router
 from routers.ptes import router as ptes_router
 from routers.nessus import router as nessus_router
+from routers.hermes import router as hermes_router
 from routers.cloud import router as cloud_router
 from services.tool_registry import detect_tools, initialize_registry
 from services.scheduler import initialize_scheduler
@@ -273,6 +274,7 @@ app.include_router(cve_watch_router, prefix=API_PREFIX)
 app.include_router(attack_router, prefix=API_PREFIX)
 app.include_router(ptes_router, prefix=API_PREFIX)
 app.include_router(nessus_router, prefix=API_PREFIX)
+app.include_router(hermes_router, prefix=API_PREFIX)
 app.include_router(cloud_router, prefix=API_PREFIX)
 
 
