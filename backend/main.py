@@ -46,6 +46,9 @@ from routers.ptes import router as ptes_router
 from routers.nessus import router as nessus_router
 from routers.hermes import router as hermes_router
 from routers.cloud import router as cloud_router
+from routers.ad import router as ad_router
+from routers.screenshots import router as screenshots_router
+from routers.http_wb import router as http_wb_router
 from services.tool_registry import detect_tools, initialize_registry
 from services.scheduler import initialize_scheduler
 from services.playbook_runner import seed_builtin_playbooks
@@ -286,6 +289,9 @@ app.include_router(ptes_router, prefix=API_PREFIX)
 app.include_router(nessus_router, prefix=API_PREFIX)
 app.include_router(hermes_router, prefix=API_PREFIX)
 app.include_router(cloud_router, prefix=API_PREFIX)
+app.include_router(ad_router, prefix=API_PREFIX)
+app.include_router(screenshots_router, prefix=API_PREFIX)
+app.include_router(http_wb_router, prefix=API_PREFIX)
 
 
 # ── Settings / tools endpoint ─────────────────────────────────────────────────

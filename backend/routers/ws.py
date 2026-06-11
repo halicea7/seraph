@@ -751,6 +751,82 @@ async def websocket_osint(websocket: WebSocket, scan_id: str):
         db.close()
 
 
+@router.websocket("/ws/screenshots/{job_id}")
+async def websocket_screenshots(websocket: WebSocket, job_id: str):
+    """Run a gowitness capture, stream output, then index produced images."""
+    from services.screenshot import get_job, index_results, finish_job
+    from database import Screenshot
+
+    await websocket.accept()
+    db = SessionLocal()
+    try:
+        job = get_job(job_id)
+        if not job:
+            await websocket.send_json({"type": "error", "data": "Capture job not found or expired"})
+            await websocket.close()
+            return
+
+        client_connected = True
+        async for message in run_command_streaming(job["command"]):
+            if message["type"] == "exit":
+                rows = index_results(job)
+                for r in rows:
+                    db.add(Screenshot(**r))
+                db.commit()
+                finish_job(job_id)
+                if client_connected:
+                    try:
+                        await websocket.send_json({"type": "results", "captured": len(rows)})
+                    except Exception:
+                        client_connected = False
+
+            if client_connected:
+                try:
+                    await websocket.send_json(message)
+                except (WebSocketDisconnect, Exception):
+                    client_connected = False
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": str(e)})
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.websocket("/ws/httpfuzz/{run_id}")
+async def websocket_httpfuzz(websocket: WebSocket, run_id: str):
+    """Stream HTTP fuzz results, one message per payload, then a summary."""
+    from services.http_workbench import get_fuzz_job, run_fuzz, finish_fuzz_job
+
+    await websocket.accept()
+    try:
+        job = get_fuzz_job(run_id)
+        if not job:
+            await websocket.send_json({"type": "error", "data": "Fuzz job not found or expired"})
+            await websocket.close()
+            return
+
+        await websocket.send_json({"type": "start", "total": len(job["payloads"])})
+        sent = 0
+        async for result in run_fuzz(job):
+            sent += 1
+            await websocket.send_json({"type": "result", **result})
+        await websocket.send_json({"type": "exit", "code": 0, "completed": sent})
+        finish_fuzz_job(run_id)
+
+    except WebSocketDisconnect:
+        finish_fuzz_job(run_id)
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": str(e)})
+        except Exception:
+            pass
+
+
 @router.websocket("/ws/sherlock/{job_id}")
 async def websocket_sherlock(websocket: WebSocket, job_id: str):
     """Run a sherlock username search and stream output with parsed profile results."""

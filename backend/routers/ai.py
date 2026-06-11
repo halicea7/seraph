@@ -361,6 +361,39 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         raise HTTPException(503, str(exc))
 
 
+class AskRequest(BaseModel):
+    project_id: str
+    question: str
+    model: Optional[str] = None
+
+
+@router.post("/ask")
+def ask_engagement(req: AskRequest, db: Session = Depends(get_db)):
+    """Answer a natural-language question grounded in the project's own data.
+
+    Distinct from the operators (which act) — this retrieves findings/loot/scans/
+    credential metadata for the project and asks the LLM to answer with citations.
+    """
+    from services.engagement_qa import retrieve, build_messages, citations
+
+    project = db.query(Project).filter(Project.id == req.project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
+    model = req.model or _get(db, "ai_model", DEFAULT_MODEL)
+    if not model:
+        raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
+
+    docs = retrieve(db, req.project_id, req.question)
+    messages = build_messages(project.name, req.question, docs)
+    try:
+        answer = chat_complete(endpoint, model, messages, **load_llm_params(db))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    return {"answer": answer, "citations": citations(docs)}
+
+
 @router.get("/narrate/{project_id}")
 def get_saved_narratives(project_id: str, db: Session = Depends(get_db)):
     """Return previously saved narratives for a project."""

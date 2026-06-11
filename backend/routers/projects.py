@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
-from database import C2Session, Credential, Finding, FPSuppressionRule, Project, Scan, Target, VulnerabilityRecord, get_db
+from database import ADCollection, C2Session, Credential, Finding, FPSuppressionRule, HttpRequestItem, Project, Scan, Screenshot, Target, VulnerabilityRecord, get_db
 from services.scope_service import check_scope, scope_summary
 from services.validators import (
     VALID_TARGET_TYPES,
@@ -294,9 +294,12 @@ def delete_project(project_id: str, db: Session = Depends(get_db)):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    # VulnerabilityRecord and Credential have project_id FKs without cascade
+    # VulnerabilityRecord, Credential, and ADCollection have project_id FKs without cascade
     db.query(VulnerabilityRecord).filter(VulnerabilityRecord.project_id == project_id).delete()
     db.query(Credential).filter(Credential.project_id == project_id).delete()
+    db.query(ADCollection).filter(ADCollection.project_id == project_id).delete()
+    db.query(Screenshot).filter(Screenshot.project_id == project_id).delete()
+    db.query(HttpRequestItem).filter(HttpRequestItem.project_id == project_id).delete()
     db.delete(project)
     db.commit()
 

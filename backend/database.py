@@ -532,6 +532,58 @@ class HardeningReport(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ADCollection(Base):
+    """An imported BloodHound/SharpHound collection for an engagement.
+
+    Graph data is stored as JSON blobs (nodes/edges) rather than relational rows —
+    mirrors how PlaybookRun.results_json stores derived graph data. project_id is a
+    plain FK and is NOT in the Project cascade, so delete explicitly (see demo.py).
+    """
+    __tablename__ = "ad_collections"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    name = Column(String, nullable=False)
+    domain = Column(String, default="")
+    source = Column(String, default="sharphound")   # sharphound | bloodhound-python
+    stats_json = Column(Text, default="{}")          # object counts by type
+    nodes_json = Column(Text, default="[]")          # [{id,label,type,flags}]
+    edges_json = Column(Text, default="[]")          # [{source,target,kind}]
+    quick_wins_json = Column(Text, default="[]")     # computed attack opportunities
+    imported_at = Column(DateTime, default=datetime.utcnow)
+
+
+class HttpRequestItem(Base):
+    """A saved HTTP request for the Request Workbench (Repeater-style collection).
+
+    project_id is a plain FK without cascade — delete explicitly with the project.
+    """
+    __tablename__ = "http_requests"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    name = Column(String, default="")
+    method = Column(String, default="GET")
+    url = Column(String, nullable=False)
+    headers_json = Column(Text, default="{}")
+    body = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Screenshot(Base):
+    """A captured web screenshot (gowitness/eyewitness) pinned to a project/target.
+
+    project_id is a plain FK without cascade — delete explicitly with the project.
+    """
+    __tablename__ = "screenshots"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    target_id = Column(String, ForeignKey("targets.id"), nullable=True)
+    url = Column(String, nullable=False)
+    title = Column(String, default="")
+    status_code = Column(String, nullable=True)
+    image_path = Column(String, nullable=False)   # absolute path on the backend host
+    captured_at = Column(DateTime, default=datetime.utcnow)
+
+
 class AuditLog(Base):
     """Security audit log — records all mutating API calls with user + IP context."""
     __tablename__ = "audit_log"

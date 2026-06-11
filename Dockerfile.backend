@@ -129,6 +129,16 @@ RUN { set -e; \
       chmod +x /usr/local/bin/kerbrute; \
     } || echo "[build] kerbrute skipped (optional)"
 
+# ── 8b. gowitness (web screenshotting for the Screenshot Gallery) ─────────────
+RUN { set -e; \
+      VER=$(curl -fsSL https://api.github.com/repos/sensepost/gowitness/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4); \
+      BARE=${VER#v}; \
+      curl -fsSL "https://github.com/sensepost/gowitness/releases/download/${VER}/gowitness-${BARE}-linux-amd64" \
+           -o /usr/local/bin/gowitness; \
+      chmod +x /usr/local/bin/gowitness; \
+    } || echo "[build] gowitness skipped (optional)"
+
 # ── 9. rustscan (optional; upstream ships a zipped .deb under bee-san/RustScan) ─
 # Wrapped non-fatal: an upstream asset rename must not brick the whole image —
 # Seraph detects a missing tool gracefully (Settings → Tools).

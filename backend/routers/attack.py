@@ -8,8 +8,13 @@ GET  /ai/attack/technique/{id}     — direct T-ID lookup
 GET  /ai/attack/tactic/{tactic}    — list techniques by tactic
 """
 
-from fastapi import APIRouter, HTTPException, Query
+import json
+import re
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from database import get_db, Finding, Scan, Target, PlaybookRun, Playbook
 from services.attack_index import (
     get_status,
     get_by_id,
@@ -22,6 +27,59 @@ from services.attack_index import (
 )
 
 router = APIRouter(prefix="/ai/attack", tags=["attack"])
+
+# Matches T1003 and sub-techniques like T1003.001 as whole tokens.
+_TID_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b")
+
+
+def _extract_tids(*texts: str | None) -> list[str]:
+    """Pull all ATT&CK technique IDs out of arbitrary free text."""
+    found: list[str] = []
+    for text in texts:
+        if text:
+            found.extend(m.group(0).upper() for m in _TID_RE.finditer(text))
+    return found
+
+
+def _compute_coverage(db: Session, project_id: str) -> dict[str, dict]:
+    """Tally ATT&CK technique usage for a project from findings + playbook runs.
+
+    Returns a map of technique_id -> {score, sources:set}. A technique's score is
+    the number of times it was referenced across all sources.
+    """
+    coverage: dict[str, dict] = {}
+
+    def _bump(tid: str, source: str) -> None:
+        entry = coverage.setdefault(tid, {"score": 0, "sources": set()})
+        entry["score"] += 1
+        entry["sources"].add(source)
+
+    # Findings for this project: Finding -> Scan -> Target(project_id)
+    findings = (
+        db.query(Finding)
+        .join(Scan, Finding.scan_id == Scan.id)
+        .join(Target, Scan.target_id == Target.id)
+        .filter(Target.project_id == project_id)
+        .all()
+    )
+    for f in findings:
+        for tid in _extract_tids(f.tags, f.description, f.exploit_chain_json):
+            _bump(tid, "finding")
+
+    # Playbook runs for this project -> the playbook's declared techniques
+    runs = db.query(PlaybookRun).filter(PlaybookRun.project_id == project_id).all()
+    pb_cache: dict[str, list[str]] = {}
+    for run in runs:
+        if run.playbook_id not in pb_cache:
+            pb = db.query(Playbook).filter(Playbook.id == run.playbook_id).first()
+            try:
+                pb_cache[run.playbook_id] = json.loads(pb.mitre_techniques) if pb else []
+            except (json.JSONDecodeError, TypeError):
+                pb_cache[run.playbook_id] = []
+        for tid in pb_cache[run.playbook_id]:
+            _bump(str(tid).upper(), "playbook")
+
+    return coverage
 
 
 @router.get("/status")
@@ -76,3 +134,97 @@ def browse_techniques(
 ):
     """Paginated browse of all indexed techniques."""
     return browse(tactic=tactic, limit=limit, offset=offset)
+
+
+def _enrich_and_group(coverage: dict[str, dict]) -> tuple[list[dict], list[dict]]:
+    """Turn a raw coverage map into a flat list + a per-tactic grouping.
+
+    Enriches each touched technique with its name/tactic from the ATT&CK index.
+    Sub-techniques (T1003.001) fall back to the parent (T1003) for metadata.
+    A technique appears under every tactic it belongs to.
+    """
+    flat: list[dict] = []
+    by_tactic: dict[str, list[dict]] = {}
+
+    for tid, data in coverage.items():
+        meta = get_by_id(tid) or get_by_id(tid.split(".")[0]) or {}
+        item = {
+            "technique_id": tid,
+            "name": meta.get("name", ""),
+            "tactic": meta.get("tactic", ""),
+            "score": data["score"],
+            "sources": sorted(data["sources"]),
+        }
+        flat.append(item)
+        tactics = [t.strip() for t in (meta.get("tactic") or "").split(",") if t.strip()]
+        for t in tactics or ["(unmapped)"]:
+            by_tactic.setdefault(t, []).append(item)
+
+    flat.sort(key=lambda x: (-x["score"], x["technique_id"]))
+    grouped = [
+        {
+            "tactic": tactic,
+            "techniques": sorted(items, key=lambda x: (-x["score"], x["technique_id"])),
+        }
+        for tactic, items in sorted(by_tactic.items())
+    ]
+    return flat, grouped
+
+
+@router.get("/coverage")
+def technique_coverage(
+    project_id: str = Query(..., description="Project to compute coverage for"),
+    db: Session = Depends(get_db),
+):
+    """ATT&CK technique coverage for an engagement.
+
+    Scores each technique by how often it was referenced across the project's
+    findings and playbook runs. Powers the Navigator heatmap.
+    """
+    coverage = _compute_coverage(db, project_id)
+    flat, grouped = _enrich_and_group(coverage)
+    max_score = max((t["score"] for t in flat), default=0)
+    return {
+        "project_id": project_id,
+        "total_touched": len(flat),
+        "max_score": max_score,
+        "tactics": grouped,
+        "techniques": flat,
+    }
+
+
+@router.get("/coverage/export")
+def export_navigator_layer(
+    project_id: str = Query(...),
+    name: str = Query("Seraph Coverage"),
+    db: Session = Depends(get_db),
+):
+    """Export coverage as an ATT&CK Navigator layer (importable at mitre-attack.github.io/attack-navigator)."""
+    coverage = _compute_coverage(db, project_id)
+    flat, _ = _enrich_and_group(coverage)
+    max_score = max((t["score"] for t in flat), default=1) or 1
+    return {
+        "name": name,
+        "versions": {"attack": "14", "navigator": "4.9.1", "layer": "4.5"},
+        "domain": "enterprise-attack",
+        "description": f"Seraph engagement coverage — {len(flat)} techniques touched.",
+        "sorting": 3,
+        "hideDisabled": False,
+        "techniques": [
+            {
+                "techniqueID": t["technique_id"],
+                "score": t["score"],
+                "comment": ", ".join(t["sources"]),
+                "enabled": True,
+            }
+            for t in flat
+        ],
+        "gradient": {
+            "colors": ["#f0a83a33", "#e85c4eff"],
+            "minValue": 0,
+            "maxValue": max_score,
+        },
+        "legendItems": [],
+        "showTacticRowBackground": True,
+        "tacticRowBackground": "#1a1814",
+    }
