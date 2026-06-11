@@ -76,6 +76,16 @@ async def lifespan(app: FastAPI):
     create_tables()
     _reset_stale_scans()
     initialize_registry()
+    # Consistency guard: every tool referenced by a tool chain must be registered
+    # in TOOL_META (so it's detectable and has an install hint).
+    from services.tool_registry import check_tool_chain_coverage
+    _uncovered = check_tool_chain_coverage()
+    if _uncovered:
+        import logging
+        logging.getLogger(__name__).warning(
+            "tool_chains.json references tools missing from TOOL_META: %s",
+            ", ".join(_uncovered),
+        )
     initialize_scheduler()
     initialize_listeners()
     seed_builtin_playbooks()

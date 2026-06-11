@@ -24,42 +24,8 @@ class Settings(BaseSettings):
     # Extra CORS origins beyond rp_origins — comma-separated.
     # Add "null" here to allow Electron/Chronos requests (Origin: null).
     extra_cors_origins: str = ""
-    tools: list[str] = [
-        "nmap",
-        "nikto",
-        "testssl",
-        "lynis",
-        "oscap",
-        "masscan",
-        "gobuster",
-        "sqlmap",
-        "hydra",
-        "whois",
-        "dig",
-        "theHarvester",
-        "subfinder",
-        "go",
-        "amass",
-        "hashcat",
-        "john",
-        "enum4linux",
-        "ffuf",
-        "searchsploit",
-        "aws",
-        "rustscan",
-        "nuclei",
-        "feroxbuster",
-        "kerbrute",
-        "nxc",
-        "impacket-GetUserSPNs",
-        "impacket-GetNPUsers",
-        "impacket-secretsdump",
-        "impacket-psexec",
-        "impacket-wmiexec",
-        "responder",
-        "wafw00f",
-        "sherlock",
-    ]
+    # NOTE: the tool list lives in services/tool_registry.py (TOOL_META) — the
+    # single source of truth for detection, install hints, and tiers.
 
 
 settings = Settings()

