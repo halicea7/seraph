@@ -173,9 +173,10 @@ RUN { git clone --depth=1 https://github.com/lgandx/Responder.git /opt/responder
     || echo "[build] Responder skipped (optional)"
 
 # ── 14. pipx tools (each best-effort so one failure doesn't lose the others) ──
+# NetExec (nxc) is not on PyPI as "netexec" — install from the upstream repo.
 RUN pipx install git+https://github.com/laramies/theHarvester || echo "[build] theHarvester skipped (optional)"; \
-    pipx install netexec    || echo "[build] netexec/nxc skipped (optional)"; \
-    pipx install wafw00f     || echo "[build] wafw00f skipped (optional)"; \
+    pipx install git+https://github.com/Pennyw0rth/NetExec     || echo "[build] netexec/nxc skipped (optional)"; \
+    pipx install wafw00f                                       || echo "[build] wafw00f skipped (optional)"; \
     pipx ensurepath || true
 
 # ── 15. Python dependencies ───────────────────────────────────────────────────
