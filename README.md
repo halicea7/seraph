@@ -208,6 +208,20 @@ docker compose down -v        # stop AND wipe all data (fresh start)
 Data is persisted in named Docker volumes (`seraph_data` for the SQLite DB, `seraph_results`,
 `seraph_reports`).
 
+**Updating an existing install** (you ran `setup.sh` before and want the latest version):
+
+```bash
+cd seraph
+git pull                      # get the latest code (Dockerfile, compose, scripts)
+./setup.sh                    # rebuilds the image and recreates the container
+```
+
+`setup.sh` runs `docker compose up -d --build`, so it picks up the new image and restarts the
+container. Your **`.env` is preserved** (existing secrets are never overwritten) and your **data
+survives** in the named volumes — schema changes are migrated automatically on startup. To enable
+HTTPS at the same time, run `./setup-https.sh` first, then `./setup.sh`. Reclaim space from the old
+image afterward with `docker image prune -f`.
+
 ---
 
 ## First Run
