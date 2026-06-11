@@ -16,15 +16,20 @@ A self-hosted security assessment platform combining compliance auditing, penetr
 |----------|-----------|
 | **Compliance** | CIS / NIST 800-53 scan templates, bash script generation, Lynis / OpenSCAP integration |
 | **Pentest** | Phased workflows (recon → scanning → exploitation), tool-chained command templates, live terminal |
+| **Request Workbench** | Repeater/Intruder-lite — edit & replay raw HTTP requests, fuzz a `§FUZZ§` marker across payloads with live streamed results, scope-enforced |
 | **Playbooks** | Multi-step automated workflows with step-through, auto-run, and conditional logic |
+| **ATT&CK Navigator** | Technique-coverage heatmap scored from the engagement's findings + playbook runs; exports an importable MITRE Navigator layer |
 | **Recon** | OSINT module (Whois, Subfinder, theHarvester, Searchsploit), network visualization |
+| **Screenshot Gallery** | gowitness web-host capture streamed live, visual triage gallery + lightbox pinned to the project |
 | **C2** | Metasploit RPC integration — sessions, payloads, listeners, loot, post-exploitation |
 | **Post-Ex** | Per-session checklist (12 items), auto-probe, credential harvesting, pivot route manager, screenshot, shell upgrade |
 | **Active Directory** | Kerbrute enumeration, NetExec SMB/LDAP/WinRM, Kerberoasting, AS-REP roasting, secretsdump, psexec/wmiexec |
+| **AD Attack Suite** | Import a BloodHound/SharpHound collection → attack-graph + quick-win analysis (kerberoastable, AS-REP, unconstrained delegation, high-value principals) with scaffolded commands |
 | **Credentials** | Vault for passwords, hashes, keys, tokens with source tracking and password auditing (Hashcat / John) |
 | **Defense** | Vulnerability tracker with status workflow, AI remediation suggestions, log analysis and IOC extraction |
 | **Reporting** | HTML, Markdown, and PDF audit/pentest reports with executive summaries and finding tables |
 | **AI Narrative** | Local LLM integration (Ollama) for AI-generated executive and technical narratives |
+| **Ask Seraph (Q&A)** | Natural-language questions answered from the engagement's own findings/loot/scans/credential-metadata via keyword RAG + the configured Ollama model, with clickable citations |
 | **Multi-user** | Admin / analyst roles, JWT authentication, per-user profiles, user management |
 | **Auto-Probe** | Automatic nmap + nikto + searchsploit scan triggered when a new target is added |
 | **Passkeys** | WebAuthn / FIDO2 passkey support per user (iCloud Keychain, Touch ID, Face ID, YubiKey) |
@@ -78,7 +83,7 @@ nmap          nikto         testssl.sh    lynis         openscap      masscan
 gobuster      sqlmap        hydra         whois         dig           theHarvester
 subfinder     enum4linux    ffuf          searchsploit  hashcat       john
 rustscan      nuclei        feroxbuster   kerbrute      nxc           responder
-impacket      metasploit
+impacket      metasploit    gowitness     bloodhound-python
 ```
 
 ---
@@ -351,6 +356,16 @@ ollama pull llama3
 
 The AI Narrative feature in Reports generates executive or technical summaries of findings using the configured model.
 
+### Ask Seraph (engagement Q&A)
+
+**Ask Seraph** (Findings & Analysis) answers natural-language questions about the current
+engagement — *"What are the critical findings?"*, *"Which credentials have we collected?"* —
+grounded in the project's own data. It uses lightweight **keyword retrieval** (no embeddings
+or vector database) over the project's findings, vulnerability records, C2 loot, scans, and
+credential **metadata** (secrets are never sent to the model), assembles a grounded prompt,
+and answers with the **same configured Ollama model** used for AI Narrative. Each answer
+includes citation chips that deep-link back to the source finding/scan/loot.
+
 ---
 
 ## C2 / Metasploit (optional)
@@ -389,6 +404,54 @@ Select the **Active Directory** engagement type in the Pentest Workbench for dom
 | `responder` | LLMNR/NBT-NS poisoning for NTLMv2 hash capture | git clone from GitHub |
 
 Captured Kerberos hashes (TGS-REP / AS-REP) are saved to the Credential Vault and can be loaded directly into Password Auditing for hashcat cracking (modes 13100 / 18200).
+
+### AD Attack Suite (BloodHound import)
+
+The **AD Attack Suite** page (Offense) ingests a BloodHound/SharpHound collection
+(`.zip` or `.json`) and analyzes it locally — no Neo4j required. It surfaces quick-win
+attack opportunities as cards:
+
+- **Kerberoastable** accounts (SPN set) and **AS-REP roastable** accounts (no pre-auth)
+- **Unconstrained delegation** hosts/accounts
+- **High-value principals** (`adminCount=1`, Domain/Enterprise Admins)
+
+Each card lists the affected principals and a ready-to-copy command (impacket / NetExec)
+to run from the Pentest Workbench or AI Operator. Collect with SharpHound or
+`bloodhound-python`, then import the resulting archive.
+
+---
+
+## Web Application Testing — Request Workbench
+
+The **Request Workbench** (Offense) is a Repeater/Intruder-lite built on `httpx`:
+
+- **Repeater** — edit a raw request (method, URL, headers, body), send, and inspect the
+  full response (status, headers, body, size, timing).
+- **Intruder** — place a `§FUZZ§` marker in the URL, a header, or the body, supply a
+  payload list, and stream per-payload results (status · length · time) into a sortable
+  table for quick anomaly spotting.
+
+All requests are **scope-enforced** against the project's include/exclude rules before
+anything is sent. Frequently-used requests can be saved to a per-project collection.
+
+---
+
+## Screenshot Gallery
+
+The **Screenshot Gallery** (Recon) runs [gowitness](https://github.com/sensepost/gowitness)
+across a list of web hosts (auto-fillable from project targets), streams capture progress
+live, and presents the results as a thumbnail grid with a click-to-zoom lightbox.
+Out-of-scope URLs are dropped automatically.
+
+---
+
+## ATT&CK Navigator
+
+The **ATT&CK Navigator** (Offense) renders a technique-coverage heatmap for the current
+engagement, scored from how often each MITRE technique is referenced across the project's
+findings and playbook runs. Cells are colored by score, and **Export layer** downloads an
+ATT&CK Navigator–compatible JSON layer you can open at
+[mitre-attack.github.io/attack-navigator](https://mitre-attack.github.io/attack-navigator/).
 
 ---
 
@@ -521,6 +584,9 @@ Interactive docs available at `http://localhost:8000/docs` when the backend is r
 | `/api/v1/projects` | Projects and targets |
 | `/api/v1/audit` | Scan generation, finding parsing, reports |
 | `/api/v1/pentest` | Pentest engagements and phases |
+| `/api/v1/http` | Request Workbench — send/replay + fuzz (`/ws/httpfuzz` stream) |
+| `/api/v1/ad` | AD Attack Suite — collection import, graph, quick-wins, command scaffolds |
+| `/api/v1/screenshots` | Screenshot Gallery — gowitness capture (`/ws/screenshots` stream) + image serving |
 | `/api/v1/playbooks` | Playbook management and runs |
 | `/api/v1/vulns` | Vulnerability tracker |
 | `/api/v1/logs` | Log analysis and IOC extraction |
@@ -532,8 +598,8 @@ Interactive docs available at `http://localhost:8000/docs` when the backend is r
 | `/api/v1/passkeys` | WebAuthn passkey registration and authentication |
 | `/api/v1/stats` | Platform-wide statistics |
 | `/api/v1/diff` | Scan diff comparison |
-| `/api/v1/ai` | AI narrative generation |
-| `/ws/...` | WebSocket streams (terminal, scan output) |
+| `/api/v1/ai` | AI narrative, Ask Seraph Q&A (`/ai/ask`), ATT&CK coverage (`/ai/attack/coverage`) |
+| `/ws/...` | WebSocket streams (terminal, scan output, screenshots, HTTP fuzz) |
 
 ---
 
