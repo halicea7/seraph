@@ -79,7 +79,18 @@ set_env_if_blank "POSTGRES_PASSWORD"  "$(gen_secret)"
 
 PORT="$(grep -E '^SERAPH_PORT=' .env 2>/dev/null | cut -d= -f2- || true)"
 PORT="${PORT:-8000}"
-URL="http://localhost:${PORT}"
+
+# ── 3b. TLS? If certs exist (from ./setup-https.sh), the container serves HTTPS.
+SCHEME="http"
+CURL_TLS=""
+if [ -f certs/localhost.pem ] && [ -f certs/localhost-key.pem ]; then
+  SCHEME="https"
+  CURL_TLS="-k"   # mkcert CA isn't in this script's trust path; -k for the health probe only
+  # The container runs as uid 1001 and mounts certs read-only — make them readable.
+  chmod 0644 certs/localhost.pem certs/localhost-key.pem 2>/dev/null || true
+  info "TLS certs found in certs/ — Seraph will start over HTTPS."
+fi
+URL="${SCHEME}://localhost:${PORT}"
 
 # ── 4. Build & start ──────────────────────────────────────────────────────────
 info "Building and starting Seraph (first run pulls all tools — this can take several minutes)..."
@@ -89,7 +100,7 @@ $COMPOSE up -d --build
 info "Waiting for Seraph to become ready..."
 ready=false
 for _ in $(seq 1 60); do
-  if curl -fsS "${URL}/api/v1/auth/setup-required" >/dev/null 2>&1; then
+  if curl -fsS $CURL_TLS "${URL}/api/v1/auth/setup-required" >/dev/null 2>&1; then
     ready=true
     break
   fi
@@ -103,16 +114,24 @@ HOST_IP="$( (hostname -I 2>/dev/null || true) | awk '{print $1}')"
 [ -z "${HOST_IP:-}" ] && HOST_IP="$( (ipconfig getifaddr en0 2>/dev/null || true) )"
 
 if [ "$ready" = true ]; then
-  ok "Seraph API is up."
+  ok "Seraph API is up (${SCHEME^^})."
   echo ""
   printf "  ${CYAN}Connect the SeraphElectron desktop app:${RESET}\n"
   echo "     On the Connect screen, enter the backend URL:"
   printf "       ${GREEN}${URL}${RESET}   (same machine)\n"
-  [ -n "${HOST_IP:-}" ] && printf "       ${GREEN}http://${HOST_IP}:${PORT}${RESET}   (from another machine on your network)\n"
+  [ -n "${HOST_IP:-}" ] && printf "       ${GREEN}${SCHEME}://${HOST_IP}:${PORT}${RESET}   (from another machine on your network)\n"
   echo "     (CORS already allows the Electron app — no extra config needed.)"
   echo "     Create your admin account on the app's First-Run screen."
   echo ""
   printf "  ${GREEN}➜  API docs:  ${URL}/docs${RESET}\n"
+  if [ "$SCHEME" = "https" ]; then
+    echo ""
+    printf "  ${YELLOW}LAN clients on other machines must trust this host's mkcert root CA${RESET}\n"
+    printf "  ${YELLOW}(copy \"\$(mkcert -CAROOT)/rootCA.pem\" to them) or accept the warning once.${RESET}\n"
+  else
+    echo ""
+    printf "  ${CYAN}Want HTTPS?${RESET}  run ${GREEN}./setup-https.sh${RESET} then re-run ${GREEN}./setup.sh${RESET}\n"
+  fi
   echo ""
   echo "  Logs:  $COMPOSE logs -f"
   echo "  Stop:  $COMPOSE down        (data persists in the seraph_data volume)"

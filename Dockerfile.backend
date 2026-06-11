@@ -21,7 +21,9 @@ FROM python:3.11-slim
 
 ARG PRODUCTION=0
 
-ENV DEBIAN_FRONTEND=noninteractive \
+# Promote the build arg to a runtime env so the entrypoint can read it.
+ENV PRODUCTION=${PRODUCTION} \
+    DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIPX_HOME=/opt/pipx \
@@ -188,6 +190,10 @@ RUN useradd -r -u 1001 -m seraph && \
 
 COPY backend/ .
 
+# Launcher: auto-enables TLS when certs are mounted at /certs (see the script).
+# backend/ was copied into /app above, so the script is at /app/seraph-docker-entrypoint.sh.
+RUN install -m 0755 seraph-docker-entrypoint.sh /usr/local/bin/seraph-entrypoint
+
 # An empty named volume mounted at /data later inherits this dir's seraph ownership.
 RUN chown -R seraph:seraph /app /data
 
@@ -195,7 +201,4 @@ USER seraph
 
 EXPOSE 8000
 
-CMD uvicorn main:app \
-    --host 0.0.0.0 \
-    --port 8000 \
-    $([ "$PRODUCTION" = "1" ] && echo "--workers 4" || echo "--reload")
+CMD ["seraph-entrypoint"]

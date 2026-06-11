@@ -4,6 +4,7 @@
 # The frontend is the SeraphElectron desktop app: point its Connect screen at
 # http://<host>:8000 (CORS already allows the desktop app; the port binds all
 # interfaces). API docs at http://localhost:8000/docs.
+# HTTPS: run ./setup-https.sh first and the container starts on https:// instead.
 # For the Postgres + nginx production stack, use docker-compose.prod.yml instead.
 
 services:
@@ -11,9 +12,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    # Single worker, no --reload: avoids SQLite "database is locked" under
-    # multiple workers and the dev reloader. Overrides the Dockerfile CMD.
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # The image entrypoint runs a single uvicorn worker (no SQLite lock contention)
+    # and auto-enables HTTPS when ./certs is populated (see ./setup-https.sh).
     ports:
       - "${SERAPH_PORT:-8000}:8000"
     env_file:
@@ -25,9 +25,12 @@ services:
       - seraph_data:/data
       - seraph_results:/seraph_results
       - seraph_reports:/app/reports
+      # Mount TLS certs read-only. Empty/absent → container serves plain HTTP.
+      - ./certs:/certs:ro
     restart: unless-stopped
+    # Works whether the container came up on HTTP or HTTPS (-k: self-signed CA).
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/auth/setup-required"]
+      test: ["CMD-SHELL", "curl -fsSk https://localhost:8000/api/v1/auth/setup-required || curl -fsS http://localhost:8000/api/v1/auth/setup-required"]
       interval: 15s
       timeout: 5s
       retries: 5

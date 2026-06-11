@@ -238,7 +238,10 @@ bash setup-https.sh
 This will:
 1. Install `mkcert` and `libnss3-tools` (the latter is required for Brave/Chrome trust on Linux)
 2. Run `mkcert -install` to add a local CA to the system and browser trust stores
-3. Generate `seraph/certs/localhost.pem` and `seraph/certs/localhost-key.pem`
+3. Generate `seraph/certs/localhost.pem` and `seraph/certs/localhost-key.pem`, valid for
+   `localhost`, `127.0.0.1`, **and this host's LAN IP(s) + hostname** (so it also works when a
+   client connects via the host IP). The cert + key are made world-readable so the Docker
+   container (which runs as a non-root user) can load them.
 
 Then restart `dev.sh` — it detects the certs automatically and starts both servers over HTTPS:
 
@@ -249,11 +252,36 @@ https://localhost:8000    ← production build
 
 > **After running `mkcert -install`, fully quit and relaunch Brave/Chrome** for the CA trust to take effect.
 
-> **Accessing from another machine on the LAN?** Chromium-based browsers reject `.local` mDNS hostnames as WebAuthn RP IDs. The simplest workaround is an SSH port-forward from the client machine so the browser sees `localhost`:
+### Docker (HTTPS for the all-in-one container)
+
+The all-in-one image auto-detects certs — no flags to pass. Generate them once, then run setup:
+
+```bash
+./setup-https.sh      # one-time: creates seraph/certs/ (localhost + LAN SANs)
+./setup.sh            # the container starts on HTTPS automatically
+```
+
+`docker-compose.yml` mounts `./certs` into the container read-only; the entrypoint enables TLS
+when both files are present and falls back to plain HTTP when they aren't. `setup.sh` prints the
+`https://localhost:8000` and `https://<host-ip>:8000` URLs to point the SeraphElectron app at.
+
+> **Connecting from another machine on the LAN?** The mkcert CA is only trusted on the host where
+> `setup-https.sh` ran. On each **client** machine, either trust that host's root CA or accept the
+> browser warning once. Copy the CA from the Seraph host:
+> ```bash
+> # on the Seraph host — find and copy the root CA
+> cp "$(mkcert -CAROOT)/rootCA.pem" .     # then install rootCA.pem in the client's trust store
+> ```
+> On the client run `mkcert -install` after placing `rootCA.pem` in its `$(mkcert -CAROOT)`, or
+> import it through the OS/browser certificate manager.
+
+> **Passkeys over a LAN IP won't work.** WebAuthn rejects bare IP addresses as RP IDs, so HTTPS via
+> `https://<host-ip>:8000` gives you **encrypted transport** but not browser passkeys. Passkeys
+> still work at `https://localhost:8000` on the same machine. For passkeys from another machine, use
+> the SSH port-forward trick so the client sees `localhost`:
 > ```bash
 > ssh -L 8000:localhost:8000 user@seraph-host -N
 > ```
-> Then open `https://localhost:8000` — no `.env` changes needed, the default `rp_id = localhost` is correct.
 
 ### Production / real domain
 
@@ -439,6 +467,27 @@ you; if you bypassed it, add a fixed value to `.env`:
 ```bash
 python3 -c "import secrets; print('SERAPH_SECRET_KEY=' + secrets.token_hex(32))" >> .env
 ```
+
+### HTTPS didn't turn on (container started on HTTP)
+
+The container enables TLS only when **both** `certs/localhost.pem` and `certs/localhost-key.pem`
+exist and are readable. Check:
+
+```bash
+ls -l certs/                                  # both files present?
+docker compose logs | grep entrypoint         # "TLS certs found" vs "No TLS certs"
+```
+
+If the log says the certs exist *but aren't readable*, make them world-readable (the container
+runs as a non-root user) and restart:
+
+```bash
+chmod 0644 certs/*.pem
+docker compose up -d
+```
+
+A browser/Electron TLS error from another machine almost always means the client doesn't trust the
+mkcert root CA — see **HTTPS → Docker** above for distributing it.
 
 ### Start completely fresh
 
