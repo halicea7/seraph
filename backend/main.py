@@ -385,6 +385,68 @@ def save_auto_probe_settings(req: AutoProbeConfig):
         db.close()
 
 
+# ── Electron client settings (window state, theme prefs) ──────────────────────
+
+
+@app.get(f"{API_PREFIX}/settings/electron")
+def get_electron_settings():
+    """Return persisted Electron client preferences (window state, theme, etc.)."""
+    from database import get_db, AppSetting
+    import json as _json
+    db = next(get_db())
+    try:
+        row = db.query(AppSetting).filter(AppSetting.key == "electron_settings").first()
+        if not row or not row.value:
+            return {}
+        try:
+            return _json.loads(row.value)
+        except Exception:
+            return {}
+    finally:
+        db.close()
+
+
+@app.put(f"{API_PREFIX}/settings/electron")
+def save_electron_settings(req: dict):
+    """Persist Electron client preferences as a JSON blob in the AppSetting store."""
+    from database import get_db, AppSetting
+    import json as _json
+    db = next(get_db())
+    try:
+        value = _json.dumps(req)
+        row = db.query(AppSetting).filter(AppSetting.key == "electron_settings").first()
+        if row:
+            row.value = value
+        else:
+            db.add(AppSetting(key="electron_settings", value=value))
+        db.commit()
+        return {"ok": True, "settings": req}
+    finally:
+        db.close()
+
+
+# ── Update check (for the Electron auto-updater) ──────────────────────────────
+
+
+@app.get(f"{API_PREFIX}/updater/check")
+def updater_check():
+    """Report the current backend version and whether a newer release is advertised.
+
+    No release feed is bundled. An operator can advertise an update via the
+    SERAPH_LATEST_VERSION / SERAPH_UPDATE_URL env vars; otherwise this reports
+    "no update available" (latest == current).
+    """
+    current = settings.version
+    latest = os.environ.get("SERAPH_LATEST_VERSION", current)
+    return {
+        "current_version": current,
+        "latest_version": latest,
+        "update_available": latest != current,
+        "download_url": os.environ.get("SERAPH_UPDATE_URL", ""),
+        "notes": os.environ.get("SERAPH_UPDATE_NOTES", ""),
+    }
+
+
 # ── Short agent install URL (/a/<code>) ───────────────────────────────────────
 
 @app.get("/a/{short_code}", response_class=Response, include_in_schema=False)
