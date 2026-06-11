@@ -100,6 +100,12 @@ class Scan(Base):
     raw_output = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # Nessus lifecycle tracking (populated for scan_type "nessus_job")
+    nessus_scan_id = Column(Integer, nullable=True)      # the Nessus-side scan id
+    nessus_status = Column(String, nullable=True)        # last polled Nessus status (running/completed/paused/…)
+    nessus_progress = Column(Integer, nullable=True)     # 0–100 progress for the UI
+    nessus_export_json = Column(Text, nullable=True)     # in-flight export {format, file_id, state, report_id}
+
     target = relationship("Target", back_populates="scans")
     findings = relationship(
         "Finding", back_populates="scan", cascade="all, delete-orphan"
@@ -602,6 +608,10 @@ def _migrate():
         "ALTER TABLE projects ADD COLUMN scratchpad TEXT DEFAULT ''",
         "ALTER TABLE playbooks ADD COLUMN mitre_techniques TEXT DEFAULT '[]'",
         "ALTER TABLE cracking_jobs ADD COLUMN server_id VARCHAR",
+        "ALTER TABLE scans ADD COLUMN nessus_scan_id INTEGER",
+        "ALTER TABLE scans ADD COLUMN nessus_status VARCHAR",
+        "ALTER TABLE scans ADD COLUMN nessus_progress INTEGER",
+        "ALTER TABLE scans ADD COLUMN nessus_export_json TEXT",
         # webhook_deliveries, fp_suppression_rules, api_tokens, cracking_servers, c2_nodes, cloud_c2_instances created by create_all
     ]
     with engine.connect() as conn:

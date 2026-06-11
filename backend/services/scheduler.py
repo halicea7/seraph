@@ -184,6 +184,14 @@ def initialize_scheduler() -> None:
         replace_existing=True,
     )
 
+    # Nessus scan-job poller — follows live scans/exports to completion every 20s
+    scheduler.add_job(
+        _run_nessus_poll,
+        IntervalTrigger(seconds=20),
+        id="nessus_poll",
+        replace_existing=True,
+    )
+
     scheduler.start()
 
 
@@ -335,6 +343,104 @@ async def _run_c2_session_sync() -> None:
                 db.add(session)
 
         db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
+# Terminal Nessus statuses — stop polling once a job reaches one of these.
+_NESSUS_TERMINAL = {"completed", "canceled", "cancelled", "aborted", "empty", "imported"}
+
+
+async def _run_nessus_poll() -> None:
+    """APScheduler job (every 20 s): follow live Nessus scan jobs to completion.
+
+    For each Seraph 'nessus_job' Scan still in flight, poll the Nessus side for
+    status/progress, push a 'scan_update' over /ws/events, and on completion fan
+    out per-host findings via the shared import. Also advances in-flight exports.
+    """
+    from database import SessionLocal, Scan, Target
+    from services.nessus import load_client, import_scan_results
+    from routers.ws import broadcast_event
+
+    db = SessionLocal()
+    try:
+        jobs = db.query(Scan).filter(
+            Scan.scan_type == "nessus_job",
+            Scan.nessus_scan_id.isnot(None),
+        ).all()
+        active = [j for j in jobs if (j.nessus_status or "") not in _NESSUS_TERMINAL]
+        if not active:
+            return
+
+        try:
+            client = load_client(db)
+            client.authenticate()
+        except Exception:
+            return  # not configured / unreachable — try again next tick
+
+        for job in active:
+            try:
+                data = client.get(f"/scans/{job.nessus_scan_id}")
+                info = data.get("info", {})
+                status = (info.get("status") or "").lower()
+                progress = int(info.get("progress", job.nessus_progress or 0) or 0)
+
+                job.nessus_status = status or job.nessus_status
+                job.nessus_progress = progress
+                db.commit()
+
+                await broadcast_event({
+                    "type": "scan_update", "scan_id": job.id,
+                    "status": status, "progress": progress,
+                })
+
+                if status == "completed":
+                    target = db.query(Target).filter(Target.id == job.target_id).first()
+                    project_id = target.project_id if target else None
+                    imported = 0
+                    if project_id:
+                        try:
+                            res = import_scan_results(db, client, job.nessus_scan_id, project_id)
+                            imported = res.get("findings_created", 0)
+                        except Exception:
+                            db.rollback()
+                    job.status = "completed"
+                    job.nessus_status = "completed"
+                    job.nessus_progress = 100
+                    job.completed_at = datetime.utcnow()
+                    db.commit()
+                    await broadcast_event({
+                        "type": "finding_created", "scan_id": job.id,
+                        "findings_created": imported,
+                    })
+
+                # ── Advance an in-flight export ──────────────────────────
+                if job.nessus_export_json:
+                    try:
+                        export = json.loads(job.nessus_export_json)
+                    except Exception:
+                        export = None
+                    if export and export.get("state") == "pending" and export.get("file_id"):
+                        try:
+                            est = client.get(
+                                f"/scans/{job.nessus_scan_id}/export/{export['file_id']}/status"
+                            ).get("status", "")
+                        except Exception:
+                            est = ""
+                        if est == "ready":
+                            export["state"] = "ready"
+                            job.nessus_export_json = json.dumps(export)
+                            db.commit()
+                            await broadcast_event({
+                                "type": "nessus_export_ready", "scan_id": job.id,
+                                "nessus_scan_id": job.nessus_scan_id,
+                                "file_id": export["file_id"], "format": export.get("format"),
+                            })
+            except Exception:
+                db.rollback()
+                continue
     except Exception:
         db.rollback()
     finally:
