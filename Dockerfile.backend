@@ -14,6 +14,18 @@
 # Build args:
 #   PRODUCTION=1   → 4-worker uvicorn; PRODUCTION=0 (default) → --reload
 
+# ── Stage 0: build the web SPA so the backend can self-serve the UI ───────────
+# The all-in-one image bundles the built frontend at /frontend/dist (where
+# backend/main.py looks). Build context is seraph/, so frontend/ is available.
+FROM node:20-alpine AS frontend
+WORKDIR /fe
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ .
+# `npm run build` is `tsc && vite build`; fall back to a plain vite build so a
+# stray type error can't block the image.
+RUN npm run build || npx vite build
+
 FROM python:3.11-slim
 
 ARG PRODUCTION=0
@@ -53,100 +65,118 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core fonts-liberation fonts-noto-core \
     && rm -rf /var/lib/apt/lists/*
 
+# Optional security tools below are installed best-effort: any single upstream
+# outage / asset rename logs a warning instead of bricking the whole image.
+# Seraph detects whatever ended up missing (Settings → Tools / check_tools.sh).
+
 # ── 2. testssl.sh ─────────────────────────────────────────────────────────────
-RUN curl -fsSL https://testssl.sh/testssl.sh -o /usr/local/bin/testssl.sh && \
-    chmod +x /usr/local/bin/testssl.sh && \
-    ln -sf /usr/local/bin/testssl.sh /usr/local/bin/testssl
+RUN { curl -fsSL https://testssl.sh/testssl.sh -o /usr/local/bin/testssl.sh && \
+      chmod +x /usr/local/bin/testssl.sh && \
+      ln -sf /usr/local/bin/testssl.sh /usr/local/bin/testssl ; } \
+    || echo "[build] testssl skipped (optional)"
 
 # ── 3. gobuster ──────────────────────────────────────────────────────────────
-RUN set -e; \
-    VER=$(curl -fsSL https://api.github.com/repos/OJ/gobuster/releases/latest \
-          | grep '"tag_name"' | cut -d'"' -f4); \
-    curl -fsSL "https://github.com/OJ/gobuster/releases/download/${VER}/gobuster_Linux_x86_64.tar.gz" \
-         | tar -xz -C /usr/local/bin gobuster; \
-    chmod +x /usr/local/bin/gobuster
+RUN { set -e; \
+      VER=$(curl -fsSL https://api.github.com/repos/OJ/gobuster/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4); \
+      curl -fsSL "https://github.com/OJ/gobuster/releases/download/${VER}/gobuster_Linux_x86_64.tar.gz" \
+           | tar -xz -C /usr/local/bin gobuster; \
+      chmod +x /usr/local/bin/gobuster; \
+    } || echo "[build] gobuster skipped (optional)"
 
 # ── 4. ffuf ───────────────────────────────────────────────────────────────────
-RUN set -e; \
-    VER=$(curl -fsSL https://api.github.com/repos/ffuf/ffuf/releases/latest \
-          | grep '"tag_name"' | cut -d'"' -f4); \
-    BARE=${VER#v}; \
-    curl -fsSL "https://github.com/ffuf/ffuf/releases/download/${VER}/ffuf_${BARE}_linux_amd64.tar.gz" \
-         | tar -xz -C /usr/local/bin ffuf; \
-    chmod +x /usr/local/bin/ffuf
+RUN { set -e; \
+      VER=$(curl -fsSL https://api.github.com/repos/ffuf/ffuf/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4); \
+      BARE=${VER#v}; \
+      curl -fsSL "https://github.com/ffuf/ffuf/releases/download/${VER}/ffuf_${BARE}_linux_amd64.tar.gz" \
+           | tar -xz -C /usr/local/bin ffuf; \
+      chmod +x /usr/local/bin/ffuf; \
+    } || echo "[build] ffuf skipped (optional)"
 
 # ── 5. subfinder ─────────────────────────────────────────────────────────────
-RUN set -e; \
-    VER=$(curl -fsSL https://api.github.com/repos/projectdiscovery/subfinder/releases/latest \
-          | grep '"tag_name"' | cut -d'"' -f4); \
-    BARE=${VER#v}; \
-    curl -fsSL "https://github.com/projectdiscovery/subfinder/releases/download/${VER}/subfinder_${BARE}_linux_amd64.zip" \
-         -o /tmp/subfinder.zip; \
-    unzip -j /tmp/subfinder.zip subfinder -d /usr/local/bin; \
-    chmod +x /usr/local/bin/subfinder; \
-    rm /tmp/subfinder.zip
+RUN { set -e; \
+      VER=$(curl -fsSL https://api.github.com/repos/projectdiscovery/subfinder/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4); \
+      BARE=${VER#v}; \
+      curl -fsSL "https://github.com/projectdiscovery/subfinder/releases/download/${VER}/subfinder_${BARE}_linux_amd64.zip" \
+           -o /tmp/subfinder.zip; \
+      unzip -j /tmp/subfinder.zip subfinder -d /usr/local/bin; \
+      chmod +x /usr/local/bin/subfinder; \
+      rm /tmp/subfinder.zip; \
+    } || echo "[build] subfinder skipped (optional)"
 
 # ── 6. nuclei ─────────────────────────────────────────────────────────────────
-RUN set -e; \
-    VER=$(curl -fsSL https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
-          | grep '"tag_name"' | cut -d'"' -f4); \
-    BARE=${VER#v}; \
-    curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/${VER}/nuclei_${BARE}_linux_amd64.zip" \
-         -o /tmp/nuclei.zip; \
-    unzip -j /tmp/nuclei.zip nuclei -d /usr/local/bin; \
-    chmod +x /usr/local/bin/nuclei; \
-    rm /tmp/nuclei.zip
+RUN { set -e; \
+      VER=$(curl -fsSL https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4); \
+      BARE=${VER#v}; \
+      curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/${VER}/nuclei_${BARE}_linux_amd64.zip" \
+           -o /tmp/nuclei.zip; \
+      unzip -j /tmp/nuclei.zip nuclei -d /usr/local/bin; \
+      chmod +x /usr/local/bin/nuclei; \
+      rm /tmp/nuclei.zip; \
+    } || echo "[build] nuclei skipped (optional)"
 
 # ── 7. feroxbuster ───────────────────────────────────────────────────────────
-RUN set -e; \
-    curl -fsSL https://github.com/epi052/feroxbuster/releases/latest/download/x86_64-linux-feroxbuster.zip \
-         -o /tmp/ferox.zip; \
-    unzip -j /tmp/ferox.zip feroxbuster -d /usr/local/bin; \
-    chmod +x /usr/local/bin/feroxbuster; \
-    rm /tmp/ferox.zip
+RUN { set -e; \
+      curl -fsSL https://github.com/epi052/feroxbuster/releases/latest/download/x86_64-linux-feroxbuster.zip \
+           -o /tmp/ferox.zip; \
+      unzip -j /tmp/ferox.zip feroxbuster -d /usr/local/bin; \
+      chmod +x /usr/local/bin/feroxbuster; \
+      rm /tmp/ferox.zip; \
+    } || echo "[build] feroxbuster skipped (optional)"
 
 # ── 8. kerbrute ──────────────────────────────────────────────────────────────
-RUN set -e; \
-    VER=$(curl -fsSL https://api.github.com/repos/ropnop/kerbrute/releases/latest \
-          | grep '"tag_name"' | cut -d'"' -f4); \
-    curl -fsSL "https://github.com/ropnop/kerbrute/releases/download/${VER}/kerbrute_linux_amd64" \
-         -o /usr/local/bin/kerbrute; \
-    chmod +x /usr/local/bin/kerbrute
+RUN { set -e; \
+      VER=$(curl -fsSL https://api.github.com/repos/ropnop/kerbrute/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4); \
+      curl -fsSL "https://github.com/ropnop/kerbrute/releases/download/${VER}/kerbrute_linux_amd64" \
+           -o /usr/local/bin/kerbrute; \
+      chmod +x /usr/local/bin/kerbrute; \
+    } || echo "[build] kerbrute skipped (optional)"
 
-# ── 9. rustscan ──────────────────────────────────────────────────────────────
-RUN set -e; \
-    VER=$(curl -fsSL https://api.github.com/repos/RustScan/RustScan/releases/latest \
-          | grep '"tag_name"' | cut -d'"' -f4); \
-    BARE=${VER#v}; \
-    curl -fsSL "https://github.com/RustScan/RustScan/releases/download/${VER}/rustscan_${BARE}_amd64.deb" \
-         -o /tmp/rustscan.deb; \
-    dpkg -i /tmp/rustscan.deb; \
-    rm /tmp/rustscan.deb
+# ── 9. rustscan (optional; upstream ships a zipped .deb under bee-san/RustScan) ─
+# Wrapped non-fatal: an upstream asset rename must not brick the whole image —
+# Seraph detects a missing tool gracefully (Settings → Tools).
+RUN { set -e; \
+      VER=$(curl -fsSL https://api.github.com/repos/bee-san/RustScan/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4); \
+      curl -fsSL "https://github.com/bee-san/RustScan/releases/download/${VER}/rustscan.deb.zip" \
+           -o /tmp/rustscan.deb.zip; \
+      unzip -o /tmp/rustscan.deb.zip -d /tmp/rs; \
+      dpkg -i /tmp/rs/*.deb; \
+      rm -rf /tmp/rustscan.deb.zip /tmp/rs; \
+    } || echo "[build] rustscan skipped (optional tool — upstream asset unavailable)"
 
 # ── 11. nikto (removed from Debian repos — install from source) ──────────────
-RUN git clone --depth=1 https://github.com/sullo/nikto.git /opt/nikto && \
-    ln -sf /opt/nikto/program/nikto.pl /usr/local/bin/nikto && \
-    chmod +x /opt/nikto/program/nikto.pl
+RUN { git clone --depth=1 https://github.com/sullo/nikto.git /opt/nikto && \
+      ln -sf /opt/nikto/program/nikto.pl /usr/local/bin/nikto && \
+      chmod +x /opt/nikto/program/nikto.pl ; } \
+    || echo "[build] nikto skipped (optional)"
 
 # ── 12. enum4linux (Perl script) ──────────────────────────────────────────────
-RUN curl -fsSL \
-    https://raw.githubusercontent.com/CiscoCXSecurity/enum4linux/master/enum4linux.pl \
-    -o /usr/local/bin/enum4linux && chmod +x /usr/local/bin/enum4linux
+RUN { curl -fsSL \
+      https://raw.githubusercontent.com/CiscoCXSecurity/enum4linux/master/enum4linux.pl \
+      -o /usr/local/bin/enum4linux && chmod +x /usr/local/bin/enum4linux ; } \
+    || echo "[build] enum4linux skipped (optional)"
 
 # ── 12. searchsploit / exploitdb ─────────────────────────────────────────────
-RUN git clone --depth=1 https://gitlab.com/exploit-database/exploitdb.git /opt/exploitdb && \
-    ln -sf /opt/exploitdb/searchsploit /usr/local/bin/searchsploit
+RUN { git clone --depth=1 https://gitlab.com/exploit-database/exploitdb.git /opt/exploitdb && \
+      ln -sf /opt/exploitdb/searchsploit /usr/local/bin/searchsploit ; } \
+    || echo "[build] searchsploit skipped (optional)"
 
 # ── 13. Responder ─────────────────────────────────────────────────────────────
-RUN git clone --depth=1 https://github.com/lgandx/Responder.git /opt/responder && \
-    chmod +x /opt/responder/Responder.py && \
-    ln -sf /opt/responder/Responder.py /usr/local/bin/responder
+RUN { git clone --depth=1 https://github.com/lgandx/Responder.git /opt/responder && \
+      chmod +x /opt/responder/Responder.py && \
+      ln -sf /opt/responder/Responder.py /usr/local/bin/responder ; } \
+    || echo "[build] Responder skipped (optional)"
 
-# ── 14. pipx tools (system-wide via PIPX_BIN_DIR=/usr/local/bin) ─────────────
-RUN pipx install git+https://github.com/laramies/theHarvester && \
-    pipx install netexec && \
-    pipx install wafw00f && \
-    pipx ensurepath
+# ── 14. pipx tools (each best-effort so one failure doesn't lose the others) ──
+RUN pipx install git+https://github.com/laramies/theHarvester || echo "[build] theHarvester skipped (optional)"; \
+    pipx install netexec    || echo "[build] netexec/nxc skipped (optional)"; \
+    pipx install wafw00f     || echo "[build] wafw00f skipped (optional)"; \
+    pipx ensurepath || true
 
 # ── 15. Python dependencies ───────────────────────────────────────────────────
 COPY requirements.txt .
@@ -161,11 +191,15 @@ RUN pip install --no-cache-dir impacket
 
 # ── 16. Non-root runtime user ─────────────────────────────────────────────────
 RUN useradd -r -u 1001 -m seraph && \
-    mkdir -p /seraph_results /app/reports && \
-    chown seraph:seraph /seraph_results /app/reports
+    mkdir -p /seraph_results /app/reports /data && \
+    chown seraph:seraph /seraph_results /app/reports /data
 
 COPY backend/ .
-RUN chown -R seraph:seraph /app
+
+# Bundle the built SPA where main.py serves it from (Path(main).parent.parent/frontend/dist).
+# An empty named volume mounted at /data later inherits this dir's seraph ownership.
+COPY --from=frontend /fe/dist /frontend/dist
+RUN chown -R seraph:seraph /app /frontend /data
 
 USER seraph
 

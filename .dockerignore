@@ -1,0 +1,46 @@
+# Keep the build context small & secret-free.
+
+# Python / venv
+.venv/
+venv/
+env/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node (the frontend stage runs its own npm ci; never ship host modules/build)
+**/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# VCS & IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Secrets & local state (provided at runtime via env_file, never baked in)
+.env
+.env.*
+!.env.example
+certs/
+*.pem
+*.key
+*.crt
+
+# Databases & scan artifacts
+*.db
+*.sqlite
+*.sqlite3
+seraph_results/
+*.log
+logs/
+
+# Repo docs not needed in the image
+INTERVIEW_PREP.md
+PLAN.md
+README.md
+docs/
