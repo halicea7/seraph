@@ -1,9 +1,9 @@
-# Seraph — all-in-one. One container serves the web UI + API on a single port,
+# Seraph — all-in-one API. One container serves the backend API on a single port,
 # backed by SQLite. Just run:  ./setup.sh   (or: docker compose up -d --build)
 #
-# Browser:    open http://localhost:8000 and create your admin on First-Run.
-# Electron:   point the SeraphElectron app's Connect screen at http://<host>:8000
-#             (CORS already allows the desktop app; the port binds all interfaces).
+# The frontend is the SeraphElectron desktop app: point its Connect screen at
+# http://<host>:8000 (CORS already allows the desktop app; the port binds all
+# interfaces). API docs at http://localhost:8000/docs.
 # For the Postgres + nginx production stack, use docker-compose.prod.yml instead.
 
 services:

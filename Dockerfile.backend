@@ -14,18 +14,9 @@
 # Build args:
 #   PRODUCTION=1   → 4-worker uvicorn; PRODUCTION=0 (default) → --reload
 
-# ── Stage 0: build the web SPA so the backend can self-serve the UI ───────────
-# The all-in-one image bundles the built frontend at /frontend/dist (where
-# backend/main.py looks). Build context is seraph/, so frontend/ is available.
-FROM node:20-alpine AS frontend
-WORKDIR /fe
-COPY frontend/package*.json ./
-RUN npm ci
-COPY frontend/ .
-# `npm run build` is `tsc && vite build`; fall back to a plain vite build so a
-# stray type error can't block the image.
-RUN npm run build || npx vite build
-
+# API-only image. The canonical frontend is the SeraphElectron desktop app, which
+# connects over the network — so this image does NOT build/bundle the leftover web
+# SPA. backend/main.py simply skips serving /frontend/dist when it's absent.
 FROM python:3.11-slim
 
 ARG PRODUCTION=0
@@ -197,10 +188,8 @@ RUN useradd -r -u 1001 -m seraph && \
 
 COPY backend/ .
 
-# Bundle the built SPA where main.py serves it from (Path(main).parent.parent/frontend/dist).
 # An empty named volume mounted at /data later inherits this dir's seraph ownership.
-COPY --from=frontend /fe/dist /frontend/dist
-RUN chown -R seraph:seraph /app /frontend /data
+RUN chown -R seraph:seraph /app /data
 
 USER seraph
 

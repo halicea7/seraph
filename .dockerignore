@@ -11,10 +11,9 @@ env/
 .mypy_cache/
 .ruff_cache/
 
-# Node (the frontend stage runs its own npm ci; never ship host modules/build)
+# The leftover web SPA is not bundled (Electron is the frontend) — don't ship it.
+frontend/
 **/node_modules/
-frontend/dist/
-frontend/.vite/
 
 # VCS & IDE
 .git/
