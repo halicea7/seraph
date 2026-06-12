@@ -110,6 +110,18 @@
     <pre>{{ f.evidence }}</pre>
     {% endif %}
 
+    {% if f.screenshots %}
+    <div class="field-label">Screenshot Evidence</div>
+    <div>
+      {% for sh in f.screenshots %}
+      <figure style="margin:0 0 12px;">
+        <img src="{{ sh.data_uri }}" alt="{{ sh.url }}" style="max-width:100%;border:1px solid #ccc;" />
+        <figcaption style="font-size:11px;color:#666;font-family:monospace;">{{ sh.url }}</figcaption>
+      </figure>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     {% if f.control_id or f.framework %}
     <div class="field-label">Control Reference</div>
     <div class="field-value">

@@ -35,6 +35,31 @@ for _ctrl in _CIS_CONTROLS_DATA:
         _CIS_CTRL_BY_NUM[_num] = _ctrl
 
 
+def _attach_screenshots(findings_data: list[dict], db: Session) -> None:
+    """Attach each finding's linked screenshots (base64 data URIs) for report embedding."""
+    import base64
+    import os
+    from database import Screenshot
+
+    ids = [f["id"] for f in findings_data if f.get("id")]
+    if not ids:
+        return
+    by_finding: dict[str, list] = {}
+    for s in db.query(Screenshot).filter(Screenshot.finding_id.in_(ids)).all():
+        if not s.image_path or not os.path.exists(s.image_path):
+            continue
+        try:
+            with open(s.image_path, "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode()
+        except OSError:
+            continue
+        ext = os.path.splitext(s.image_path)[1].lstrip(".").lower() or "png"
+        mime = "jpeg" if ext in ("jpg", "jpeg") else ext
+        by_finding.setdefault(s.finding_id, []).append({"url": s.url, "data_uri": f"data:image/{mime};base64,{b64}"})
+    for f in findings_data:
+        f["screenshots"] = by_finding.get(f["id"], [])
+
+
 @router.get("/categories")
 def get_scan_categories():
     return SCAN_CATEGORIES
@@ -344,6 +369,7 @@ def generate_project_report(req: GenerateReportRequest, db: Session = Depends(ge
     targets_data = [{"id": t.id, "hostname_or_ip": t.hostname_or_ip, "target_type": t.target_type, "notes": t.notes or ""} for t in targets]
     scans_data = [{"id": s.id, "scan_type": s.scan_type, "status": s.status, "completed_at": str(s.completed_at) if s.completed_at else None} for s in scans]
     findings_data = [{"id": f.id, "title": f.title, "description": f.description, "severity": f.severity, "control_id": f.control_id, "framework": f.framework, "remediation": f.remediation, "evidence": f.evidence} for f in findings]
+    _attach_screenshots(findings_data, db)
 
     from services.report_generator import generate_report
     report = generate_report(
@@ -376,6 +402,7 @@ def download_report(project_id: str, format: str = "html", auditor: str = "Serap
     targets_data = [{"id": t.id, "hostname_or_ip": t.hostname_or_ip, "target_type": t.target_type, "notes": t.notes or ""} for t in targets]
     scans_data = [{"id": s.id, "scan_type": s.scan_type, "status": s.status, "completed_at": str(s.completed_at) if s.completed_at else None} for s in scans]
     findings_data = [{"id": f.id, "title": f.title, "description": f.description, "severity": f.severity, "control_id": f.control_id, "framework": f.framework, "remediation": f.remediation, "evidence": f.evidence} for f in findings]
+    _attach_screenshots(findings_data, db)
 
     from services.report_generator import generate_report
     report = generate_report(
@@ -422,6 +449,7 @@ def download_pdf_report(project_id: str, db: Session = Depends(get_db)):
     targets_data = [{"id": t.id, "hostname_or_ip": t.hostname_or_ip, "target_type": t.target_type, "notes": t.notes or ""} for t in targets]
     scans_data = [{"id": s.id, "scan_type": s.scan_type, "status": s.status, "completed_at": str(s.completed_at) if s.completed_at else None} for s in scans]
     findings_data = [{"id": f.id, "title": f.title, "description": f.description, "severity": f.severity, "control_id": f.control_id, "framework": f.framework, "remediation": f.remediation, "evidence": f.evidence} for f in findings]
+    _attach_screenshots(findings_data, db)
 
     from services.report_generator import generate_report
     report = generate_report(

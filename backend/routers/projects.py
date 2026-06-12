@@ -916,6 +916,44 @@ def update_finding_status(finding_id: str, payload: dict, db: Session = Depends(
     return {"id": finding_id, "status": new_status}
 
 
+@stats_router.post("/findings/{finding_id}/ai-remediate")
+def ai_remediate_finding(finding_id: str, db: Session = Depends(get_db)):
+    """AI-generated remediation guidance for a scan finding (server-configured model).
+    Mirrors /vulns/{id}/ai-remediate; returns the text (not persisted)."""
+    from services.ai_client import chat_complete, load_llm_params
+    from database import AppSetting
+
+    f = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    def _g(key: str, default: str = "") -> str:
+        row = db.query(AppSetting).filter(AppSetting.key == key).first()
+        return row.value if row else default
+
+    endpoint = _g("ai_endpoint", "http://localhost:11434")
+    model = _g("ai_model", "")
+    if not model:
+        raise HTTPException(status_code=400, detail="No AI model configured. Go to Settings → AI to set one.")
+
+    prompt = (
+        "You are a cybersecurity engineer providing remediation guidance.\n\n"
+        f"Finding: {f.title}\n"
+        f"Severity: {(f.severity or '').upper()}\n"
+        f"CVE: {f.cve_id or 'N/A'}   CVSS: {f.cvss_score or 'N/A'}\n"
+        f"Framework/Control: {(f.framework or '-')} {f.control_id or ''}\n"
+        f"Description: {(f.description or 'No description provided.')[:600]}\n"
+        f"Evidence: {(f.evidence or '')[:400]}\n\n"
+        "Provide specific, actionable remediation: 1) immediate mitigations, 2) the long-term fix "
+        "with concrete commands/config, 3) verification steps. Be concise and technical; numbered steps."
+    )
+    try:
+        result = chat_complete(endpoint, model, [{"role": "user", "content": prompt}], **load_llm_params(db))
+        return {"ai_remediation": result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 @stats_router.post("/findings/{finding_id}/suppress")
 def suppress_finding(finding_id: str, payload: dict, db: Session = Depends(get_db)):
     """Mark a finding as a false positive with a mandatory reason."""
