@@ -603,6 +603,27 @@ Interactive docs available at `http://localhost:8000/docs` when the backend is r
 
 ---
 
+## Testing
+
+A backend **smoke suite** boots the app against an isolated DB, authenticates, and hits a
+representative read endpoint on every router asserting no 5xx (plus regression guards for past
+crashes).
+
+```bash
+pip install -r backend/requirements-dev.txt
+cd backend && pytest tests -q
+```
+
+Frontend type-checking must target the project config — bare `tsc --noEmit` is a **no-op** here
+(the root `tsconfig.json` is a solution file):
+
+```bash
+cd SeraphElectron && npm run typecheck   # tsc -p tsconfig.web.json --noEmit
+npm run build                            # electron-vite build (the real build gate)
+```
+
+---
+
 ## License
 
 MIT
