@@ -365,6 +365,9 @@ class AskRequest(BaseModel):
     project_id: str
     question: str
     model: Optional[str] = None
+    # When true, return the grounded prompt + citations WITHOUT calling an LLM, so
+    # the frontend can run a laptop-local Ollama model (which the backend can't reach).
+    retrieve_only: bool = False
 
 
 @router.post("/ask")
@@ -372,7 +375,12 @@ def ask_engagement(req: AskRequest, db: Session = Depends(get_db)):
     """Answer a natural-language question grounded in the project's own data.
 
     Distinct from the operators (which act) — this retrieves findings/loot/scans/
-    credential metadata for the project and asks the LLM to answer with citations.
+    credential metadata for the project and answers with citations.
+
+    Two model sources are supported (mirroring the AI Operator):
+      • server model → the backend calls its own Ollama and returns {answer, citations}
+      • local model  → pass retrieve_only=true; the backend returns {messages, citations}
+                       and the frontend runs the user's local Ollama with those messages.
     """
     from services.engagement_qa import retrieve, build_messages, citations
 
@@ -380,18 +388,22 @@ def ask_engagement(req: AskRequest, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(404, "Project not found")
 
+    docs = retrieve(db, req.project_id, req.question)
+    messages = build_messages(project.name, req.question, docs)
+    cites = citations(docs)
+
+    if req.retrieve_only:
+        return {"messages": messages, "citations": cites}
+
     endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
     model = req.model or _get(db, "ai_model", DEFAULT_MODEL)
     if not model:
         raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
-
-    docs = retrieve(db, req.project_id, req.question)
-    messages = build_messages(project.name, req.question, docs)
     try:
         answer = chat_complete(endpoint, model, messages, **load_llm_params(db))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
-    return {"answer": answer, "citations": citations(docs)}
+    return {"answer": answer, "citations": cites}
 
 
 @router.get("/narrate/{project_id}")
