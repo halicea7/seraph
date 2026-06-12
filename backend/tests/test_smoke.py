@@ -105,7 +105,26 @@ def test_main_imports_httpexception():
     assert hasattr(main, "HTTPException")
 
 
-def test_ws_events_connects(client):
-    """The global event WebSocket should accept a connection without erroring."""
-    with client.websocket_connect("/ws/events") as ws:
+def test_unauthenticated_request_is_401(client):
+    """Full lockdown: an /api/v1 request with no token must be rejected."""
+    r = client.get("/api/v1/projects")  # no auth header
+    assert r.status_code == 401, r.text
+
+
+def test_exempt_endpoints_open_without_auth(client):
+    """First-run/login flows must stay reachable without a token."""
+    assert client.get("/api/v1/auth/setup-required").status_code == 200
+
+
+def test_ws_requires_token(client):
+    """WebSocket handshakes without a valid ?token= must be rejected."""
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws/events") as ws:
+            ws.receive_text()
+
+
+def test_ws_events_connects_with_token(client, auth):
+    """A valid token in ?token= lets the WebSocket connect."""
+    token = auth["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect(f"/ws/events?token={token}") as ws:
         ws.close()

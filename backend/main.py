@@ -251,6 +251,84 @@ async def audit_log_middleware(request: Request, call_next):
     return response
 
 
+# ── Auth middleware (full lockdown) ───────────────────────────────────────────
+#
+# Every /api/v1/* request must carry a valid Bearer token (JWT or srph_ API token).
+# Exempt: first-run/login flows and remote-agent polling (which authenticate with
+# their own token in the path). Static assets, /docs and /ws/* are not under
+# /api/v1; WebSockets get their own token gate (WSAuthMiddleware below).
+
+_AUTH_EXEMPT_EXACT = {
+    "/api/v1/auth/login",
+    "/api/v1/auth/setup",
+    "/api/v1/auth/setup-required",
+    "/api/v1/passkeys/authenticate/begin",
+    "/api/v1/passkeys/authenticate/complete",
+}
+_AUTH_EXEMPT_PREFIXES = (
+    "/api/v1/agents/poll/",      # remote agents poll with their own token in the path
+    "/api/v1/agents/result/",
+)
+
+
+def _valid_bearer(token: str) -> bool:
+    from services.auth_service import decode_token
+    from services.api_tokens import validate_token
+    from database import SessionLocal, User, RevokedToken
+    payload = decode_token(token)
+    db = SessionLocal()
+    try:
+        if payload:
+            jti = payload.get("jti")
+            if jti and db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
+                return False
+            user = db.query(User).filter(User.id == payload.get("sub")).first()
+            return bool(user and user.is_active)
+        return validate_token(token, db) is not None
+    finally:
+        db.close()
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS" or not path.startswith("/api/v1/"):
+        return await call_next(request)
+    if path in _AUTH_EXEMPT_EXACT or path.startswith(_AUTH_EXEMPT_PREFIXES):
+        return await call_next(request)
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or not _valid_bearer(auth.removeprefix("Bearer ").strip()):
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    return await call_next(request)
+
+
+# ── WebSocket auth (token via ?token= query param) ────────────────────────────
+#
+# HTTP middleware doesn't see WebSocket scopes, so a small ASGI middleware gates
+# every WS handshake: a valid JWT must be supplied as ?token=. Rejected handshakes
+# are closed with policy-violation code 1008.
+
+from urllib.parse import parse_qs as _parse_qs  # noqa: E402
+
+
+class WSAuthMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "websocket":
+            from services.auth_service import decode_token
+            qs = _parse_qs(scope.get("query_string", b"").decode())
+            token = (qs.get("token") or [""])[0]
+            if not (token and decode_token(token)):
+                await send({"type": "websocket.close", "code": 1008})
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(WSAuthMiddleware)
+
+
 # ── API routers ───────────────────────────────────────────────────────────────
 
 API_PREFIX = "/api/v1"
