@@ -672,8 +672,11 @@ _SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
 
 def _normalize_title(t: str) -> str:
-    import re as _re
-    return _re.sub(r"\s+", " ", (t or "").lower().strip())
+    return re.sub(r"\s+", " ", (t or "").lower().strip())
+
+
+def _finding_fingerprint(f: Finding, target_id: str) -> str:
+    return f"{target_id or '?'}|{(f.cve_id or '').upper()}|{f.control_id or ''}|{_normalize_title(f.title)}"
 
 
 def _sla_days(db: Session) -> dict:
@@ -733,7 +736,7 @@ def list_findings_grouped(project_id: Optional[str] = None, db: Session = Depend
         project = projects_map.get(target.project_id) if target else None
         if project_id and (not project or project.id != project_id):
             continue
-        fp = f"{target.id if target else '?'}|{(f.cve_id or '').upper()}|{f.control_id or ''}|{_normalize_title(f.title)}"
+        fp = _finding_fingerprint(f, target.id if target else "?")
         g = groups.get(fp)
         if not g:
             groups[fp] = g = {
@@ -776,6 +779,59 @@ def list_findings_grouped(project_id: Optional[str] = None, db: Session = Depend
 
     result.sort(key=lambda x: (x["overdue"], _SEV_RANK.get(x["severity"], 0), x["last_seen"] or ""), reverse=True)
     return {"sla_days": sla, "findings": result}
+
+
+@stats_router.post("/findings/{finding_id}/retest")
+def retest_finding(finding_id: str, db: Session = Depends(get_db)):
+    """Clone the finding's originating audit scan so it can be re-run to verify a fix.
+
+    Returns a fresh scan + regenerated script; the caller runs it over /ws/execute
+    (which auto-parses), then calls /retest/evaluate to record the verdict.
+    """
+    import json as _json
+    from services.script_generator import generate_script
+
+    f = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    scan = db.query(Scan).filter(Scan.id == f.scan_id).first()
+    if not scan or scan.module != "audit" or not scan.config_json:
+        raise HTTPException(status_code=400, detail="Only audit findings can be auto-retested")
+    config = _json.loads(scan.config_json)
+    categories = config.get("categories")
+    if not categories:
+        raise HTTPException(status_code=400, detail="Originating scan has no reproducible config")
+    target = db.query(Target).filter(Target.id == scan.target_id).first()
+    project = db.query(Project).filter(Project.id == target.project_id).first() if target else None
+    if not target or not project:
+        raise HTTPException(status_code=404, detail="Target or project not found")
+
+    script = generate_script(project_name=project.name, target=target.hostname_or_ip, scan_categories=categories)
+    new = Scan(id=str(uuid.uuid4()), target_id=scan.target_id, scan_type=scan.scan_type,
+               module="audit", status="pending", config_json=scan.config_json)
+    db.add(new)
+    db.commit()
+    db.refresh(new)
+    return {"scan_id": new.id, "script": script, "uses_ssh": bool(config.get("credential_id"))}
+
+
+@stats_router.post("/findings/{finding_id}/retest/evaluate")
+def evaluate_retest(finding_id: str, payload: dict, db: Session = Depends(get_db)):
+    """After a retest scan has run, check whether the finding reappeared. If it's gone,
+    mark the original finding remediated."""
+    new_scan_id = str(payload.get("scan_id", ""))
+    f = db.query(Finding).filter(Finding.id == finding_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    orig = db.query(Scan).filter(Scan.id == f.scan_id).first()
+    target_id = orig.target_id if orig else "?"
+    fp = _finding_fingerprint(f, target_id)
+    new_findings = db.query(Finding).filter(Finding.scan_id == new_scan_id).all()
+    present = any(_finding_fingerprint(nf, target_id) == fp for nf in new_findings)
+    if not present and f.status in ("open", "in-review"):
+        f.status = "remediated"
+        db.commit()
+    return {"still_present": present, "status": f.status, "checked": len(new_findings)}
 
 
 @stats_router.patch("/findings/{finding_id}/status")
