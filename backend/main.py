@@ -296,8 +296,11 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     if path in _AUTH_EXEMPT_EXACT or path.startswith(_AUTH_EXEMPT_PREFIXES):
         return await call_next(request)
+    # Bearer header (normal API calls) OR ?token= (for <img>/download URLs that
+    # can't set headers — e.g. screenshot images, report downloads).
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or not _valid_bearer(auth.removeprefix("Bearer ").strip()):
+    token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else request.query_params.get("token", "")
+    if not token or not _valid_bearer(token):
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
     return await call_next(request)
 

@@ -581,6 +581,7 @@ class Screenshot(Base):
     title = Column(String, default="")
     status_code = Column(String, nullable=True)
     image_path = Column(String, nullable=False)   # absolute path on the backend host
+    finding_id = Column(String, ForeignKey("findings.id"), nullable=True)  # optional: evidence for a finding
     captured_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -664,6 +665,7 @@ def _migrate():
         "ALTER TABLE scans ADD COLUMN nessus_status VARCHAR",
         "ALTER TABLE scans ADD COLUMN nessus_progress INTEGER",
         "ALTER TABLE scans ADD COLUMN nessus_export_json TEXT",
+        "ALTER TABLE screenshots ADD COLUMN finding_id VARCHAR",
         # webhook_deliveries, fp_suppression_rules, api_tokens, cracking_servers, c2_nodes, cloud_c2_instances created by create_all
     ]
     with engine.connect() as conn:

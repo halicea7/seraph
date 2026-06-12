@@ -63,19 +63,44 @@ def _row(s: Screenshot) -> dict:
         "url": s.url,
         "title": s.title,
         "status_code": s.status_code,
+        "finding_id": s.finding_id,
         "captured_at": s.captured_at.isoformat() if s.captured_at else None,
     }
 
 
 @router.get("")
-def list_screenshots(project_id: str = Query(...), db: Session = Depends(get_db)):
-    rows = (
-        db.query(Screenshot)
-        .filter(Screenshot.project_id == project_id)
-        .order_by(Screenshot.captured_at.desc())
-        .all()
-    )
-    return [_row(s) for s in rows]
+def list_screenshots(
+    project_id: str | None = Query(None),
+    finding_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    if not project_id and not finding_id:
+        raise HTTPException(400, "project_id or finding_id required")
+    q = db.query(Screenshot)
+    if project_id:
+        q = q.filter(Screenshot.project_id == project_id)
+    if finding_id:
+        q = q.filter(Screenshot.finding_id == finding_id)
+    return [_row(s) for s in q.order_by(Screenshot.captured_at.desc()).all()]
+
+
+class LinkRequest(BaseModel):
+    finding_id: str | None = None  # null to unlink
+
+
+@router.post("/{shot_id}/link")
+def link_screenshot(shot_id: str, req: LinkRequest, db: Session = Depends(get_db)):
+    """Attach (or detach, with finding_id=null) a screenshot as evidence for a finding."""
+    s = db.query(Screenshot).filter(Screenshot.id == shot_id).first()
+    if not s:
+        raise HTTPException(404, "Screenshot not found")
+    if req.finding_id:
+        from database import Finding
+        if not db.query(Finding).filter(Finding.id == req.finding_id).first():
+            raise HTTPException(404, "Finding not found")
+    s.finding_id = req.finding_id
+    db.commit()
+    return _row(s)
 
 
 @router.get("/{shot_id}/image")

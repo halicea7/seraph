@@ -175,12 +175,24 @@ def score_scan(req: ScoreRequest, db: Session = Depends(get_db)):
 
     # Derive overall score
     if hardening_index is not None:
-        overall_score = hardening_index
-    else:
-        # Rough estimate: start at 65, subtract per warning/fail
+        overall_score = hardening_index          # lynis hardening index (authoritative)
+    elif warnings or suggestions:
+        # lynis-style output without an explicit index — estimate from warnings/fails
         fail_count = sum(1 for c in controls if c["status"] == "fail")
-        overall_score = max(5, 65 - fail_count * 4 - len(warnings) * 1)
-        overall_score = min(overall_score, 95)
+        overall_score = min(max(5, 65 - fail_count * 4 - len(warnings)), 95)
+    else:
+        # Non-lynis hardening scan (e.g. CIS-CAT / openscap / any audit) — derive a
+        # severity-weighted posture score from this scan's open findings.
+        from database import Finding
+        sev_weight = {"critical": 25, "high": 12, "medium": 5, "low": 1, "info": 0}
+        scan_findings = db.query(Finding).filter(Finding.scan_id == req.scan_id).all()
+        open_findings = [f for f in scan_findings if (f.status or "open") in ("open", "in-review")]
+        penalty = sum(sev_weight.get(f.severity, 3) for f in open_findings)
+        overall_score = max(0, 100 - penalty)
+        controls = [
+            {"control": (f.control_id or f.title or "")[:80], "status": "fail", "severity": f.severity}
+            for f in open_findings[:100]
+        ]
 
     controls_data = {
         "controls": controls,
