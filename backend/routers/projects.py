@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
@@ -917,24 +917,19 @@ def update_finding_status(finding_id: str, payload: dict, db: Session = Depends(
 
 
 @stats_router.post("/findings/{finding_id}/ai-remediate")
-def ai_remediate_finding(finding_id: str, db: Session = Depends(get_db)):
-    """AI-generated remediation guidance for a scan finding (server-configured model).
-    Mirrors /vulns/{id}/ai-remediate; returns the text (not persisted)."""
+def ai_remediate_finding(finding_id: str, payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """AI remediation guidance for a scan finding.
+
+    With messages_only=true, returns the assembled prompt so the frontend can run a
+    [Local] (laptop) model; otherwise runs the configured [Server] model. Mirrors the
+    shared local/server pattern used across all AI features.
+    """
     from services.ai_client import chat_complete, load_llm_params
     from database import AppSetting
 
     f = db.query(Finding).filter(Finding.id == finding_id).first()
     if not f:
         raise HTTPException(status_code=404, detail="Finding not found")
-
-    def _g(key: str, default: str = "") -> str:
-        row = db.query(AppSetting).filter(AppSetting.key == key).first()
-        return row.value if row else default
-
-    endpoint = _g("ai_endpoint", "http://localhost:11434")
-    model = _g("ai_model", "")
-    if not model:
-        raise HTTPException(status_code=400, detail="No AI model configured. Go to Settings → AI to set one.")
 
     prompt = (
         "You are a cybersecurity engineer providing remediation guidance.\n\n"
@@ -947,8 +942,20 @@ def ai_remediate_finding(finding_id: str, db: Session = Depends(get_db)):
         "Provide specific, actionable remediation: 1) immediate mitigations, 2) the long-term fix "
         "with concrete commands/config, 3) verification steps. Be concise and technical; numbered steps."
     )
+    messages = [{"role": "user", "content": prompt}]
+    if payload.get("messages_only"):
+        return {"messages": messages}
+
+    def _g(key: str, default: str = "") -> str:
+        row = db.query(AppSetting).filter(AppSetting.key == key).first()
+        return row.value if row else default
+
+    endpoint = _g("ai_endpoint", "http://localhost:11434")
+    model = payload.get("model") or _g("ai_model", "")
+    if not model:
+        raise HTTPException(status_code=400, detail="No AI model configured. Go to Settings → AI to set one.")
     try:
-        result = chat_complete(endpoint, model, [{"role": "user", "content": prompt}], **load_llm_params(db))
+        result = chat_complete(endpoint, model, messages, **load_llm_params(db))
         return {"ai_remediation": result}
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))

@@ -126,13 +126,23 @@ SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 class NarrateRequest(BaseModel):
     project_id: str
     style: str = "executive"  # executive | technical
+    messages_only: bool = False        # return the prompt so a [Local] model can run it
+    model: Optional[str] = None        # [Server] model override
+    result: Optional[str] = None       # persist a client-run ([Local]) narrative
 
 
 @router.post("/narrate")
 def narrate_report(req: NarrateRequest, db: Session = Depends(get_db)):
     endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
-    model = _get(db, "ai_model", DEFAULT_MODEL)
-    if not model:
+    model = req.model or _get(db, "ai_model", DEFAULT_MODEL)
+
+    # Persist a narrative produced client-side by a [Local] model.
+    if req.result is not None:
+        _set(db, f"ai_narrative_{req.project_id}_{req.style}", req.result)
+        _set(db, f"ai_narrative_{req.project_id}_{req.style}_at", datetime.utcnow().isoformat())
+        return {"narrative": req.result}
+
+    if not req.messages_only and not model:
         raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
 
     project = db.query(Project).filter(Project.id == req.project_id).first()
@@ -253,6 +263,8 @@ Based strictly on the findings above, describe realistic attack paths an adversa
         user_msg = f"Write the technical narrative using this assessment data:\n\n{data_block}"
 
     messages = [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
+    if req.messages_only:
+        return {"messages": messages, "style": req.style}
     try:
         narrative = chat_complete(endpoint, model, messages, **load_llm_params(db))
         # Auto-save

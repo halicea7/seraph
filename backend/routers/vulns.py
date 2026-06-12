@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -193,15 +193,20 @@ def import_findings(req: ImportFindingsRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/{vuln_id}/ai-remediate")
-def ai_remediate(vuln_id: str, db: Session = Depends(get_db)):
+def ai_remediate(vuln_id: str, payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """AI remediation for a vuln record. With messages_only=true returns the assembled
+    prompt (so a [Local] model can run client-side); otherwise runs the [Server] model
+    and persists the result. With result=<text> persists a client-run (local) result."""
     vuln = db.query(VulnerabilityRecord).filter(VulnerabilityRecord.id == vuln_id).first()
     if not vuln:
         raise HTTPException(404, "Vulnerability not found")
 
-    endpoint = _get_setting(db, "ai_endpoint", "http://localhost:11434")
-    model = _get_setting(db, "ai_model", "")
-    if not model:
-        raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
+    # Persist a client-run (local-model) result, so local and server behave the same.
+    if payload.get("result"):
+        vuln.ai_remediation = str(payload["result"])
+        vuln.updated_at = datetime.utcnow()
+        db.commit()
+        return {"ai_remediation": vuln.ai_remediation}
 
     prompt = (
         f"You are a cybersecurity engineer providing remediation guidance.\n\n"
@@ -218,9 +223,16 @@ def ai_remediate(vuln_id: str, db: Session = Depends(get_db)):
         f"4. Any relevant CVE patches or vendor advisories\n"
         f"Be concise and technical. Use numbered steps."
     )
+    messages = [{"role": "user", "content": prompt}]
+    if payload.get("messages_only"):
+        return {"messages": messages}
 
+    endpoint = _get_setting(db, "ai_endpoint", "http://localhost:11434")
+    model = payload.get("model") or _get_setting(db, "ai_model", "")
+    if not model:
+        raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
     try:
-        result = chat_complete(endpoint, model, [{"role": "user", "content": prompt}], **load_llm_params(db))
+        result = chat_complete(endpoint, model, messages, **load_llm_params(db))
         vuln.ai_remediation = result
         vuln.updated_at = datetime.utcnow()
         db.commit()

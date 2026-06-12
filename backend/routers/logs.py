@@ -205,6 +205,8 @@ class AnalyzeRequest(BaseModel):
 class AITriageRequest(BaseModel):
     text: str
     patterns: list[dict] = []
+    messages_only: bool = False
+    model: str | None = None
 
 
 @router.post("/analyze")
@@ -233,9 +235,7 @@ def ai_triage(req: AITriageRequest, db: Session = Depends(get_db)):
         return row.value if row else default
 
     endpoint = _get("ai_endpoint", "http://localhost:11434")
-    model = _get("ai_model", "")
-    if not model:
-        raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
+    model = req.model or _get("ai_model", "")
 
     log_excerpt = req.text[:4000]
     patterns_summary = "\n".join(
@@ -255,8 +255,13 @@ def ai_triage(req: AITriageRequest, db: Session = Depends(get_db)):
         f"Be concise and actionable."
     )
 
+    messages = [{"role": "user", "content": prompt}]
+    if req.messages_only:
+        return {"messages": messages}
+    if not model:
+        raise HTTPException(400, "No AI model configured. Go to Settings → AI to set one.")
     try:
-        result = chat_complete(endpoint, model, [{"role": "user", "content": prompt}], **load_llm_params(db))
+        result = chat_complete(endpoint, model, messages, **load_llm_params(db))
         return {"triage": result}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
