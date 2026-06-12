@@ -676,7 +676,7 @@ async def websocket_osint(websocket: WebSocket, scan_id: str):
 
                 if domain:
                     from services.osint_parser import parse_osint_output
-                    from database import Finding, Target
+                    from database import Finding  # Target is already module-level
 
                     results = parse_osint_output(raw, domain)
 
@@ -706,7 +706,6 @@ async def websocket_osint(websocket: WebSocket, scan_id: str):
                     # Auto-create targets for newly discovered subdomains
                     new_targets = 0
                     if project_id:
-                        from database import Target
                         existing = {
                             t.hostname_or_ip
                             for t in db.query(Target).filter(Target.project_id == project_id).all()

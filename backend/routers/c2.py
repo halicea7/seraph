@@ -701,7 +701,6 @@ def run_module(req: RunModuleRequest, db: DBSession = Depends(get_db)):
 
     # If a new session appeared and we have a project, persist it
     if result.get("new_session_id") and req.project_id:
-        from database import C2Session
         sid = result["new_session_id"]
         info = result.get("new_session") or {}
         existing = db.query(C2Session).filter(C2Session.msf_session_id == str(sid)).first()
