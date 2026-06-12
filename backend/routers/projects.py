@@ -667,6 +667,117 @@ def list_findings(
     return result
 
 
+_SLA_DEFAULTS = {"critical": 7, "high": 14, "medium": 30, "low": 90, "info": None}
+_SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+
+def _normalize_title(t: str) -> str:
+    import re as _re
+    return _re.sub(r"\s+", " ", (t or "").lower().strip())
+
+
+def _sla_days(db: Session) -> dict:
+    from database import AppSetting
+    out = dict(_SLA_DEFAULTS)
+    for sev in list(out.keys()):
+        row = db.query(AppSetting).filter(AppSetting.key == f"sla_days_{sev}").first()
+        if row and row.value not in (None, ""):
+            try:
+                out[sev] = int(row.value)
+            except ValueError:
+                pass
+    return out
+
+
+@stats_router.get("/findings/sla-config")
+def get_sla_config(db: Session = Depends(get_db)):
+    return _sla_days(db)
+
+
+@stats_router.put("/findings/sla-config")
+def set_sla_config(payload: dict, db: Session = Depends(get_db)):
+    from database import AppSetting
+    for sev in _SLA_DEFAULTS:
+        if sev not in payload:
+            continue
+        val = payload[sev]
+        sval = "" if val in (None, "") else str(int(val))
+        row = db.query(AppSetting).filter(AppSetting.key == f"sla_days_{sev}").first()
+        if row:
+            row.value = sval
+        else:
+            db.add(AppSetting(key=f"sla_days_{sev}", value=sval))
+    db.commit()
+    return _sla_days(db)
+
+
+@stats_router.get("/findings/grouped")
+def list_findings_grouped(project_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """Findings deduplicated by fingerprint (target + cve/control + normalized title),
+    with occurrences, first/last seen, and SLA due/overdue.
+
+    Read-time dedup only — the underlying per-scan Finding rows are untouched, so
+    ScanDiff and per-scan finding views keep working.
+    """
+    from datetime import datetime, timedelta
+
+    findings = db.query(Finding).order_by(Finding.created_at.desc()).all()
+    scans_map = {s.id: s for s in db.query(Scan).filter(Scan.id.in_({f.scan_id for f in findings})).all()}
+    targets_map = {t.id: t for t in db.query(Target).filter(Target.id.in_({s.target_id for s in scans_map.values()})).all()}
+    projects_map = {p.id: p for p in db.query(Project).filter(Project.id.in_({t.project_id for t in targets_map.values()})).all()}
+
+    groups: dict[str, dict] = {}
+    for f in findings:
+        scan = scans_map.get(f.scan_id)
+        target = targets_map.get(scan.target_id) if scan else None
+        project = projects_map.get(target.project_id) if target else None
+        if project_id and (not project or project.id != project_id):
+            continue
+        fp = f"{target.id if target else '?'}|{(f.cve_id or '').upper()}|{f.control_id or ''}|{_normalize_title(f.title)}"
+        g = groups.get(fp)
+        if not g:
+            groups[fp] = g = {
+                "id": f.id,  # representative = latest (rows are ordered created_at desc)
+                "severity": f.severity, "title": f.title, "description": f.description,
+                "remediation": f.remediation, "cve_id": f.cve_id, "cvss_score": f.cvss_score,
+                "control_id": f.control_id, "framework": f.framework, "evidence": f.evidence,
+                "status": getattr(f, "status", "open") or "open",
+                "tags": getattr(f, "tags", "") or "",
+                "target": target.hostname_or_ip if target else "unknown",
+                "project": project.name if project else "unknown",
+                "project_id": project.id if project else None,
+                "occurrences": 0, "first_seen": f.created_at, "last_seen": f.created_at,
+                "scan_ids": set(),
+            }
+        g["occurrences"] += 1
+        if f.scan_id:
+            g["scan_ids"].add(f.scan_id)
+        if f.created_at:
+            g["first_seen"] = min(g["first_seen"] or f.created_at, f.created_at)
+            g["last_seen"] = max(g["last_seen"] or f.created_at, f.created_at)
+
+    sla = _sla_days(db)
+    now = datetime.utcnow()
+    still_open = {"open", "in-review"}
+    result = []
+    for g in groups.values():
+        days = sla.get(g["severity"])
+        due = (g["first_seen"] + timedelta(days=days)) if (days and g["first_seen"]) else None
+        overdue = bool(due and g["status"] in still_open and now > due)
+        item = {k: v for k, v in g.items() if k not in ("first_seen", "last_seen", "scan_ids")}
+        item.update({
+            "first_seen": g["first_seen"].isoformat() if g["first_seen"] else None,
+            "last_seen": g["last_seen"].isoformat() if g["last_seen"] else None,
+            "scan_ids": sorted(g["scan_ids"]),
+            "sla_due": due.isoformat() if due else None,
+            "overdue": overdue,
+        })
+        result.append(item)
+
+    result.sort(key=lambda x: (x["overdue"], _SEV_RANK.get(x["severity"], 0), x["last_seen"] or ""), reverse=True)
+    return {"sla_days": sla, "findings": result}
+
+
 @stats_router.patch("/findings/{finding_id}/status")
 def update_finding_status(finding_id: str, payload: dict, db: Session = Depends(get_db)):
     valid = {"open", "in-review", "remediated", "accepted", "false_positive"}
