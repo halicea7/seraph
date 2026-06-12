@@ -189,7 +189,6 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
                 db.commit()
                 return
 
-            from database import Target
             target = db.query(Target).filter(Target.id == scan.target_id).first()
             if not target:
                 await websocket.send_json({"type": "error", "data": "Target not found"})

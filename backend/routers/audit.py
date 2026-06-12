@@ -247,6 +247,67 @@ def get_scan_findings(scan_id: str, db: Session = Depends(get_db)):
     return findings
 
 
+_SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+
+@router.get("/coverage")
+def framework_coverage(project_id: str, db: Session = Depends(get_db)):
+    """Per-framework coverage rolled up from the project's real findings.
+
+    Groups by each finding's `framework`/`control_id` plus any OWASP:/PCI:/MITRE:
+    tag prefixes the parsers emit. Powers the Audit Builder coverage panel — real
+    data, replacing the former static mockup and the never-implemented
+    /audit/summary + /audit/benchmarks probes.
+    """
+    target_ids = [t.id for t in db.query(Target).filter(Target.project_id == project_id).all()]
+    findings = []
+    if target_ids:
+        scan_ids = [s.id for s in db.query(Scan).filter(Scan.target_id.in_(target_ids)).all()]
+        if scan_ids:
+            findings = db.query(Finding).filter(Finding.scan_id.in_(scan_ids)).all()
+
+    fw: dict[str, dict[str, dict]] = {}          # framework -> control_id -> {worst, count}
+    fw_sev: dict[str, dict[str, int]] = {}       # framework -> severity -> count
+
+    def _add(framework: str, control_id: str, severity: str) -> None:
+        framework = framework or "Uncategorized"
+        control_id = control_id or "—"
+        ctrl = fw.setdefault(framework, {}).setdefault(control_id, {"worst": severity, "count": 0})
+        ctrl["count"] += 1
+        if _SEV_RANK.get(severity, 0) > _SEV_RANK.get(ctrl["worst"], 0):
+            ctrl["worst"] = severity
+        sc = fw_sev.setdefault(framework, {})
+        sc[severity] = sc.get(severity, 0) + 1
+
+    for f in findings:
+        sev = f.severity or "info"
+        if f.framework:
+            _add(f.framework, f.control_id or "", sev)
+        for tag in (f.tags or "").split(","):
+            tag = tag.strip()
+            if not tag or ":" not in tag:
+                continue
+            prefix, _, rest = tag.partition(":")
+            if prefix.upper() in ("OWASP", "PCI", "MITRE"):
+                _add(prefix.upper(), rest or tag, sev)
+
+    frameworks = []
+    for name, ctrls in sorted(fw.items()):
+        controls = sorted(
+            ({"control_id": cid, "worst_severity": d["worst"], "count": d["count"]}
+             for cid, d in ctrls.items()),
+            key=lambda x: (-_SEV_RANK.get(x["worst_severity"], 0), x["control_id"]),
+        )
+        frameworks.append({
+            "framework": name,
+            "controls_touched": len(ctrls),
+            "severity_counts": fw_sev.get(name, {}),
+            "controls": controls,
+        })
+
+    return {"project_id": project_id, "total_findings": len(findings), "frameworks": frameworks}
+
+
 _VALID_REPORT_TYPES = {"audit", "pentest", "executive_summary", "technical_detail", "compliance_mapped"}
 
 
