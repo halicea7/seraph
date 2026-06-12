@@ -618,6 +618,72 @@ def get_stats_history(days: int = 14, db: Session = Depends(get_db)):
     return {"days": date_range, "pivot": pivot}
 
 
+@stats_router.get("/stats/posture")
+def get_posture_history(project_id: str, days: int = 90, db: Session = Depends(get_db)):
+    """Per-day posture trend for one project: new findings by severity, the cumulative
+    trajectory, and coverage drift (distinct controls touched over time).
+
+    Derived from finding created_at — we don't track status-change history, so this is
+    finding *influx* and cumulative totals, not an open/closed stock over time.
+    """
+    from datetime import timedelta
+
+    days = max(7, min(days, 365))
+    sevs = ["critical", "high", "medium", "low", "info"]
+
+    target_ids = [t.id for t in db.query(Target).filter(Target.project_id == project_id).all()]
+    findings = []
+    if target_ids:
+        scan_ids = [s.id for s in db.query(Scan).filter(Scan.target_id.in_(target_ids)).all()]
+        if scan_ids:
+            findings = db.query(Finding).filter(Finding.scan_id.in_(scan_ids)).order_by(Finding.created_at).all()
+
+    today = datetime.utcnow().date()
+    start = today - timedelta(days=days - 1)
+    start_iso = start.isoformat()
+    dates = [(start + timedelta(days=i)).isoformat() for i in range(days)]
+
+    per_day = {d: {s: 0 for s in sevs} for d in dates}
+    controls_by_day = {d: set() for d in dates}
+    cum_before = {s: 0 for s in sevs}          # findings before the window
+    controls_before: set = set()
+
+    for f in findings:
+        if not f.created_at:
+            continue
+        d = f.created_at.date().isoformat()
+        ckey = f"{f.framework or ''}|{f.control_id or ''}" if (f.framework or f.control_id) else None
+        if d < start_iso:
+            if f.severity in cum_before:
+                cum_before[f.severity] += 1
+            if ckey:
+                controls_before.add(ckey)
+            continue
+        if d in per_day:
+            if f.severity in per_day[d]:
+                per_day[d][f.severity] += 1
+            if ckey:
+                controls_by_day[d].add(ckey)
+
+    series = []
+    cum = dict(cum_before)
+    cum_controls = set(controls_before)
+    for d in dates:
+        for s in sevs:
+            cum[s] += per_day[d][s]
+        cum_controls |= controls_by_day[d]
+        series.append({
+            "date": d,
+            "new": per_day[d],
+            "new_total": sum(per_day[d].values()),
+            "cumulative": dict(cum),
+            "cumulative_total": sum(cum.values()),
+            "controls_total": len(cum_controls),
+        })
+
+    return {"project_id": project_id, "days": days, "series": series}
+
+
 @stats_router.get("/findings")
 def list_findings(
     severity: Optional[str] = None,

@@ -25,6 +25,7 @@ GET_ENDPOINTS = [
     "/api/v1/stats",
     "/api/v1/findings?project_id={pid}",
     "/api/v1/findings/grouped?project_id={pid}",
+    "/api/v1/stats/posture?project_id={pid}",
     "/api/v1/findings/sla-config",
     "/api/v1/scans",
     "/api/v1/projects/{pid}/targets",
