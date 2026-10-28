@@ -25,6 +25,9 @@ else
   echo "[entrypoint] No TLS certs at $CERT — starting HTTP on :8000"
 fi
 
+echo "[entrypoint] Running database migrations…"
+python -c "from database import create_tables; create_tables()"
+
 # Single worker, unconditionally. The scheduler, listener manager and
 # cve_watcher all run in-process (APScheduler jobs + in-memory registries) —
 # a second uvicorn worker would mean a second copy of each of them, each
