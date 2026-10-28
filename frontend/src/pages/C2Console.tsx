@@ -7,6 +7,7 @@ import {
   ListChecks, Network, Camera, ArrowUpCircle, KeyRound, BookOpen
 } from 'lucide-react'
 import Terminal, { TerminalHandle } from '../components/Terminal'
+import { wsUrl } from '../api/ws'
 import type { Project } from '../types'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -780,8 +781,7 @@ export default function C2Console() {
 
   function connectTerminal(session: C2Session) {
     wsRef.current?.close()
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/c2/${session.id}`)
+    const ws = new WebSocket(wsUrl(`/ws/c2/${session.id}`))
     wsRef.current = ws
     terminalRef.current?.clear()
 

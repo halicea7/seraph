@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Bell, Check, Trash2, X } from 'lucide-react'
+import { wsUrl } from '../api/ws'
 
 interface Notification {
   id: string
@@ -56,8 +57,7 @@ export default function NotificationBell() {
     let reconnectTimer: ReturnType<typeof setTimeout>
 
     function connect() {
-      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/events`)
+      ws = new WebSocket(wsUrl('/ws/events'))
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data)

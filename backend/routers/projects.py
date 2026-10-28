@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from database import ADCollection, C2Session, Credential, Finding, FPSuppressionRule, HttpRequestItem, Project, Scan, Screenshot, Target, VulnerabilityRecord, get_db
+from services.authz import require_role
 from services.scope_service import check_scope, scope_summary
 from services.validators import (
     VALID_TARGET_TYPES,
@@ -290,16 +291,53 @@ def update_project(
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_project(project_id: str, db: Session = Depends(get_db)):
+def delete_project(project_id: str, db: Session = Depends(get_db), _admin=Depends(require_role("admin"))):
+    from database import (
+        CrackingJob, HardeningReport, Listener, PlaybookRun, ScanProfile, SherlockJob,
+    )
+    from services import listener_manager, scheduler as scheduler_svc
+
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    # VulnerabilityRecord, Credential, and ADCollection have project_id FKs without cascade
+
+    # Stop any live in-memory jobs before the rows they're keyed on disappear.
+    for listener in db.query(Listener).filter(Listener.project_id == project_id).all():
+        try:
+            listener_manager.unregister_listener(listener.id)
+        except Exception:
+            pass
+    for profile in db.query(ScanProfile).filter(ScanProfile.scheduled_project_id == project_id).all():
+        try:
+            scheduler_svc.unregister_profile(profile.id)
+        except Exception:
+            pass
+
+    # None of these are in the SQLAlchemy relationship cascade from Project.
+    # Several (Credential, Listener, ListenerEvent, C2Session+children,
+    # CrackingJob, SherlockJob, FPSuppressionRule) have ondelete="CASCADE" at
+    # the DB level and would be cleaned up automatically once the pragma in
+    # database.py turns SQLite's foreign_keys enforcement on — but the rest
+    # (VulnerabilityRecord, ADCollection, Screenshot, HttpRequestItem,
+    # HardeningReport) use a plain FK with no ondelete action, so deleting the
+    # project without clearing them first raises an IntegrityError. Deleting
+    # all of them explicitly keeps this list correct regardless of pragma
+    # state and documents what "belongs to" a project that isn't in cascade.
     db.query(VulnerabilityRecord).filter(VulnerabilityRecord.project_id == project_id).delete()
     db.query(Credential).filter(Credential.project_id == project_id).delete()
     db.query(ADCollection).filter(ADCollection.project_id == project_id).delete()
     db.query(Screenshot).filter(Screenshot.project_id == project_id).delete()
     db.query(HttpRequestItem).filter(HttpRequestItem.project_id == project_id).delete()
+    db.query(HardeningReport).filter(HardeningReport.project_id == project_id).delete()
+    db.query(C2Session).filter(C2Session.project_id == project_id).delete()
+    db.query(Listener).filter(Listener.project_id == project_id).delete()
+    db.query(CrackingJob).filter(CrackingJob.project_id == project_id).delete()
+    db.query(SherlockJob).filter(SherlockJob.project_id == project_id).delete()
+    db.query(FPSuppressionRule).filter(FPSuppressionRule.project_id == project_id).delete()
+    db.query(ScanProfile).filter(ScanProfile.scheduled_project_id == project_id).delete()
+    # PlaybookRun.project_id is a plain string column, not a ForeignKey.
+    db.query(PlaybookRun).filter(PlaybookRun.project_id == project_id).delete()
+
     db.delete(project)
     db.commit()
 
@@ -885,12 +923,25 @@ def retest_finding(finding_id: str, db: Session = Depends(get_db)):
 def evaluate_retest(finding_id: str, payload: dict, db: Session = Depends(get_db)):
     """After a retest scan has run, check whether the finding reappeared. If it's gone,
     mark the original finding remediated."""
-    new_scan_id = str(payload.get("scan_id", ""))
+    new_scan_id = str(payload.get("scan_id", "") or "")
     f = db.query(Finding).filter(Finding.id == finding_id).first()
     if not f:
         raise HTTPException(status_code=404, detail="Finding not found")
     orig = db.query(Scan).filter(Scan.id == f.scan_id).first()
-    target_id = orig.target_id if orig else "?"
+    if not orig:
+        raise HTTPException(status_code=400, detail="Original scan for this finding no longer exists")
+    target_id = orig.target_id
+
+    if not new_scan_id:
+        raise HTTPException(status_code=400, detail="scan_id is required")
+    new_scan = db.query(Scan).filter(Scan.id == new_scan_id).first()
+    if not new_scan:
+        raise HTTPException(status_code=400, detail="Retest scan not found")
+    if new_scan.target_id != target_id:
+        raise HTTPException(status_code=400, detail="Retest scan does not target the same host as the original finding")
+    if new_scan.status != "completed":
+        raise HTTPException(status_code=400, detail=f"Retest scan is '{new_scan.status}', not completed — nothing to evaluate yet")
+
     fp = _finding_fingerprint(f, target_id)
     new_findings = db.query(Finding).filter(Finding.scan_id == new_scan_id).all()
     present = any(_finding_fingerprint(nf, target_id) == fp for nf in new_findings)

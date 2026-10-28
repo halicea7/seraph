@@ -22,8 +22,8 @@ def _next_fire(cron_expr: str) -> Optional[datetime]:
 
 async def _run_headless(scan_id: str, script: str) -> None:
     """Write script to temp file, execute, save output, auto-parse findings."""
-    from database import SessionLocal, Scan, Finding
-    from services.output_parser import auto_parse_scan_output
+    from database import SessionLocal, Scan
+    from services.output_parser import save_parsed_findings
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False, prefix="seraph_sched_") as f:
         f.write(script)
@@ -56,11 +56,8 @@ async def _run_headless(scan_id: str, script: str) -> None:
             scan.raw_output = raw_output
             db.commit()
             new_findings = 0
-            if exit_code == 0:
-                before = db.query(Finding).filter(Finding.scan_id == scan_id).count()
-                auto_parse_scan_output(scan, db)
-                after = db.query(Finding).filter(Finding.scan_id == scan_id).count()
-                new_findings = max(0, after - before)
+            if exit_code == 0 and raw_output:
+                _, new_findings = save_parsed_findings(db, scan, raw_output)
             # Push notification
             from routers.notifications import push_notification
             if exit_code == 0:
@@ -241,14 +238,20 @@ async def _run_c2_session_sync() -> None:
             if p:
                 project_ids = [p.id]
 
-        for project_id in project_ids:
-            # Mark sessions that disappeared as 'lost'
-            db.query(C2Session).filter(
-                C2Session.project_id == project_id,
-                C2Session.status == "active",
-                C2Session.msf_session_id.notin_(live_msf_ids),
-                C2Session.session_type.notlike("sliver_%"),  # don't touch sliver sessions here
-            ).update({"status": "lost"}, synchronize_session=False)
+        # `notin_(set())` compiles to a predicate that's TRUE for every row —
+        # an empty live set (MSF unreachable, or msf.list_sessions() swallowed
+        # an exception above) must never be read as "every session is gone".
+        # Only mark sessions lost when we have at least one confirmed-live id.
+        if live_msf_ids:
+            for project_id in project_ids:
+                # Mark sessions that disappeared as 'lost'
+                db.query(C2Session).filter(
+                    C2Session.project_id == project_id,
+                    C2Session.status == "active",
+                    C2Session.msf_session_id.isnot(None),
+                    C2Session.msf_session_id.notin_(live_msf_ids),
+                    C2Session.session_type.notlike("sliver_%"),  # don't touch sliver sessions here
+                ).update({"status": "lost"}, synchronize_session=False)
 
         for ls in live_msf:
             sid = str(ls["msf_session_id"])
@@ -297,13 +300,15 @@ async def _run_c2_session_sync() -> None:
 
         live_sliver_ids = {str(s["sliver_id"]) for s in live_sliver}
 
-        for project_id in project_ids:
-            db.query(C2Session).filter(
-                C2Session.project_id == project_id,
-                C2Session.status == "active",
-                C2Session.session_type.like("sliver_%"),
-                C2Session.msf_session_id.notin_(live_sliver_ids),
-            ).update({"status": "lost"}, synchronize_session=False)
+        if live_sliver_ids:
+            for project_id in project_ids:
+                db.query(C2Session).filter(
+                    C2Session.project_id == project_id,
+                    C2Session.status == "active",
+                    C2Session.session_type.like("sliver_%"),
+                    C2Session.msf_session_id.isnot(None),
+                    C2Session.msf_session_id.notin_(live_sliver_ids),
+                ).update({"status": "lost"}, synchronize_session=False)
 
         for ls in live_sliver:
             sid = str(ls["sliver_id"])

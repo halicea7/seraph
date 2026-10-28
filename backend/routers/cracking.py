@@ -1,10 +1,11 @@
 import json
 import os
 import pathlib
+import re
 import shutil
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -113,6 +114,17 @@ def get_tools():
     }
 
 
+# hashcat -a attack modes we support from the UI (0=straight, 1=combination,
+# 3=brute-force/mask, 6/7=hybrid, 9=association).
+_HASHCAT_ATTACK_MODES = {"0", "1", "3", "6", "7", "9"}
+_HASHCAT_TYPE_IDS = {t["id"] for t in HASHCAT_TYPES}
+_JOHN_FORMAT_IDS = {f["id"] for f in JOHN_FORMATS}
+_MASK_RE = re.compile(r"^[A-Za-z0-9?._-]{1,64}$")
+# Wordlist paths: no spaces or shell metacharacters — these are interpolated
+# into a remote bash script for the SSH cracking-server branch.
+_PATH_RE = re.compile(r"^[\w./-]{1,255}$")
+
+
 class CrackingRunRequest(BaseModel):
     project_id: str = ""
     tool: str                          # hashcat | john
@@ -125,6 +137,27 @@ class CrackingRunRequest(BaseModel):
     server_id: str = ""                # CrackingServer.id — empty means run locally
     remote_wordlist: str = ""          # wordlist path on the remote server
 
+    @field_validator("attack_mode")
+    @classmethod
+    def _check_attack_mode(cls, v: str) -> str:
+        if v not in _HASHCAT_ATTACK_MODES:
+            raise ValueError(f"attack_mode must be one of {sorted(_HASHCAT_ATTACK_MODES)}")
+        return v
+
+    @field_validator("mask")
+    @classmethod
+    def _check_mask(cls, v: str) -> str:
+        if v and not _MASK_RE.match(v):
+            raise ValueError("mask may only contain letters, digits, '?', '.', '_', '-'")
+        return v
+
+    @field_validator("wordlist", "remote_wordlist")
+    @classmethod
+    def _check_path(cls, v: str) -> str:
+        if v and not _PATH_RE.match(v):
+            raise ValueError("path must not contain spaces or shell metacharacters")
+        return v
+
 
 @router.post("/run")
 def run_cracking(req: CrackingRunRequest, db: Session = Depends(get_db)):
@@ -133,7 +166,19 @@ def run_cracking(req: CrackingRunRequest, db: Session = Depends(get_db)):
     if not req.hashes:
         raise HTTPException(400, "No hashes provided")
 
-    # Build the command template (HASH_FILE and OUT_FILE substituted by WS endpoint)
+    if req.tool == "hashcat":
+        if req.hash_type not in _HASHCAT_TYPE_IDS:
+            raise HTTPException(400, f"hash_type must be one of {sorted(_HASHCAT_TYPE_IDS)}")
+    else:
+        if req.hash_type not in _JOHN_FORMAT_IDS:
+            raise HTTPException(400, f"hash_type must be one of {sorted(_JOHN_FORMAT_IDS)}")
+    if req.attack_mode == "3" and not req.mask:
+        raise HTTPException(400, "mask is required for attack_mode 3 (brute-force)")
+
+    # Build the command template (HASH_FILE and OUT_FILE substituted by WS endpoint).
+    # Every value interpolated below is now allowlisted/regex-checked above, so
+    # this string is safe to execute either via a shell or (preferred, see
+    # routers/ws.py) via run_argv_streaming with no shell involved at all.
     if req.tool == "hashcat":
         attack_arg = req.mask if req.attack_mode == "3" else "WORD_FILE"
         command = (

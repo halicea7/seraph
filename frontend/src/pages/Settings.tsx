@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
+import { wsUrl } from '../api/ws'
 
 interface ToolInfo {
   available: boolean
@@ -365,8 +366,7 @@ export default function Settings() {
     setInstallTool(toolName)
     setInstallLines([])
     setInstallDone(false)
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/install/${toolName}`)
+    const ws = new WebSocket(wsUrl(`/ws/install/${toolName}`))
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data)
       if (msg.type === 'stdout' || msg.type === 'stderr' || msg.type === 'error') {

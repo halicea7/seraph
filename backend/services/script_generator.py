@@ -27,6 +27,21 @@ def _validate_timing(timing: str) -> str:
         return f"-{match.group(0)}"
     return "-T3"
 
+_CONTROL_CHARS_RE = re.compile(r"[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+def _single_line(value: str) -> str:
+    """Strip newlines/control chars from a value that's about to be
+    interpolated into a `#` comment line in the generated bash script.
+
+    A project name or category id containing a real newline would break out
+    of the comment and turn the next "line" into executable bash — this is
+    the only thing standing between that and arbitrary command injection via
+    a project name, so it applies regardless of which caller (the Audit
+    Builder endpoint, the scheduler, a listener, a retest, an agent job)
+    supplied the value.
+    """
+    return _CONTROL_CHARS_RE.sub(" ", value or "")
+
 SCAN_TEMPLATE_MAP = {
     "network_discovery": "nmap_discovery.sh.j2",
     "vulnerability_scan": "nmap_vuln.sh.j2",
@@ -50,6 +65,8 @@ def generate_script(
     )
 
     validated_target = _validate_target(target)
+    safe_project_name = _single_line(project_name)
+    safe_category_ids = [_single_line(c["category_id"]) for c in scan_categories]
     now = datetime.utcnow()
     timestamp = now.strftime("%Y-%m-%d %H:%M:%S UTC")
     timestamp_short = now.strftime("%Y%m%d_%H%M%S")
@@ -58,10 +75,10 @@ def generate_script(
         f"#!/usr/bin/env bash",
         f"# ============================================================",
         f"# Seraph — Combined Audit Script",
-        f"# Project: {project_name}",
+        f"# Project: {safe_project_name}",
         f"# Target:  {validated_target}",
         f"# Generated: {timestamp}",
-        f"# Scan Categories: {', '.join(c['category_id'] for c in scan_categories)}",
+        f"# Scan Categories: {', '.join(safe_category_ids)}",
         f"# ============================================================",
         f"",
         f"set -euo pipefail",
@@ -69,7 +86,7 @@ def generate_script(
     ]
 
     for cat in scan_categories:
-        category_id = cat["category_id"]
+        category_id = _single_line(cat["category_id"])
         config = cat.get("config", {})
         template_name = SCAN_TEMPLATE_MAP.get(category_id)
         if not template_name:
@@ -77,7 +94,7 @@ def generate_script(
 
         # Build template context based on category
         ctx = {
-            "project_name": project_name,
+            "project_name": safe_project_name,
             "target": validated_target,
             "timestamp": timestamp,
             "timestamp_short": timestamp_short,

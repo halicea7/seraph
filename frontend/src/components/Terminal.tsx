@@ -3,6 +3,7 @@ import { Terminal as XTerm } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
 import { useTheme } from '../contexts/ThemeContext'
+import { wsUrl } from '../api/ws'
 
 function getXtermTheme(mono: boolean) {
   return {
@@ -117,9 +118,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ className }, ref) 
 
       wsRef.current?.close()
 
-      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${wsProto}//${window.location.host}/ws/execute/${scanId}`
-      const ws = new WebSocket(wsUrl)
+      const ws = new WebSocket(wsUrl(`/ws/execute/${scanId}`))
       wsRef.current = ws
 
       ws.onopen = () => {

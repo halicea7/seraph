@@ -106,16 +106,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — WebAuthn-trusted origins for cookie-based flows; all other origins are
-# permitted via regex because Electron (Origin: null) and LAN clients send
-# unpredictable origins. API-token auth is the real gate for those callers.
+# CORS — WebAuthn-trusted origins for cookie-based flows, plus explicit LAN/
+# extra origins from config. `allow_origin_regex=r".*"` used to sit here too
+# ("Electron sends Origin: null") — combined with allow_credentials=True that
+# let *any* website read authenticated responses and tokens cross-site, not
+# just Electron. The regex is narrowed to match only the literal `null`
+# origin Electron's file:// renderer sends; every other caller must be in
+# SERAPH_RP_ORIGINS / SERAPH_EXTRA_CORS_ORIGINS. (A sandboxed iframe or
+# data: URI can also send Origin: null — this is a narrower, not zero, risk.)
 _cors_origins = [o.strip() for o in settings.rp_origins.split(",") if o.strip()]
 if settings.extra_cors_origins:
     _cors_origins += [o.strip() for o in settings.extra_cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_origin_regex=r".*",
+    allow_origin_regex=r"^null$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Accept", "Accept-Language", "Authorization", "Content-Language", "Content-Type", "X-Requested-With"],
@@ -142,10 +147,9 @@ _rate_lock = asyncio.Lock()
 
 
 def _get_client_ip(request: Request) -> str:
-    xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    from services.net_guard import client_ip
+    peer = request.client.host if request.client else ""
+    return client_ip(peer, request.headers.get("X-Forwarded-For"))
 
 
 @app.middleware("http")
@@ -270,6 +274,24 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/agents/result/",
 )
 
+# ?token= is accepted ONLY on these — the handful of routes a browser loads
+# via <img src=...> or a direct download/new-tab navigation, which can't set
+# an Authorization header. Every other route must use the header; a token
+# accepted everywhere leaks into proxy/access logs, browser history and the
+# Referer header on outbound requests from the page it's embedded in.
+_QUERY_TOKEN_PREFIXES = (
+    "/api/v1/audit/reports/download/",
+    "/api/v1/audit/reports/pdf/",
+)
+
+
+def _query_token_allowed(path: str) -> bool:
+    if path.startswith(_QUERY_TOKEN_PREFIXES):
+        return True
+    # /api/v1/screenshots/{id}/image → ['', 'api', 'v1', 'screenshots', '{id}', 'image']
+    parts = path.split("/")
+    return len(parts) == 6 and parts[3] == "screenshots" and parts[5] == "image"
+
 
 def _valid_bearer(token: str) -> bool:
     from services.auth_service import decode_token
@@ -296,10 +318,15 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     if path in _AUTH_EXEMPT_EXACT or path.startswith(_AUTH_EXEMPT_PREFIXES):
         return await call_next(request)
-    # Bearer header (normal API calls) OR ?token= (for <img>/download URLs that
-    # can't set headers — e.g. screenshot images, report downloads).
+    # Bearer header (normal API calls) OR ?token= — but only on the media/
+    # download routes above that genuinely can't set a header.
     auth = request.headers.get("Authorization", "")
-    token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else request.query_params.get("token", "")
+    if auth.startswith("Bearer "):
+        token = auth.removeprefix("Bearer ").strip()
+    elif _query_token_allowed(path):
+        token = request.query_params.get("token", "")
+    else:
+        token = ""
     if not token or not _valid_bearer(token):
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
     return await call_next(request)

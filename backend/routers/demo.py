@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import uuid
 
 from database import get_db, AppSetting, Project, Target, Scan, Finding, VulnerabilityRecord, Credential
+from services.authz import require_role
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -33,7 +34,7 @@ def demo_status(db: Session = Depends(get_db)):
 # ── Seed ──────────────────────────────────────────────────────────────────────
 
 @router.post("/seed")
-def seed_demo(db: Session = Depends(get_db)):
+def seed_demo(db: Session = Depends(get_db), _admin=Depends(require_role("admin"))):
     # Guard against double-seeding
     if db.query(Project).filter(Project.description == DEMO_MARKER).first():
         _set(db, "demo_mode", "true")
@@ -236,7 +237,7 @@ def seed_demo(db: Session = Depends(get_db)):
 # ── Clear ─────────────────────────────────────────────────────────────────────
 
 @router.delete("/clear")
-def clear_demo(db: Session = Depends(get_db)):
+def clear_demo(db: Session = Depends(get_db), _admin=Depends(require_role("admin"))):
     demo_projects = db.query(Project).filter(Project.description == DEMO_MARKER).all()
     project_ids = [p.id for p in demo_projects]
 

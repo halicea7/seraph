@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
+import { wsUrl } from '@/api/ws'
 import { Users } from 'lucide-react'
 
 interface PresenceUser {
@@ -51,8 +52,7 @@ export default function ActiveUsers({ projectId, page = '' }: ActiveUsersProps) 
   useEffect(() => {
     if (!projectId) return
     const displayName = user?.full_name || user?.username || 'anonymous'
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${proto}://${window.location.host}/ws/presence/${projectId}?user=${encodeURIComponent(displayName)}`
+    const url = wsUrl(`/ws/presence/${projectId}?user=${encodeURIComponent(displayName)}`)
 
     let ws: WebSocket
     let reconnectTimer: ReturnType<typeof setTimeout>

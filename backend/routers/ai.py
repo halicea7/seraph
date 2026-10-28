@@ -6,6 +6,8 @@ from typing import Optional
 
 from database import get_db, AppSetting, Project, Target, Scan, Finding
 from services.ai_client import fetch_models, fetch_tool_capable_models, chat_complete, load_llm_params
+from services.net_guard import is_link_local_host
+from urllib.parse import urlparse
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -72,7 +74,11 @@ class AIConfigRequest(BaseModel):
 
 @router.put("/config")
 def save_ai_config(req: AIConfigRequest, db: Session = Depends(get_db)):
-    _set(db, "ai_endpoint", req.endpoint.strip())
+    endpoint = req.endpoint.strip()
+    host = urlparse(endpoint).hostname or ""
+    if is_link_local_host(host):
+        raise HTTPException(400, f"{host} is a link-local address (e.g. cloud metadata) — refusing to configure it as the AI endpoint")
+    _set(db, "ai_endpoint", endpoint)
     _set(db, "ai_model", req.model.strip())
     _set(db, "ai_provider", req.provider.strip())
 

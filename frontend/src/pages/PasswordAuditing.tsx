@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Lock, Upload, Play, RefreshCw, Check, KeyRound, ShieldAlert, Download } from 'lucide-react'
 import Terminal, { TerminalHandle } from '../components/Terminal'
+import { wsUrl } from '../api/ws'
 import type { Project, Credential } from '../types/index'
 
 interface ToolInfo {
@@ -92,8 +93,7 @@ export default function PasswordAuditing() {
     if (installing) return
     setInstalling(bundleId)
     setInstallLog(prev => ({ ...prev, [bundleId]: '' }))
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/wordlists/install/${bundleId}`)
+    const ws = new WebSocket(wsUrl(`/ws/wordlists/install/${bundleId}`))
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data)
       if (msg.type === 'stdout' || msg.type === 'stderr') {
@@ -110,10 +110,18 @@ export default function PasswordAuditing() {
     ws.onerror = () => setInstalling(null)
   }
 
-  function loadFromVault() {
+  async function loadFromVault() {
     const selected = vaultCreds.filter(c => selectedCredIds.includes(c.id))
     if (selected.length === 0) return
-    setHashInput(selected.map(c => c.secret).join('\n'))
+    // Credential.secret is never in the list payload — fetch via the
+    // audited batch-reveal endpoint right before populating the hash box.
+    const res = await fetch('/api/v1/credentials/reveal-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: selected.map(c => c.id) }),
+    })
+    const revealed: { id: string; secret: string }[] = await res.json()
+    setHashInput(revealed.map(r => r.secret).join('\n'))
   }
 
   function toggleCredId(id: string) {
@@ -171,8 +179,7 @@ export default function PasswordAuditing() {
     const { job_id } = await res.json()
     setJobId(job_id)
 
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/cracking/${job_id}`)
+    const ws = new WebSocket(wsUrl(`/ws/cracking/${job_id}`))
 
     ws.onopen = () => {
       terminalRef.current?.writeln(`\x1b[33m[*] Starting ${tool}...\x1b[0m`)
@@ -376,7 +383,7 @@ export default function PasswordAuditing() {
                       onChange={() => toggleCredId(c.id)}
                       className="accent-cyan-500"
                     />
-                    <span className="text-[10px] font-mono text-slate-400 truncate group-hover:text-slate-200">{c.secret.slice(0, 24)}…</span>
+                    <span className="text-[10px] font-mono text-slate-400 truncate group-hover:text-slate-200">{c.cred_type} · {c.target_host || c.username || c.id.slice(0, 8)}</span>
                   </label>
                 ))}
               </div>

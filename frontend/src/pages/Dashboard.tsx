@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { wsUrl } from '../api/ws'
 import {
   FolderOpen,
   Target,
@@ -233,8 +234,7 @@ export default function Dashboard() {
 
     let delay = 1000
     function connect() {
-      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${proto}://${window.location.host}/ws/events`)
+      const ws = new WebSocket(wsUrl('/ws/events'))
       wsRef.current = ws
 
       ws.onmessage = (e) => {

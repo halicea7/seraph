@@ -39,10 +39,9 @@ _failed_attempts: dict[str, list[float]] = defaultdict(list)
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    from services.net_guard import client_ip
+    peer = request.client.host if request.client else ""
+    return client_ip(peer, request.headers.get("X-Forwarded-For"))
 
 
 def _is_locked_out(ip: str) -> bool:

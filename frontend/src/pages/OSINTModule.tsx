@@ -3,6 +3,7 @@ import { Search, Mail, Globe, Network, Plus, AlertCircle } from 'lucide-react'
 import ToolCard, { ToolStatus } from '../components/ToolCard'
 import Terminal, { TerminalHandle } from '../components/Terminal'
 import type { Project, Target } from '../types/index'
+import { wsUrl } from '../api/ws'
 
 interface OSINTTool {
   tool: string
@@ -121,8 +122,7 @@ export default function OSINTModule() {
     const { scan_id } = await res.json()
     updateTool(toolName, { scanId: scan_id })
 
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/osint/${scan_id}`)
+    const ws = new WebSocket(wsUrl(`/ws/osint/${scan_id}`))
     let outputBuffer = ''
 
     ws.onopen = () => {

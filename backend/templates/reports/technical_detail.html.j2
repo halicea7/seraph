@@ -71,7 +71,7 @@
         <td><span class="sev-badge {{ f.severity }}">{{ f.severity }}</span></td>
         <td>{{ f.title }}</td>
         <td>{% if f.cve_id %}<span class="cve-tag">{{ f.cve_id }}</span>{% else %}&mdash;{% endif %}</td>
-        <td>{{ f.cvss_score if f.cvss_score else '&mdash;' }}</td>
+        <td>{{ f.cvss_score if f.cvss_score else '—' }}</td>
       </tr>
       {% else %}
       <tr><td colspan="5" style="text-align:center;color:#94a3b8;">No findings recorded.</td></tr>
@@ -145,7 +145,7 @@
       <tr>
         <td>{{ t.hostname_or_ip }}</td>
         <td>{{ t.target_type }}</td>
-        <td>{{ t.notes or '&mdash;' }}</td>
+        <td>{{ t.notes or '—' }}</td>
       </tr>
       {% endfor %}
     </tbody>

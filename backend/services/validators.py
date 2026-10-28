@@ -84,7 +84,16 @@ def validate_free_text(value: str, *, max_length: int = 4096, field_name: str = 
     return value
 
 
-# ── Command validation (defense-in-depth, templates are primary guard) ──────────
+# ── Command validation (defense-in-depth only) ──────────────────────────────────
+#
+# This denylist is NOT the thing that stops shell injection — it can't be: some
+# legitimate tool_chains.json templates (e.g. bettercap's `-eval 'a; b; c'`)
+# contain characters like `;` that a wider denylist would have to block too.
+# The actual guard is that these commands are executed via
+# services.executor.run_argv_streaming, which shlex.splits the string and execs
+# argv directly with no shell — so none of these characters are ever
+# interpreted by a shell regardless of what passes this check. This function
+# only catches a few obviously-wrong patterns early, with a clear error.
 
 _DISALLOWED_COMMAND_PATTERNS = ["`", "$(", "${IFS}", "eval ", "exec "]
 

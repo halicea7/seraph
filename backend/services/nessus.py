@@ -119,7 +119,7 @@ class NessusClient:
 def load_client(db: Session) -> NessusClient:
     host = get_setting(db, "nessus_host")
     port = int(get_setting(db, "nessus_port", "8834"))
-    verify_ssl = get_setting(db, "nessus_verify_ssl", "false").lower() == "true"
+    verify_ssl = get_setting(db, "nessus_verify_ssl", "true").lower() == "true"
     auth_type = get_setting(db, "nessus_auth_type", "session")
     username = get_setting(db, "nessus_username")
     try:

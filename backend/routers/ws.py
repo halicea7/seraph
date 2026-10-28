@@ -12,7 +12,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 from database import SessionLocal, Scan, Credential, Notification, Target, Project
-from services.executor import run_command_streaming
+from services.executor import run_command_streaming, run_argv_streaming
 from services.ssh_executor import run_script_over_ssh, REMOTE_CATEGORIES
 from services.scope_service import check_scope
 
@@ -76,9 +76,14 @@ async def websocket_events(websocket: WebSocket):
 
 
 def _save_and_parse(db, scan, full_output: list[str], exit_code: int) -> None:
-    """Persist scan output and auto-generate findings from parsed results."""
-    from services.output_parser import auto_parse_scan_output
-    from database import Finding
+    """Persist scan output and auto-generate findings from parsed results.
+
+    Upserts by fingerprint (services.output_parser.save_parsed_findings)
+    rather than delete-then-recreate, so re-running the same scan_id (e.g.
+    clicking "Run on Server" again) never wipes an analyst's triage on a
+    finding that's still present.
+    """
+    from services.output_parser import save_parsed_findings
 
     scan.status = "completed" if exit_code == 0 else "failed"
     scan.completed_at = datetime.utcnow()
@@ -87,28 +92,13 @@ def _save_and_parse(db, scan, full_output: list[str], exit_code: int) -> None:
 
     if scan.status == "completed" and scan.raw_output:
         try:
-            parsed = auto_parse_scan_output(scan.scan_type, scan.raw_output)
-            if parsed:
-                db.query(Finding).filter(Finding.scan_id == scan.id).delete()
-                for pf in parsed:
-                    db.add(Finding(
-                        id=str(uuid.uuid4()),
-                        scan_id=scan.id,
-                        title=pf.title,
-                        description=pf.description,
-                        severity=pf.severity,
-                        control_id=pf.control_id,
-                        framework=pf.framework,
-                        remediation=pf.remediation,
-                        evidence=pf.evidence,
-                        status="open",
-                    ))
-                # Notify user
-                highs = sum(1 for p in parsed if p.severity in ("critical", "high"))
+            all_current, new_count = save_parsed_findings(db, scan, scan.raw_output)
+            if all_current:
+                highs = sum(1 for f in all_current if f.severity in ("critical", "high"))
                 notif_type = "critical" if highs > 0 else "info"
                 db.add(Notification(
-                    title=f"Scan complete — {len(parsed)} finding(s)",
-                    body=f"{scan.scan_type}: {len(parsed)} finding(s) parsed" + (f", {highs} critical/high" if highs else ""),
+                    title=f"Scan complete — {len(all_current)} finding(s)",
+                    body=f"{scan.scan_type}: {new_count} new, {len(all_current)} total" + (f", {highs} critical/high" if highs else ""),
                     type=notif_type,
                     scan_id=scan.id,
                 ))
@@ -129,7 +119,16 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
             await websocket.close()
             return
 
-        # ── Scope enforcement ────────────────────────────────────────────────
+        # Determine whether this scan uses SSH remote execution
+        config = {}
+        try:
+            config = json.loads(scan.config_json or "{}")
+        except Exception:
+            pass
+
+        # ── Scope enforcement + target/project lookup ──────────────────────────
+        _tgt = None
+        _proj = None
         if scan.target_id:
             _tgt = db.query(Target).filter(Target.id == scan.target_id).first()
             if _tgt and _tgt.project_id:
@@ -147,31 +146,42 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
                         await websocket.close()
                         return
 
-        # Wait for the client to send the script to execute
+        # Wait for the client's run-trigger — the script itself is never taken
+        # from the client. It is always regenerated server-side from the scan's
+        # own config_json (the same inputs routers/audit.py:download_script uses),
+        # so nothing sent over this socket can change what actually executes.
         data = await websocket.receive_json()
         if data.get("action") != "run":
             await websocket.send_json({"type": "error", "data": "Expected action: run"})
             await websocket.close()
             return
 
-        script_content = data.get("script", "")
-        if not script_content:
-            await websocket.send_json({"type": "error", "data": "No script provided"})
+        scan_categories = config.get("categories")
+        if not scan_categories:
+            await websocket.send_json({
+                "type": "error",
+                "data": "This scan has no reproducible script config (no categories on record) "
+                        "and cannot be executed via this endpoint.",
+            })
+            await websocket.close()
+            return
+        if not _tgt:
+            await websocket.send_json({"type": "error", "data": "Target not found"})
             await websocket.close()
             return
 
+        from services.script_generator import generate_script
+        script_content = generate_script(
+            project_name=_proj.name if _proj else "Unknown",
+            target=_tgt.hostname_or_ip,
+            scan_categories=scan_categories,
+        )
+
         _log_command(scan_id, script_content)
 
-        # Determine whether this scan uses SSH remote execution
-        config = {}
-        try:
-            config = json.loads(scan.config_json or "{}")
-        except Exception:
-            pass
-
         credential_id = config.get("credential_id")
-        scan_categories = [c.get("category_id", "") for c in config.get("categories", [])]
-        needs_ssh = credential_id and any(c in REMOTE_CATEGORIES for c in scan_categories)
+        category_ids = [c.get("category_id", "") for c in scan_categories]
+        needs_ssh = credential_id and any(c in REMOTE_CATEGORIES for c in category_ids)
 
         scan.status = "running"
         scan.started_at = datetime.utcnow()
@@ -335,7 +345,7 @@ async def websocket_pentest(websocket: WebSocket, scan_id: str):
 
         full_output = []
         client_connected = True
-        async for message in run_command_streaming(command):
+        async for message in run_argv_streaming(command):
             # Collect output regardless of client state
             if message["type"] in ("stdout", "stderr"):
                 full_output.append(message["data"])
@@ -515,7 +525,7 @@ rm -rf $WORKDIR
         db.commit()
 
         full_output: list[str] = []
-        async for message in run_command_streaming(command):
+        async for message in run_argv_streaming(command):
             await websocket.send_json(message)
             if message["type"] in ("stdout", "stderr"):
                 full_output.append(message["data"])
@@ -664,7 +674,7 @@ async def websocket_osint(websocket: WebSocket, scan_id: str):
 
         full_output = []
         client_connected = True
-        async for message in run_command_streaming(command):
+        async for message in run_argv_streaming(command):
             if message["type"] in ("stdout", "stderr"):
                 full_output.append(message["data"])
             elif message["type"] == "exit":
@@ -855,7 +865,7 @@ async def websocket_sherlock(websocket: WebSocket, job_id: str):
         full_output: list[str] = []
         client_connected = True
 
-        async for message in run_command_streaming(command):
+        async for message in run_argv_streaming(command):
             if message["type"] in ("stdout", "stderr"):
                 full_output.append(message["data"])
             elif message["type"] == "exit":

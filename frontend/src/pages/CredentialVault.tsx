@@ -43,6 +43,8 @@ export default function CredentialVault() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set())
+  // Secrets are never in `credentials` — fetched on demand via /reveal and cached here.
+  const [revealedSecrets, setRevealedSecrets] = useState<Record<string, string>>({})
   const [copied, setCopied] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string>('all')
   const [filterSource, setFilterSource] = useState<string>('all')
@@ -85,12 +87,28 @@ export default function CredentialVault() {
     setCredentials(prev => prev.filter(c => c.id !== id))
   }
 
-  function toggleReveal(id: string) {
-    setRevealedIds(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
+  async function fetchSecret(id: string): Promise<string> {
+    if (revealedSecrets[id] !== undefined) return revealedSecrets[id]
+    const res = await fetch(`/api/v1/credentials/${id}/reveal`, { method: 'POST' })
+    const data = await res.json()
+    setRevealedSecrets(prev => ({ ...prev, [id]: data.secret ?? '' }))
+    return data.secret ?? ''
+  }
+
+  async function toggleReveal(id: string) {
+    if (revealedIds.has(id)) {
+      setRevealedIds(prev => { const next = new Set(prev); next.delete(id); return next })
+      return
+    }
+    await fetchSecret(id)
+    setRevealedIds(prev => new Set(prev).add(id))
+  }
+
+  async function copySecret(id: string, key: string) {
+    const secret = await fetchSecret(id)
+    navigator.clipboard.writeText(secret)
+    setCopied(key)
+    setTimeout(() => setCopied(null), 1500)
   }
 
   function copyText(text: string, key: string) {
@@ -215,13 +233,13 @@ export default function CredentialVault() {
                   {/* Secret */}
                   <div className="flex items-center gap-1.5 min-w-0">
                     <span className="text-sm text-slate-300 font-mono truncate">
-                      {revealed ? cred.secret : '••••••••••••'}
+                      {revealed ? (revealedSecrets[cred.id] ?? '') : '••••••••••••'}
                     </span>
                     <button onClick={() => toggleReveal(cred.id)} className="text-slate-600 hover:text-cyan-400 flex-shrink-0">
                       {revealed ? <EyeOff size={11} /> : <Eye size={11} />}
                     </button>
-                    {cred.secret && (
-                      <button onClick={() => copyText(cred.secret, `s-${cred.id}`)} className="text-slate-600 hover:text-cyan-400 flex-shrink-0">
+                    {cred.has_secret && (
+                      <button onClick={() => copySecret(cred.id, `s-${cred.id}`)} className="text-slate-600 hover:text-cyan-400 flex-shrink-0">
                         {copied === `s-${cred.id}` ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
                       </button>
                     )}

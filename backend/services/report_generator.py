@@ -33,7 +33,15 @@ def generate_report(
     templates_dir = Path(__file__).parent.parent / "templates" / "reports"
     env = Environment(
         loader=FileSystemLoader(str(templates_dir)),
-        autoescape=False,
+        # Finding title/description/evidence/remediation can originate from a
+        # scanned host (e.g. a reflected payload captured as evidence) and
+        # these reports are served as text/html — autoescape=True HTML-
+        # escapes every {{ }} substitution so that text can never execute as
+        # markup. This also runs for the two .md.j2 templates below: the
+        # escaped entities (&lt; etc.) are harmless in the resulting Markdown
+        # and are exactly what keeps _markdown_to_html's naive regex-based
+        # conversion from re-introducing live HTML from finding data.
+        autoescape=True,
     )
 
     # Compute severity counts

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from database import Project, Scan, Target, get_db
 from services.vault import encrypt
+from services.net_guard import is_link_local_host
 from services.nessus import (
     _TENABLE_HOST,
     get_setting,
@@ -46,15 +47,18 @@ class NessusConfigRequest(BaseModel):
     port: int = 8834
     username: str = ""
     password: str = ""
-    verify_ssl: bool = False
+    verify_ssl: bool = True
     api_access_key: str = ""
     api_secret_key: str = ""
 
 
 @router.post("/config")
 def save_nessus_config(req: NessusConfigRequest, db: Session = Depends(get_db)):
-    auth_type = "apikey" if req.host.strip().rstrip("/") == _TENABLE_HOST else "session"
-    set_setting(db, "nessus_host", req.host.strip().rstrip("/"))
+    host = req.host.strip().rstrip("/")
+    if is_link_local_host(host):
+        raise HTTPException(400, f"{host} is a link-local address (e.g. cloud metadata) — refusing to configure it as a Nessus host")
+    auth_type = "apikey" if host == _TENABLE_HOST else "session"
+    set_setting(db, "nessus_host", host)
     set_setting(db, "nessus_port", str(req.port))
     set_setting(db, "nessus_username", req.username)
     set_setting(db, "nessus_verify_ssl", "true" if req.verify_ssl else "false")
@@ -76,7 +80,7 @@ def get_nessus_config(db: Session = Depends(get_db)):
         "port": int(get_setting(db, "nessus_port", "8834")),
         "username": get_setting(db, "nessus_username"),
         "auth_type": get_setting(db, "nessus_auth_type", "session"),
-        "verify_ssl": get_setting(db, "nessus_verify_ssl", "false") == "true",
+        "verify_ssl": get_setting(db, "nessus_verify_ssl", "true") == "true",
     }
 
 

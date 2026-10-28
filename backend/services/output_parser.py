@@ -23,6 +23,82 @@ class ParsedFinding:
     extra_tags: list = field(default_factory=list)  # e.g. ["OWASP:A05:2021", "MITRE:T1046", "PCI:11"]
 
 
+def _normalize_title(t: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (t or "").lower().strip())
+
+
+def fingerprint_for(cve_id: Optional[str], control_id: Optional[str], title: Optional[str]) -> str:
+    """Identity of a finding within one scan — same shape as
+    routers/projects.py:_finding_fingerprint, minus the target_id component
+    (a scan already belongs to exactly one target)."""
+    return f"{(cve_id or '').upper()}|{control_id or ''}|{_normalize_title(title)}"
+
+
+def save_parsed_findings(db, scan, raw_output: str) -> tuple[list, int]:
+    """Parse `raw_output` for `scan` and upsert the resulting Finding rows.
+
+    Unlike the old delete-then-recreate pattern, this matches newly parsed
+    findings against existing rows for the same scan_id by fingerprint
+    (cve_id + control_id + normalized title) and updates only the
+    descriptive columns — `status`, `fp_reason`, `tags` and
+    `exploit_chain_json` on an existing row are left exactly as an analyst
+    left them. Findings not reproduced by this run are left in place rather
+    than deleted (a flaky tool run shouldn't silently erase triage either).
+
+    Returns (all_current_findings, new_finding_count) for callers that want
+    to notify only on genuinely new findings.
+    """
+    from database import Finding
+
+    parsed = auto_parse_scan_output(scan.scan_type, raw_output)
+    if not parsed:
+        return [], 0
+
+    existing = db.query(Finding).filter(Finding.scan_id == scan.id).all()
+    existing_by_fp: dict[str, Finding] = {}
+    for f in existing:
+        existing_by_fp.setdefault(fingerprint_for(f.cve_id, f.control_id, f.title), f)
+
+    all_current: list = []
+    new_count = 0
+    for pf in parsed:
+        fp = fingerprint_for(pf.cve_id, pf.control_id, pf.title)
+        row = existing_by_fp.get(fp)
+        if row:
+            row.title = pf.title
+            row.description = pf.description
+            row.severity = pf.severity
+            row.control_id = pf.control_id
+            row.framework = pf.framework
+            row.remediation = pf.remediation
+            row.evidence = pf.evidence
+            row.cve_id = pf.cve_id
+            row.fingerprint = fp
+            all_current.append(row)
+        else:
+            row = Finding(
+                id=str(uuid.uuid4()),
+                scan_id=scan.id,
+                title=pf.title,
+                description=pf.description,
+                severity=pf.severity,
+                control_id=pf.control_id,
+                framework=pf.framework,
+                remediation=pf.remediation,
+                evidence=pf.evidence,
+                cve_id=pf.cve_id,
+                tags=",".join(t for t in (pf.extra_tags or []) if t),
+                status="open",
+                fingerprint=fp,
+            )
+            db.add(row)
+            all_current.append(row)
+            new_count += 1
+
+    db.commit()
+    return all_current, new_count
+
+
 # ── Framework mapping tables ────────────────────────────────────────────────────
 
 # OWASP Top 10 2021 tags by finding category

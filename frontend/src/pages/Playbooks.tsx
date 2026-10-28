@@ -6,6 +6,7 @@ import {
   Plus, Trash2, ArrowUp, ArrowDown, Layers, PenLine, Save, X,
 } from 'lucide-react'
 import type { Project } from '../types'
+import { wsUrl } from '../api/ws'
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -251,9 +252,8 @@ export default function Playbooks() {
     })))
     setView('run')
 
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const ws = new WebSocket(
-      `${proto}://${window.location.host}/ws/playbooks/${runId}${aiEnabled ? '?use_ai=true' : ''}`
+      wsUrl(`/ws/playbooks/${runId}${aiEnabled ? '?use_ai=true' : ''}`)
     )
     wsRef.current = ws
     ws.onmessage = (evt) => handleWsMessage(JSON.parse(evt.data))

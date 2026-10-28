@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from database import WebhookConfig, WebhookDelivery, get_db
 from routers.auth import get_current_user
+from services.net_guard import check_url
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -50,6 +51,9 @@ def list_webhooks(db: Session = Depends(get_db), _=Depends(get_current_user)):
 def create_webhook(req: WebhookCreate, db: Session = Depends(get_db), _=Depends(get_current_user)):
     if not req.url.startswith("http"):
         raise HTTPException(400, "URL must start with http:// or https://")
+    ok, reason = check_url(req.url)
+    if not ok:
+        raise HTTPException(400, reason)
     events = [e for e in req.events if e in VALID_EVENTS]
     if not events:
         raise HTTPException(400, f"events must be one or more of: {VALID_EVENTS}")
@@ -75,6 +79,9 @@ def update_webhook(wh_id: str, req: WebhookUpdate, db: Session = Depends(get_db)
     if req.name is not None:
         wh.name = req.name.strip()
     if req.url is not None:
+        ok, reason = check_url(req.url)
+        if not ok:
+            raise HTTPException(400, reason)
         wh.url = req.url.strip()
     if req.events is not None:
         events = [e for e in req.events if e in VALID_EVENTS]

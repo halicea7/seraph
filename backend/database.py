@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    event,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
@@ -25,7 +26,22 @@ if settings.database_url.startswith("sqlite"):
 engine = create_engine(
     settings.database_url,
     connect_args=_connect_args,
+    pool_pre_ping=True,
 )
+
+if settings.database_url.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, connection_record):
+        """WAL lets readers and the single writer coexist instead of erroring
+        out after 5s; a much longer busy_timeout absorbs real contention
+        instead of silently dropping the write; foreign_keys=ON activates
+        every ondelete= already declared on the models below (previously
+        inert — SQLite has them off by default per-connection)."""
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -142,6 +158,7 @@ class Finding(Base):
     fp_reason = Column(Text, nullable=True)   # reason for false positive suppression
     tags = Column(String, default="")         # comma-separated
     exploit_chain_json = Column(Text, nullable=True)   # JSON: [{session_id, technique, timestamp, notes}]
+    fingerprint = Column(String, nullable=True)   # cve_id|control_id|normalized_title — identity within one scan, used to upsert on rescan without wiping triage
 
     scan = relationship("Scan", back_populates="findings")
 
@@ -666,6 +683,7 @@ def _migrate():
         "ALTER TABLE scans ADD COLUMN nessus_progress INTEGER",
         "ALTER TABLE scans ADD COLUMN nessus_export_json TEXT",
         "ALTER TABLE screenshots ADD COLUMN finding_id VARCHAR",
+        "ALTER TABLE findings ADD COLUMN fingerprint VARCHAR",
         # webhook_deliveries, fp_suppression_rules, api_tokens, cracking_servers, c2_nodes, cloud_c2_instances created by create_all
     ]
     with engine.connect() as conn:

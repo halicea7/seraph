@@ -153,8 +153,14 @@ def get_scan(scan_id: str, db: Session = Depends(get_db)):
 
 @router.post("/scans/{scan_id}/parse")
 def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
-    """Parse raw scan output and create Finding records."""
-    from services.output_parser import auto_parse_scan_output
+    """Parse raw scan output and upsert Finding records.
+
+    Upserts by fingerprint (services.output_parser.save_parsed_findings)
+    instead of delete-then-recreate, so clicking "Parse" again on the same
+    scan never wipes triage (status/fp_reason/tags) an analyst already set
+    on a finding that's still present.
+    """
+    from services.output_parser import save_parsed_findings, fingerprint_for
 
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -162,10 +168,16 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
     if not scan.raw_output:
         raise HTTPException(400, "Scan has no output to parse")
 
-    parsed = auto_parse_scan_output(scan.scan_type, scan.raw_output)
+    # Snapshot which fingerprints already existed (and their status) before
+    # the upsert, so we know which rows are genuinely new vs. refreshed —
+    # and so auto-FP-suppression only applies to rows newly created here,
+    # never overwriting an analyst's own status on an existing one.
+    pre_existing = {
+        fingerprint_for(f.cve_id, f.control_id, f.title): f.id
+        for f in db.query(Finding).filter(Finding.scan_id == scan_id).all()
+    }
 
-    # Delete existing findings for this scan
-    db.query(Finding).filter(Finding.scan_id == scan_id).delete()
+    all_current, new_count = save_parsed_findings(db, scan, scan.raw_output)
 
     # Load project-level FP suppression rules once
     target = db.query(Target).filter(Target.id == scan.target_id).first()
@@ -177,8 +189,8 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
 
     def _is_auto_fp(title: str, tool: str) -> bool:
         """Return True if a suppression rule matches this finding."""
-        title_lc = title.lower()
-        tool_lc = tool.lower() if tool else ""
+        title_lc = (title or "").lower()
+        tool_lc = (tool or "").lower()
         for rule in fp_rules:
             if rule.tool and rule.tool.lower() not in tool_lc:
                 continue
@@ -186,35 +198,17 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
                 return True
         return False
 
-    created = []
-    for pf in parsed:
-        extra = ",".join(t for t in (pf.extra_tags or []) if t)
-        auto_fp = _is_auto_fp(pf.title or "", scan.scan_type or "")
-        finding = Finding(
-            id=str(uuid.uuid4()),
-            scan_id=scan_id,
-            severity=pf.severity,
-            title=pf.title,
-            description=pf.description,
-            control_id=pf.control_id,
-            framework=pf.framework,
-            remediation=pf.remediation,
-            evidence=pf.evidence,
-            cve_id=pf.cve_id,
-            tags=extra,
-            status="false_positive" if auto_fp else "open",
-            fp_reason="Auto-suppressed by project rule" if auto_fp else None,
-        )
-        db.add(finding)
-        created.append(finding)
-
+    created = [f for f in all_current if f.id not in pre_existing.values()]
+    for f in created:
+        if _is_auto_fp(f.title, scan.scan_type or ""):
+            f.status = "false_positive"
+            f.fp_reason = "Auto-suppressed by project rule"
     db.commit()
 
     # Push a notification so the dashboard dot lights up
     if created:
         from routers.notifications import push_notification
         highs = sum(1 for f in created if f.severity in ("critical", "high"))
-        target = db.query(Target).filter(Target.id == scan.target_id).first()
         target_label = target.hostname_or_ip if target else "unknown"
         push_notification(
             db,
@@ -223,7 +217,7 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
             type="critical" if highs > 0 else "info",
         )
 
-    # Auto-enrich findings that already have a CVE ID extracted during parsing
+    # Auto-enrich newly created findings that already have a CVE ID extracted during parsing
     findings_with_cve = [f for f in created if f.cve_id]
     if findings_with_cve:
         import threading
