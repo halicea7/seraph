@@ -694,3 +694,71 @@ def test_ws_execute_records_provenance_on_real_run(client, auth):
         assert prov["script_sha256"] == hashlib.sha256(server_script.encode()).hexdigest()
     finally:
         db.close()
+
+
+# ── Evidence chain-of-custody: output_hash, screenshot sha256, audit chain ──
+
+def test_save_parsed_findings_records_output_hash(client, auth):
+    import hashlib
+
+    r = client.post("/api/v1/projects", json={"name": "coc-test-project"}, headers=auth)
+    project_id = r.json()["id"]
+    r = client.post(
+        f"/api/v1/projects/{project_id}/targets",
+        json={"hostname_or_ip": "10.0.0.61", "target_type": "linux_host"},
+        headers=auth,
+    )
+    target_id = r.json()["id"]
+
+    raw = "Nmap scan report for 10.0.0.61\n22/tcp open ssh\n"
+    scan = Scan(target_id=target_id, scan_type="network_discovery", module="audit", status="completed", raw_output=raw)
+    db = database.SessionLocal()
+    try:
+        db.add(scan)
+        db.commit()
+        from services.scan_lifecycle import save_parsed_findings
+        save_parsed_findings(db, scan, raw)
+        assert scan.output_hash == hashlib.sha256(raw.encode()).hexdigest()
+    finally:
+        db.close()
+
+
+def test_screenshot_index_results_computes_sha256(tmp_path):
+    from services.screenshot import index_results, _file_sha256
+
+    img = tmp_path / "shot.png"
+    img.write_bytes(b"not-a-real-png-but-bytes-are-bytes")
+
+    job = {
+        "project_id": "p1",
+        "target_id": None,
+        "urls": ["http://example.com"],
+        "outdir": str(tmp_path),
+    }
+    rows = index_results(job)
+    assert len(rows) == 1
+    assert rows[0]["sha256"] == _file_sha256(str(img))
+
+
+def test_audit_log_hash_chain_is_internally_consistent(client, auth):
+    import hashlib
+    from database import AuditLog
+
+    # Any mutating request appends a row.
+    client.post("/api/v1/projects", json={"name": "audit-chain-test-1"}, headers=auth)
+    client.post("/api/v1/projects", json={"name": "audit-chain-test-2"}, headers=auth)
+
+    db = database.SessionLocal()
+    try:
+        rows = db.query(AuditLog).order_by(AuditLog.created_at, AuditLog.id).all()
+        assert len(rows) >= 2
+        for i, row in enumerate(rows):
+            expected_prev = "0" * 64 if i == 0 else rows[i - 1].row_hash
+            assert row.prev_hash == expected_prev, "chain must link to the immediately preceding row's hash"
+            recomputed = hashlib.sha256(
+                f"{row.prev_hash}|{row.action}|{row.user_id}|{row.resource_type}|"
+                f"{row.resource_id}|{row.ip_address}|{row.created_at.isoformat()}".encode()
+            ).hexdigest()
+            assert row.row_hash == recomputed, "row_hash must be reproducible from its own fields + prev_hash"
+    finally:
+        db.close()

@@ -127,6 +127,7 @@ class Scan(Base):
     # "scope_snapshot": project.scope_json at run time (parsed) | null,
     # "category_ids": [...], "script_sha256": hex}
     provenance_json = Column(Text, nullable=True)
+    output_hash = Column(String, nullable=True)   # chain-of-custody: sha256 of raw_output as finalized
 
     target = relationship("Target", back_populates="scans")
     findings = relationship(
@@ -606,10 +607,17 @@ class Screenshot(Base):
     image_path = Column(String, nullable=False)   # absolute path on the backend host
     finding_id = Column(String, ForeignKey("findings.id"), nullable=True)  # optional: evidence for a finding
     captured_at = Column(DateTime, default=datetime.utcnow)
+    sha256 = Column(String, nullable=True)   # chain-of-custody: hash of the image as captured
 
 
 class AuditLog(Base):
-    """Security audit log — records all mutating API calls with user + IP context."""
+    """Security audit log — records all mutating API calls with user + IP context.
+
+    prev_hash/row_hash form a hash chain (see main.py:_write_audit_log):
+    each row's hash covers its own fields plus the previous row's hash, so
+    tampering with or deleting a row breaks the chain for every row after
+    it — detectable without a separate, harder-to-maintain signing system.
+    """
     __tablename__ = "audit_log"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, nullable=True)         # None for unauthenticated requests
@@ -619,6 +627,8 @@ class AuditLog(Base):
     detail = Column(Text, nullable=True)             # optional extra context (body digest, etc.)
     ip_address = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    prev_hash = Column(String, nullable=True)
+    row_hash = Column(String, nullable=True)
 
 
 class Job(Base):

@@ -8,6 +8,7 @@ in a small in-memory registry keyed by job_id and consumed by the
 """
 
 import glob
+import hashlib
 import os
 import shlex
 import uuid
@@ -95,8 +96,19 @@ def index_results(job: dict) -> list[dict]:
             "url": url,
             "title": os.path.basename(path),
             "image_path": os.path.abspath(path),
+            "sha256": _file_sha256(path),
         })
     return rows
+
+
+def _file_sha256(path: str) -> str:
+    """Chain-of-custody: a hash of the image as captured, so a later
+    substitution of the file on disk is detectable."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def finish_job(job_id: str) -> None:

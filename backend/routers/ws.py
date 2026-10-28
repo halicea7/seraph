@@ -717,6 +717,8 @@ async def websocket_osint(websocket: WebSocket, scan_id: str):
                 scan.status = "completed" if message["code"] == 0 else "failed"
                 scan.completed_at = datetime.utcnow()
                 scan.raw_output = raw
+                from services.scan_lifecycle import record_output_hash
+                record_output_hash(scan, raw)
                 db.commit()
 
                 if domain:

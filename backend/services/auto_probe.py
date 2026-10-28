@@ -359,7 +359,8 @@ async def _run_searchsploit(
         scan.completed_at = datetime.utcnow()
 
         from services.output_parser import ParsedFinding
-        from services.scan_lifecycle import upsert_findings
+        from services.scan_lifecycle import upsert_findings, record_output_hash
+        record_output_hash(scan, scan.raw_output)
 
         parsed = []
         for term, exploits in by_term.items():

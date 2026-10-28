@@ -20,13 +20,23 @@ Two dedup scopes are needed, not one:
     still attach to the current scan.
 """
 
+import hashlib
 import re
 import uuid
 from typing import Optional
 
 from services.output_parser import ParsedFinding, auto_parse_scan_output
 
-__all__ = ["fingerprint_for", "upsert_findings", "save_parsed_findings"]
+__all__ = ["fingerprint_for", "upsert_findings", "save_parsed_findings", "record_output_hash"]
+
+
+def record_output_hash(scan, raw_output: str) -> None:
+    """Chain-of-custody: hash raw_output as it's finalized, so a later
+    edit to the stored text (or a DB-level tamper) is detectable. Callers
+    that build raw_output themselves and don't go through
+    save_parsed_findings (e.g. websocket_osint, CIS-CAT import) call this
+    directly, right alongside `scan.raw_output = raw_output`."""
+    scan.output_hash = hashlib.sha256((raw_output or "").encode()).hexdigest()
 
 
 def _normalize_title(t: Optional[str]) -> str:
@@ -107,6 +117,7 @@ def save_parsed_findings(db, scan, raw_output: str, dedupe_by_target: bool = Fal
     See `upsert_findings` for the dedup-scope contract; see
     `services.output_parser.auto_parse_scan_output` for parsing.
     """
+    record_output_hash(scan, raw_output)
     parsed = auto_parse_scan_output(scan.scan_type, raw_output)
     if not parsed:
         return [], 0

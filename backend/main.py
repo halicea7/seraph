@@ -1,8 +1,10 @@
 import os
 import time
 import asyncio
+import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request, HTTPException
@@ -257,18 +259,40 @@ async def audit_log_middleware(request: Request, call_next):
     return response
 
 
+_GENESIS_HASH = "0" * 64
+# asyncio.to_thread() runs each call on its own OS thread — reading the
+# latest row's hash and inserting the next one is a read-then-write
+# critical section that two concurrent audit-log writes could otherwise
+# race (both computing the same prev_hash from a row neither has committed
+# yet), forking the chain. A plain threading.Lock (not asyncio.Lock, which
+# only protects within one event loop / thread) serializes it.
+_audit_chain_lock = threading.Lock()
+
+
 def _write_audit_log(method: str, path: str, user_id, rtype, rid, ip) -> None:
+    import hashlib
     from database import SessionLocal, AuditLog as _AuditLog
     db = SessionLocal()
     try:
-        db.add(_AuditLog(
-            action=f"{method} {path}",
-            user_id=user_id,
-            resource_type=rtype,
-            resource_id=rid,
-            ip_address=ip,
-        ))
-        db.commit()
+        with _audit_chain_lock:
+            prev = db.query(_AuditLog).order_by(_AuditLog.created_at.desc(), _AuditLog.id.desc()).first()
+            prev_hash = prev.row_hash if prev and prev.row_hash else _GENESIS_HASH
+            created_at = datetime.utcnow()
+            action = f"{method} {path}"
+            row_hash = hashlib.sha256(
+                f"{prev_hash}|{action}|{user_id}|{rtype}|{rid}|{ip}|{created_at.isoformat()}".encode()
+            ).hexdigest()
+            db.add(_AuditLog(
+                action=action,
+                user_id=user_id,
+                resource_type=rtype,
+                resource_id=rid,
+                ip_address=ip,
+                created_at=created_at,
+                prev_hash=prev_hash,
+                row_hash=row_hash,
+            ))
+            db.commit()
     finally:
         db.close()
 
