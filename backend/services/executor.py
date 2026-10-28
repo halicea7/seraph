@@ -22,17 +22,29 @@ async def _stream_proc(proc: "asyncio.subprocess.Process") -> AsyncGenerator[dic
         asyncio.create_task(pipe_to_queue(proc.stderr, "stderr")),
     ]
 
-    done_count = 0
-    while done_count < 2:
-        msg = await queue.get()
-        if msg is None:
-            done_count += 1
-        else:
-            yield msg
+    try:
+        done_count = 0
+        while done_count < 2:
+            msg = await queue.get()
+            if msg is None:
+                done_count += 1
+            else:
+                yield msg
 
-    await asyncio.gather(*tasks)
-    exit_code = await proc.wait()
-    yield {"type": "exit", "code": exit_code}
+        await asyncio.gather(*tasks)
+        exit_code = await proc.wait()
+        yield {"type": "exit", "code": exit_code}
+    finally:
+        # Covers both cancellation (caller's task cancelled mid-iteration,
+        # e.g. a WebSocket disconnect) and early abandonment (caller stops
+        # iterating without exhausting the generator) — either way, don't
+        # leave the child process running unattended.
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
 
 
 async def run_command_streaming(command: str) -> AsyncGenerator[dict, None]:

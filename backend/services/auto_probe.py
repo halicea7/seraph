@@ -488,12 +488,21 @@ async def _run_step(scan_id: str, cmd: str, scan_type: str, timeout: int, env: d
             env=env,
         )
         chunks: list[str] = []
-        try:
+
+        async def _read_to_eof() -> None:
             async for line in proc.stdout:  # type: ignore[union-attr]
                 chunks.append(line.decode(errors="replace"))
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
+            await proc.wait()
+
+        try:
+            # Wrap the whole read loop, not just the post-EOF wait() — a
+            # hung-but-still-running tool never closes stdout, so reading
+            # to EOF first (the previous bug) meant this timeout never
+            # fired until the process exited on its own.
+            await asyncio.wait_for(_read_to_eof(), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()
     except asyncio.CancelledError:
         # Task was cancelled — kill the subprocess and propagate the cancellation.
         if proc is not None and proc.returncode is None:

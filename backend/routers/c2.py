@@ -7,7 +7,7 @@ import json
 import uuid
 from datetime import datetime
 
-from database import get_db, AppSetting, C2Node, C2Session, LootEntry, C2Task, Target, Project
+from database import get_db, SessionLocal, AppSetting, C2Node, C2Session, LootEntry, C2Task, Target, Project
 from services.vault import encrypt as vault_encrypt, decrypt as vault_decrypt
 import services.msf_client as msf
 
@@ -422,15 +422,24 @@ def run_post_module(req: RunPostModuleRequest, db: DBSession = Depends(get_db)):
             new_sids = [sid for sid in (client.sessions.list or {}) if sid not in sessions_before]
             if new_sids:
                 yield f"data: [+] New session opened: #{new_sids[0]}\n\n"
-            # Auto-tick checklist items this module satisfies
+            # Auto-tick checklist items this module satisfies. The route's
+            # `db` (Depends(get_db)) is already closed by the time this
+            # generator runs — FastAPI tears down yield-dependencies when
+            # the route function returns, not when the StreamingResponse
+            # body finishes — so open a fresh session here instead of
+            # reusing it.
             tick_ids = _MODULE_CHECKLIST_MAP.get(req.module_name, [])
             if tick_ids:
+                stream_db = SessionLocal()
                 try:
-                    db.refresh(session)
-                    _tick_checklist(session, tick_ids, db)
-                    db.commit()
+                    fresh_session = stream_db.query(C2Session).filter(C2Session.id == req.session_id).first()
+                    if fresh_session:
+                        _tick_checklist(fresh_session, tick_ids, stream_db)
+                        stream_db.commit()
                 except Exception:
                     pass
+                finally:
+                    stream_db.close()
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: [Error] {e}\n\n"
