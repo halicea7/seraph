@@ -1,0 +1,15 @@
+{
+  "name": "seraph-workspace",
+  "private": true,
+  "description": "Root workspace for Seraph's two JS packages — the browser frontend (frontend/) and the Electron desktop shell (electron/) — which share one renderer source tree at frontend/src. Backend is Python, not part of this workspace.",
+  "workspaces": [
+    "frontend",
+    "electron"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=frontend",
+    "build:web": "npm run build --workspace=frontend",
+    "dev:electron": "npm run dev --workspace=electron",
+    "build:electron": "npm run build --workspace=electron"
+  }
+}

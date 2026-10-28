@@ -75,6 +75,12 @@ export interface Finding {
   status?: string       // open | in-review | remediated | accepted
   exploit_chain_json?: string | null
   created_at: string
+  // Optional fields from the deduped /findings/grouped view:
+  occurrences?: number
+  first_seen?: string | null
+  last_seen?: string | null
+  sla_due?: string | null
+  overdue?: boolean
 }
 
 // ── Tool registry ─────────────────────────────────────────────────────────────
@@ -224,7 +230,10 @@ export interface Credential {
   id: string
   project_id: string
   username: string
-  secret: string
+  // The decrypted secret never comes back from GET /credentials — only
+  // `has_secret`. Fetch the plaintext on demand from
+  // POST /credentials/{id}/reveal (or /reveal-batch), which is audited.
+  has_secret: boolean
   cred_type: CredType
   source: CredSource
   target_host: string

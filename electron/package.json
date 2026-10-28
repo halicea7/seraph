@@ -1,0 +1,51 @@
+{
+  "name": "seraph-electron",
+  "version": "0.1.0",
+  "description": "Seraph desktop client — main process + preload bridge only. The renderer UI lives in ../frontend/src, shared with the browser build.",
+  "main": "out/main/index.js",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc -p tsconfig.web.json --noEmit",
+    "preview": "electron-vite preview",
+    "build:linux": "npm run build && electron-builder --linux",
+    "build:win": "npm run build && electron-builder --win",
+    "build:mac": "npm run build && electron-builder --mac"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@types/node": "^20.14.5",
+    "@vitejs/plugin-react": "^4.3.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11"
+  },
+  "build": {
+    "appId": "com.seraph.client",
+    "productName": "Seraph",
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "icon": "build/icon.png"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build/icon.png"
+    }
+  }
+}

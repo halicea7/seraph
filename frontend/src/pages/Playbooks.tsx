@@ -1,11 +1,15 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
-  Play, ChevronRight, CheckCircle, XCircle, SkipForward,
-  Loader, Clock, Shield, Terminal, StepForward,
-  Zap, History, BookOpen, Target, Brain,
-  Plus, Trash2, ArrowUp, ArrowDown, Layers, PenLine, Save, X,
+  Play,
+  Loader, StepForward,
+  Zap, Brain,
+  Plus, Trash2, ArrowUp, ArrowDown, Layers, PenLine, Save, X, Search,
 } from 'lucide-react'
-import type { Project } from '../types'
+import { load as yamlLoad } from 'js-yaml'
+import Icon from '@/components/Icon'
+import { getApiBase, wsUrl } from '@/lib/config'
+import { useAppStore } from '@/stores/appStore'
+import { useToast } from '@/contexts/ToastContext'
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -27,7 +31,14 @@ interface Playbook {
   is_builtin: boolean
   step_count: number
   steps: PlaybookStep[]
+  mitre_techniques: string[]
   created_at: string
+}
+
+interface AttackTechniqueResult {
+  technique_id: string
+  name: string
+  tactic: string
 }
 
 interface PlaybookRun {
@@ -67,14 +78,13 @@ interface TargetOption {
   hostname_or_ip: string
 }
 
-// Builder step — mirrors PlaybookStep but all fields are strings during editing
 interface BuilderStep {
   name: string
   scan_type: string
   cmd_template: string
   description: string
   conditional: boolean
-  trigger_ports_raw: string   // comma-separated string
+  trigger_ports_raw: string
   timeout: number
   parallel: boolean
 }
@@ -86,35 +96,10 @@ const BLANK_STEP: BuilderStep = {
 
 // ── Display maps ──────────────────────────────────────────────────────────────
 
-const STATUS_BG: Record<string, string> = {
-  completed: 'bg-green-500/10 border-green-500/30 text-green-400',
-  running:   'bg-blue-500/10 border-blue-500/30 text-blue-400',
-  paused:    'bg-amber-500/10 border-amber-500/30 text-amber-400',
-  failed:    'bg-red-500/10 border-red-500/30 text-red-400',
-  pending:   'bg-slate-500/10 border-slate-500/20 text-slate-400',
-  skipped:   'bg-slate-700/20 border-slate-700/20 text-slate-500',
-}
-
-const STEP_ICONS: Record<string, React.ReactNode> = {
-  completed: <CheckCircle size={14} className="text-green-400" />,
-  running:   <Loader size={14} className="animate-spin text-blue-400" />,
-  skipped:   <SkipForward size={14} className="text-slate-500" />,
-  failed:    <XCircle size={14} className="text-red-400" />,
-  pending:   <Clock size={14} className="text-slate-600" />,
-}
-
-// Group colours cycle through a palette so adjacent groups look distinct
-const GROUP_COLORS = [
-  'border-l-cyan-500/40',
-  'border-l-purple-500/40',
-  'border-l-emerald-500/40',
-  'border-l-amber-500/40',
-  'border-l-pink-500/40',
-]
+const GROUP_PALETTE = ['var(--med)', '#a855f7', '#10b981', '#f59e0b', '#ec4899']
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Compute execution groups from a flat step list (same logic as backend). */
 function buildGroups<T extends { parallel: boolean }>(steps: T[]): number[][] {
   const groups: number[][] = []
   steps.forEach((s, i) => {
@@ -124,30 +109,85 @@ function buildGroups<T extends { parallel: boolean }>(steps: T[]): number[][] {
   return groups
 }
 
-/** Map each step index → its group index. */
 function stepGroupMap(groups: number[][]): Record<number, number> {
   const m: Record<number, number> = {}
   groups.forEach((g, gi) => g.forEach(si => (m[si] = gi)))
   return m
 }
 
+const rule = '1px solid var(--rule)'
+const ruleStrong = '1px solid var(--rule-strong)'
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function PageHeader({ title, sub, right }: { title: string; sub: string; right?: React.ReactNode }) {
+  return (
+    <div style={{
+      borderBottom: rule, padding: '18px var(--pad)',
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexShrink: 0,
+    }}>
+      <div>
+        <h1 className="mono" style={{ margin: 0, fontWeight: 500, fontSize: 22, letterSpacing: '-0.01em' }}>{title}</h1>
+        <div style={{ color: 'var(--fg-3)', fontSize: 12, marginTop: 6 }}>{sub}</div>
+      </div>
+      {right && <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>{right}</div>}
+    </div>
+  )
+}
+
+function Pill({ tone, children }: { tone: 'pass' | 'warn' | 'info' | 'fail'; children: React.ReactNode }) {
+  const map = {
+    pass: { color: 'var(--ok)',   bg: 'rgba(84,175,97,0.1)',  border: 'rgba(84,175,97,0.35)' },
+    warn: { color: 'var(--high)', bg: 'rgba(240,168,58,0.1)', border: 'rgba(240,168,58,0.35)' },
+    info: { color: 'var(--fg-3)', bg: 'rgba(120,120,120,0.1)', border: 'rgba(120,120,120,0.3)' },
+    fail: { color: 'var(--crit)', bg: 'rgba(232,64,64,0.1)',  border: 'rgba(232,64,64,0.35)' },
+  }
+  const s = map[tone]
+  return (
+    <span className="mono" style={{
+      fontSize: 9, padding: '2px 7px', fontWeight: 700, textTransform: 'uppercase',
+      letterSpacing: '0.08em', color: s.color, background: s.bg, border: `1px solid ${s.border}`,
+    }}>{children}</span>
+  )
+}
+
+const INPUT_STYLE: React.CSSProperties = {
+  width: '100%', boxSizing: 'border-box',
+  background: 'var(--bg)', border: ruleStrong, borderRadius: 3,
+  padding: '6px 10px', fontSize: 12, color: 'var(--fg)',
+  fontFamily: 'var(--font-sans)', outline: 'none',
+}
+
+function Toggle({ checked, onChange, accentColor = 'var(--accent)' }: { checked: boolean; onChange: () => void; accentColor?: string }) {
+  return (
+    <button
+      onClick={onChange}
+      style={{ position: 'relative', width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', background: checked ? accentColor : 'var(--rule-strong)', transition: 'background 0.2s', flexShrink: 0 }}
+    >
+      <span style={{ position: 'absolute', top: 2, left: checked ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+    </button>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export default function Playbooks() {
-  const [view, setView] = useState<'library' | 'run' | 'history' | 'builder'>('library')
+  const toast = useToast()
+  const importYamlRef = useRef<HTMLInputElement>(null)
+  const [runsModalPb, setRunsModalPb] = useState<Playbook | null>(null)
   const [playbooks, setPlaybooks] = useState<Playbook[]>([])
   const [runs, setRuns] = useState<PlaybookRun[]>([])
-  const [projects, setProjects] = useState<Project[]>([])
+  const { selectedProject: sp } = useAppStore()
+  const projectId = sp?.id ?? ''
   const [targets, setTargets] = useState<TargetOption[]>([])
 
-  // ── Run wizard state ────────────────────────────────────────────────────────
   const [selectedPlaybook, setSelectedPlaybook] = useState<Playbook | null>(null)
-  const [selectedProject, setSelectedProject] = useState('')
   const [selectedTarget, setSelectedTarget] = useState('')
   const [mode, setMode] = useState<'auto' | 'step_through'>('auto')
   const [useAi, setUseAi] = useState(false)
   const [showWizard, setShowWizard] = useState(false)
   const [starting, setStarting] = useState(false)
 
-  // ── Active run state ────────────────────────────────────────────────────────
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [runStatus, setRunStatus] = useState<string>('pending')
   const [steps, setSteps] = useState<StepState[]>([])
@@ -155,13 +195,14 @@ export default function Playbooks() {
   const [currentTool, setCurrentTool] = useState('')
   const [paused, setPaused] = useState(false)
   const [pausedState, setPausedState] = useState<PausedState | null>(null)
-  const [stepInsights, setStepInsights] = useState<Record<number, string>>({})
+  const [, setStepInsights] = useState<Record<number, string>>({})
   const [lastInsight, setLastInsight] = useState('')
   const termRef = useRef<HTMLDivElement>(null)
   const [termLines, setTermLines] = useState<string[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
-  // ── Builder state ───────────────────────────────────────────────────────────
+  // Builder state
+  const [showBuilder, setShowBuilder] = useState(false)
   const [builderName, setBuilderName] = useState('')
   const [builderDesc, setBuilderDesc] = useState('')
   const [builderSteps, setBuilderSteps] = useState<BuilderStep[]>([])
@@ -171,39 +212,35 @@ export default function Playbooks() {
   const [builderError, setBuilderError] = useState('')
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
-  const [showFlowPreview, setShowFlowPreview] = useState(false)
 
-  // ── Derived ─────────────────────────────────────────────────────────────────
-  const runGroups = useMemo(() => buildGroups(steps), [steps])
+  // Technique picker state
+  const [builderTechniques, setBuilderTechniques] = useState<string[]>([])
+  const [techQuery, setTechQuery] = useState('')
+  const [techResults, setTechResults] = useState<AttackTechniqueResult[]>([])
+  const [techSearching, setTechSearching] = useState(false)
+  const techDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const builderGroups = useMemo(() => buildGroups(builderSteps), [builderSteps])
 
-  // ── Lifecycle ───────────────────────────────────────────────────────────────
-  useEffect(() => { loadPlaybooks(); loadRuns(); loadProjects() }, [])
-  useEffect(() => { if (selectedProject) loadTargets(selectedProject); else setTargets([]) }, [selectedProject])
+  useEffect(() => { loadPlaybooks(); loadRuns() }, [])
+  useEffect(() => { if (projectId) loadTargets(projectId); else setTargets([]) }, [projectId])
   useEffect(() => { if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight }, [termLines])
 
-  // ── Data loaders ─────────────────────────────────────────────────────────────
   async function loadPlaybooks() {
-    const res = await fetch('/api/v1/playbooks')
+    const res = await fetch(`${getApiBase()}/playbooks`)
     if (res.ok) setPlaybooks(await res.json())
   }
   async function loadRuns() {
-    const res = await fetch('/api/v1/playbooks/runs')
+    const res = await fetch(`${getApiBase()}/playbooks/runs`)
     if (res.ok) setRuns(await res.json())
   }
-  async function loadProjects() {
-    const res = await fetch('/api/v1/projects')
-    if (res.ok) setProjects(await res.json())
-  }
-  async function loadTargets(projectId: string) {
-    const res = await fetch(`/api/v1/projects/${projectId}/targets`)
+  async function loadTargets(pid: string) {
+    const res = await fetch(`${getApiBase()}/projects/${pid}/targets`)
     if (res.ok) setTargets(await res.json())
   }
 
-  // ── Wizard ───────────────────────────────────────────────────────────────────
   function openWizard(pb: Playbook) {
     setSelectedPlaybook(pb)
-    setSelectedProject('')
     setSelectedTarget('')
     setMode('auto')
     setUseAi(false)
@@ -211,18 +248,13 @@ export default function Playbooks() {
   }
 
   async function handleStartRun() {
-    if (!selectedPlaybook || !selectedProject || !selectedTarget) return
+    if (!selectedPlaybook || !projectId || !selectedTarget) return
     setStarting(true)
     try {
-      const res = await fetch('/api/v1/playbooks/runs', {
+      const res = await fetch(`${getApiBase()}/playbooks/runs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          playbook_id: selectedPlaybook.id,
-          project_id: selectedProject,
-          target_id: selectedTarget,
-          mode,
-        }),
+        body: JSON.stringify({ playbook_id: selectedPlaybook.id, project_id: projectId, target_id: selectedTarget, mode }),
       })
       if (!res.ok) throw new Error('Failed to start run')
       const data = await res.json()
@@ -235,7 +267,6 @@ export default function Playbooks() {
     }
   }
 
-  // ── Run execution ─────────────────────────────────────────────────────────────
   function beginRun(runId: string, pb: Playbook, _runMode: string, aiEnabled = false) {
     setActiveRunId(runId)
     setRunStatus('running')
@@ -246,24 +277,16 @@ export default function Playbooks() {
     setCurrentTool('')
     setStepInsights({})
     setLastInsight('')
-    setSteps(pb.steps.map((s, i) => ({
-      step: i, tool: s.name, status: 'pending', findings: 0, parallel: s.parallel ?? false,
-    })))
-    setView('run')
+    setSteps(pb.steps.map((s, i) => ({ step: i, tool: s.name, status: 'pending', findings: 0, parallel: s.parallel ?? false })))
 
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(
-      `${proto}://${window.location.host}/ws/playbooks/${runId}${aiEnabled ? '?use_ai=true' : ''}`
-    )
+    const ws = new WebSocket(wsUrl(`/ws/playbooks/${runId}${aiEnabled ? '?use_ai=true' : ''}`))
     wsRef.current = ws
     ws.onmessage = (evt) => handleWsMessage(JSON.parse(evt.data))
     ws.onerror = () => appendLine('\x1b[31m[WebSocket error]\x1b[0m')
     ws.onclose = () => appendLine('\x1b[90m[connection closed]\x1b[0m')
   }
 
-  function appendLine(text: string) {
-    setTermLines(prev => [...prev, text])
-  }
+  function appendLine(text: string) { setTermLines(prev => [...prev, text]) }
 
   function handleWsMessage(msg: any) {
     switch (msg.type) {
@@ -288,18 +311,13 @@ export default function Playbooks() {
       case 'paused': {
         const gs: { tool: string; description: string }[] = msg.group_steps ?? [{ tool: msg.tool, description: msg.description }]
         setPaused(true)
-        setPausedState({
-          step: msg.step, tool: msg.tool, description: msg.description,
-          parallel: msg.parallel ?? false, groupSteps: gs,
-        })
+        setPausedState({ step: msg.step, tool: msg.tool, description: msg.description, parallel: msg.parallel ?? false, groupSteps: gs })
         setRunStatus('paused')
         const label = msg.parallel ? `parallel group (${gs.length} tools)` : msg.tool
         appendLine(`\n\x1b[33m[⏸] Paused before: ${label}\x1b[0m`)
         break
       }
-      case 'stdout':
-        appendLine(msg.data.replace(/\n$/, ''))
-        break
+      case 'stdout': appendLine(msg.data.replace(/\n$/, '')); break
       case 'step_ai':
         setStepInsights(prev => ({ ...prev, [msg.step]: msg.insight }))
         setLastInsight(msg.insight)
@@ -328,49 +346,75 @@ export default function Playbooks() {
     }
   }
 
-  // ── Builder helpers ───────────────────────────────────────────────────────────
+  const searchTechniques = useCallback(async (q: string) => {
+    if (q.trim().length < 2) { setTechResults([]); return }
+    setTechSearching(true)
+    try {
+      const res = await fetch(`${getApiBase()}/ai/attack/search?q=${encodeURIComponent(q.trim())}&limit=6`)
+      if (res.ok) {
+        const data = await res.json()
+        setTechResults(data.results ?? [])
+      }
+    } catch { /* ignore */ } finally {
+      setTechSearching(false)
+    }
+  }, [])
+
+  function handleTechQueryChange(q: string) {
+    setTechQuery(q)
+    if (techDebounceRef.current) clearTimeout(techDebounceRef.current)
+    techDebounceRef.current = setTimeout(() => searchTechniques(q), 280)
+  }
+
+  function addTechnique(tid: string) {
+    setBuilderTechniques(prev => prev.includes(tid) ? prev : [...prev, tid])
+    setTechQuery('')
+    setTechResults([])
+  }
+
+  function removeTechnique(tid: string) {
+    setBuilderTechniques(prev => prev.filter(t => t !== tid))
+  }
+
   function resetBuilder() {
     setBuilderName('')
     setBuilderDesc('')
     setBuilderSteps([])
+    setBuilderTechniques([])
+    setTechQuery('')
+    setTechResults([])
     setEditingIdx(null)
     setEditingPlaybookId(null)
     setBuilderError('')
+    setShowBuilder(false)
   }
 
   function loadPlaybookForEdit(pb: Playbook) {
     setBuilderName(pb.name)
     setBuilderDesc(pb.description)
     setBuilderSteps(pb.steps.map(s => ({
-      name: s.name,
-      scan_type: s.scan_type,
-      cmd_template: s.cmd_template,
-      description: s.description,
-      conditional: s.conditional,
-      trigger_ports_raw: s.trigger_ports.join(','),
-      timeout: s.timeout,
-      parallel: s.parallel ?? false,
+      name: s.name, scan_type: s.scan_type, cmd_template: s.cmd_template,
+      description: s.description, conditional: s.conditional,
+      trigger_ports_raw: s.trigger_ports.join(','), timeout: s.timeout, parallel: s.parallel ?? false,
     })))
+    setBuilderTechniques(pb.mitre_techniques ?? [])
+    setTechQuery('')
+    setTechResults([])
     setEditingIdx(null)
     setEditingPlaybookId(pb.id)
     setBuilderError('')
-    setView('builder')
+    setShowBuilder(true)
   }
 
   function addStep() {
-    const newStep = { ...BLANK_STEP }
-    setBuilderSteps(prev => [...prev, newStep])
+    setBuilderSteps(prev => [...prev, { ...BLANK_STEP }])
     setEditingIdx(builderSteps.length)
   }
 
   function removeStep(i: number) {
     setBuilderSteps(prev => {
       const next = prev.filter((_, idx) => idx !== i)
-      // If the removed step was the anchor of a parallel group, the next step
-      // (which had parallel=true) would become the new anchor — unset its parallel flag.
-      if (next[i]?.parallel && (i === 0 || !next[i - 1])) {
-        next[i] = { ...next[i], parallel: false }
-      }
+      if (next[i]?.parallel && (i === 0 || !next[i - 1])) next[i] = { ...next[i], parallel: false }
       return next
     })
     if (editingIdx === i) setEditingIdx(null)
@@ -380,11 +424,7 @@ export default function Playbooks() {
   function moveStep(i: number, dir: -1 | 1) {
     const j = i + dir
     if (j < 0 || j >= builderSteps.length) return
-    setBuilderSteps(prev => {
-      const next = [...prev]
-      ;[next[i], next[j]] = [next[j], next[i]]
-      return next
-    })
+    setBuilderSteps(prev => { const next = [...prev]; [next[i], next[j]] = [next[j], next[i]]; return next })
     if (editingIdx === i) setEditingIdx(j)
     else if (editingIdx === j) setEditingIdx(i)
   }
@@ -393,20 +433,11 @@ export default function Playbooks() {
     setBuilderSteps(prev => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s))
   }
 
-  function handleDragStart(i: number) {
-    setDragIdx(i)
-  }
-
-  function handleDragOver(e: React.DragEvent, i: number) {
-    e.preventDefault()
-    setDragOverIdx(i)
-  }
-
+  function handleDragStart(i: number) { setDragIdx(i) }
+  function handleDragOver(e: React.DragEvent, i: number) { e.preventDefault(); setDragOverIdx(i) }
   function handleDrop(e: React.DragEvent, targetIdx: number) {
     e.preventDefault()
-    if (dragIdx === null || dragIdx === targetIdx) {
-      setDragIdx(null); setDragOverIdx(null); return
-    }
+    if (dragIdx === null || dragIdx === targetIdx) { setDragIdx(null); setDragOverIdx(null); return }
     setBuilderSteps(prev => {
       const next = [...prev]
       const [moved] = next.splice(dragIdx, 1)
@@ -416,25 +447,14 @@ export default function Playbooks() {
     if (editingIdx === dragIdx) setEditingIdx(targetIdx)
     setDragIdx(null); setDragOverIdx(null)
   }
-
-  function handleDragEnd() {
-    setDragIdx(null); setDragOverIdx(null)
-  }
+  function handleDragEnd() { setDragIdx(null); setDragOverIdx(null) }
 
   function toApiStep(s: BuilderStep) {
-    const ports = s.trigger_ports_raw
-      .split(',')
-      .map(p => parseInt(p.trim(), 10))
-      .filter(p => !isNaN(p))
     return {
-      name: s.name.trim(),
-      scan_type: s.scan_type.trim() || s.name.trim(),
-      cmd_template: s.cmd_template.trim(),
-      description: s.description.trim(),
-      conditional: s.conditional,
-      trigger_ports: ports,
-      timeout: s.timeout,
-      parallel: s.parallel,
+      name: s.name.trim(), scan_type: s.scan_type.trim() || s.name.trim(),
+      cmd_template: s.cmd_template.trim(), description: s.description.trim(),
+      conditional: s.conditional, trigger_ports: s.trigger_ports_raw.split(',').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p)),
+      timeout: s.timeout, parallel: s.parallel,
     }
   }
 
@@ -443,29 +463,16 @@ export default function Playbooks() {
     if (!builderName.trim()) { setBuilderError('Playbook name is required.'); return }
     if (builderSteps.length === 0) { setBuilderError('Add at least one step.'); return }
     for (const s of builderSteps) {
-      if (!s.name.trim() || !s.cmd_template.trim()) {
-        setBuilderError('Each step needs a tool name and command template.'); return
-      }
+      if (!s.name.trim() || !s.cmd_template.trim()) { setBuilderError('Each step needs a tool name and command template.'); return }
     }
     setSaving(true)
     try {
-      const body = {
-        name: builderName.trim(),
-        description: builderDesc.trim(),
-        steps: builderSteps.map(toApiStep),
-      }
-      const url = editingPlaybookId
-        ? `/api/v1/playbooks/${editingPlaybookId}`
-        : '/api/v1/playbooks'
-      const res = await fetch(url, {
-        method: editingPlaybookId ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+      const body = { name: builderName.trim(), description: builderDesc.trim(), steps: builderSteps.map(toApiStep), mitre_techniques: builderTechniques }
+      const url = editingPlaybookId ? `${getApiBase()}/playbooks/${editingPlaybookId}` : `${getApiBase()}/playbooks`
+      const res = await fetch(url, { method: editingPlaybookId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!res.ok) throw new Error(await res.text())
       await loadPlaybooks()
       resetBuilder()
-      setView('library')
     } catch (err: any) {
       setBuilderError(err.message ?? 'Save failed')
     } finally {
@@ -475,8 +482,42 @@ export default function Playbooks() {
 
   async function handleDeletePlaybook(id: string) {
     if (!confirm('Delete this playbook?')) return
-    await fetch(`/api/v1/playbooks/${id}`, { method: 'DELETE' })
+    await fetch(`${getApiBase()}/playbooks/${id}`, { method: 'DELETE' })
     loadPlaybooks()
+  }
+
+  // Import a playbook from a YAML file ({ name, description, steps[], mitre_techniques[] }).
+  async function handleImportYaml(file: File) {
+    try {
+      const doc = yamlLoad(await file.text()) as any
+      if (!doc || typeof doc !== 'object') throw new Error('Invalid YAML — expected a playbook object')
+      const rawSteps = Array.isArray(doc.steps) ? doc.steps : []
+      if (rawSteps.length === 0) throw new Error('Playbook has no steps')
+      const steps = rawSteps.map((s: any) => ({
+        name: String(s.name ?? s.scan_type ?? 'step'),
+        scan_type: String(s.scan_type ?? s.name ?? 'step'),
+        cmd_template: String(s.cmd_template ?? s.cmd ?? s.command ?? ''),
+        description: String(s.description ?? ''),
+        conditional: Boolean(s.conditional ?? false),
+        trigger_ports: Array.isArray(s.trigger_ports) ? s.trigger_ports.map(Number).filter((n: number) => !isNaN(n)) : [],
+        timeout: Number(s.timeout ?? 300),
+        parallel: Boolean(s.parallel ?? false),
+      }))
+      const body = {
+        name: String(doc.name ?? file.name.replace(/\.(ya?ml)$/i, '')),
+        description: String(doc.description ?? ''),
+        steps,
+        mitre_techniques: Array.isArray(doc.mitre_techniques) ? doc.mitre_techniques.map(String) : [],
+      }
+      const res = await fetch(`${getApiBase()}/playbooks`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      await loadPlaybooks()
+      toast.success(`Imported playbook "${body.name}" (${steps.length} steps)`)
+    } catch (err: any) {
+      toast.error(`Import failed: ${err.message ?? 'could not parse YAML'}`)
+    }
   }
 
   function formatDate(s: string | null) {
@@ -484,399 +525,348 @@ export default function Playbooks() {
     try { return new Date(s).toLocaleString() } catch { return s }
   }
 
+  // Determine left-pane selected playbook to show in right pane
+  const [listSelected, setListSelected] = useState<Playbook | null>(null)
+  const displayPb = listSelected ?? playbooks[0] ?? null
+
+  // Count runs for a playbook
+  function runsFor(pb: Playbook) { return runs.filter(r => r.playbook_id === pb.id).length }
+  function lastRunFor(pb: Playbook) {
+    const pbRuns = runs.filter(r => r.playbook_id === pb.id)
+    if (!pbRuns.length) return 'never'
+    const latest = pbRuns.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
+    try {
+      const d = new Date(latest.created_at)
+      const now = new Date()
+      const diff = Math.floor((now.getTime() - d.getTime()) / 60000)
+      if (diff < 60) return `${diff}m ago`
+      if (diff < 1440) return `${Math.floor(diff / 60)}h ago`
+      return `${Math.floor(diff / 1440)}d ago`
+    } catch { return '—' }
+  }
+
+  // Step display state for right-pane active run
+  const stepToneMap: Record<string, 'pass' | 'warn' | 'info' | 'fail'> = {
+    completed: 'pass', running: 'warn', pending: 'info', skipped: 'info', failed: 'fail',
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
-    <div className="p-8 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <BookOpen size={22} className="text-cyan-400" />
-            <h1 className="text-2xl font-semibold text-white">Playbooks</h1>
-          </div>
-          <p className="text-sm text-slate-400 mt-1">Pre-defined and custom tool chains with parallel execution support</p>
-        </div>
-        {view === 'library' && (
-          <button
-            onClick={() => { resetBuilder(); setView('builder') }}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 transition-colors"
-          >
-            <Plus size={14} /> New Playbook
-          </button>
-        )}
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
-      {/* Tab bar */}
-      <div className="flex gap-1 glass rounded-lg p-1 w-fit">
-        {[
-          { id: 'library', label: 'Library',     icon: <BookOpen size={13} /> },
-          { id: 'run',     label: 'Active Run',  icon: <Terminal size={13} /> },
-          { id: 'history', label: 'Run History', icon: <History size={13} /> },
-          { id: 'builder', label: 'Builder',     icon: <PenLine size={13} /> },
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setView(tab.id as any)}
-            className={`flex items-center gap-1.5 px-4 py-1.5 rounded text-sm font-medium transition-colors ${
-              view === tab.id ? 'bg-blue-600 text-white shadow-glow-blue' : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            {tab.icon} {tab.label}
-            {tab.id === 'run' && activeRunId && (
-              <span className={`w-1.5 h-1.5 rounded-full ml-0.5 ${
-                runStatus === 'running' ? 'bg-blue-400 animate-pulse' :
-                runStatus === 'paused' ? 'bg-amber-400' :
-                runStatus === 'completed' ? 'bg-green-400' : 'bg-slate-500'
-              }`} />
-            )}
-          </button>
-        ))}
-      </div>
+      <PageHeader
+        title="Playbooks"
+        sub="Multi-step automated workflows. Chain tools into repeatable attack and audit sequences."
+        right={
+          <>
+            <input
+              ref={importYamlRef}
+              type="file"
+              accept=".yaml,.yml,text/yaml,application/x-yaml"
+              style={{ display: 'none' }}
+              onChange={e => {
+                const file = e.target.files?.[0]
+                if (file) handleImportYaml(file)
+                e.target.value = ''
+              }}
+            />
+            <button className="btn btn-sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => importYamlRef.current?.click()}>
+              <Icon name="upload" size={11} /> Import yaml
+            </button>
+            <button
+              className="btn-primary btn-sm"
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              onClick={() => { resetBuilder(); setShowBuilder(true) }}
+            >
+              <Plus size={11} /> New playbook
+            </button>
+          </>
+        }
+      />
 
-      {/* ── Library ─────────────────────────────────────────────────────────────── */}
-      {view === 'library' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      {/* ── 2-pane layout ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+
+        {/* ── Left pane: Playbook list ── */}
+        <div style={{ borderRight: rule, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          {playbooks.length === 0 && (
+            <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--fg-3)', fontSize: 12 }}>
+              No playbooks yet. Create one to get started.
+            </div>
+          )}
           {playbooks.map(pb => {
-            const pbGroups = buildGroups(pb.steps)
-            const parallelCount = pbGroups.filter(g => g.length > 1).length
+            const isActive = displayPb?.id === pb.id
             return (
-              <div key={pb.id} className="glass glass-hover rounded-xl p-5 space-y-3 flex flex-col">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Shield size={15} className="text-cyan-400 shrink-0" />
-                      <h3 className="text-sm font-semibold text-white">{pb.name}</h3>
-                      {pb.is_builtin && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded text-cyan-400 border border-cyan-500/30" style={{ background: 'rgba(6,182,212,0.08)' }}>
-                          built-in
-                        </span>
-                      )}
-                      {parallelCount > 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded text-purple-400 border border-purple-500/30 flex items-center gap-1" style={{ background: 'rgba(168,85,247,0.08)' }}>
-                          <Layers size={9} /> {parallelCount} parallel
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-400 mt-1">{pb.description}</p>
-                  </div>
-                  {!pb.is_builtin && (
-                    <div className="flex gap-1 shrink-0">
-                      <button onClick={() => loadPlaybookForEdit(pb)} title="Edit" className="text-slate-500 hover:text-cyan-400 transition-colors p-1">
-                        <PenLine size={13} />
-                      </button>
-                      <button onClick={() => handleDeletePlaybook(pb.id)} title="Delete" className="text-slate-500 hover:text-red-400 transition-colors p-1">
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  )}
+              <button
+                key={pb.id}
+                onClick={() => setListSelected(pb)}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left',
+                  padding: '12px 16px',
+                  background: isActive ? 'var(--accent-2)' : 'transparent',
+                  borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+                  borderTop: 'none', borderRight: 'none',
+                  borderBottom: rule, cursor: 'pointer',
+                }}
+              >
+                <div className="mono" style={{ fontSize: 13, color: isActive ? 'var(--accent)' : 'var(--fg-2)', marginBottom: 3 }}>{pb.name}</div>
+                <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
+                  {pb.step_count ?? pb.steps?.length ?? 0} steps · {runsFor(pb)} runs · last {lastRunFor(pb)}
                 </div>
-
-                {/* Step list with parallel indicators */}
-                <div className="flex-1 space-y-0.5">
-                  {(() => {
-                    const gs = buildGroups(pb.steps)
-                    const gm = stepGroupMap(gs)
-                    return pb.steps.map((step, i) => {
-                      const gi = gm[i]
-                      const isParGroup = gs[gi].length > 1
-                      return (
-                        <div key={i} className={`flex items-center gap-2 text-xs text-slate-400 pl-1 ${isParGroup ? 'border-l-2 border-purple-500/30 ml-0' : ''}`}>
-                          <span className="text-slate-600 font-mono w-4 text-right shrink-0">{i + 1}</span>
-                          {step.parallel
-                            ? <span className="text-purple-500/60 shrink-0">∥</span>
-                            : <ChevronRight size={10} className="text-slate-600 shrink-0" />}
-                          <span className="font-mono text-slate-300">{step.name}</span>
-                          {step.conditional && <span className="text-[10px] text-slate-600 italic shrink-0">cond.</span>}
-                        </div>
-                      )
-                    })
-                  })()}
-                </div>
-
-                <button
-                  onClick={() => openWizard(pb)}
-                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium text-white transition-all bg-blue-600 hover:bg-blue-500 hover:shadow-glow-blue"
-                >
-                  <Play size={13} /> Run Playbook
-                </button>
-              </div>
+              </button>
             )
           })}
         </div>
-      )}
 
-      {/* ── Active Run ──────────────────────────────────────────────────────────── */}
-      {view === 'run' && (
-        <div className="space-y-4">
-          {!activeRunId ? (
-            <div className="text-center glass rounded-xl py-16 text-slate-400">
-              <Terminal size={40} className="mx-auto mb-3 opacity-30 text-cyan-500" />
-              <p className="text-sm">No active run. Select a playbook from the Library tab and click Run.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-[300px_1fr] gap-4 h-[calc(100vh-240px)]">
-              {/* Step progress panel */}
-              <div className="glass rounded-xl p-4 space-y-2 overflow-y-auto">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Steps</span>
-                  <span className={`text-xs px-2 py-0.5 rounded border font-medium capitalize ${STATUS_BG[runStatus] || STATUS_BG.pending}`}>
-                    {runStatus}
-                  </span>
-                </div>
-
-                {(() => {
-                  // Render steps grouped, with parallel group visual brackets
-                  return runGroups.map((group, gi) => {
-                    const isParGroup = group.length > 1
-                    const color = GROUP_COLORS[gi % GROUP_COLORS.length]
-                    return (
-                      <div key={gi} className={isParGroup ? `border-l-2 ${color} pl-1.5 space-y-1` : 'space-y-1'}>
-                        {isParGroup && (
-                          <div className="flex items-center gap-1 mb-0.5">
-                            <Layers size={9} className="text-purple-400" />
-                            <span className="text-[9px] text-purple-400 font-semibold uppercase tracking-wider">parallel</span>
-                          </div>
-                        )}
-                        {group.map(si => {
-                          const s = steps[si]
-                          if (!s) return null
-                          return (
-                            <div key={si} className={`rounded-lg px-3 py-2 border transition-all ${
-                              s.status === 'running'    ? 'border-blue-500/40 bg-blue-500/5' :
-                              s.status === 'completed'  ? 'border-green-500/20 bg-green-500/5' :
-                              s.status === 'skipped'    ? 'border-slate-700/20' :
-                              'border-cyan-900/10'
-                            }`}>
-                              <div className="flex items-center gap-2">
-                                {STEP_ICONS[s.status] || STEP_ICONS.pending}
-                                <span className={`font-mono text-sm font-medium ${
-                                  s.status === 'completed' ? 'text-green-300' :
-                                  s.status === 'running'   ? 'text-blue-300' :
-                                  s.status === 'skipped'   ? 'text-slate-600' :
-                                  'text-slate-300'
-                                }`}>{s.tool}</span>
-                                {s.findings > 0 && (
-                                  <span className="ml-auto text-xs text-amber-400 font-mono">{s.findings}f</span>
-                                )}
-                              </div>
-                              {s.reason && <p className="text-[10px] text-slate-600 mt-0.5 pl-5">{s.reason}</p>}
-                              {stepInsights[s.step] && s.status === 'completed' && (
-                                <div className="mt-1.5 ml-5 flex items-start gap-1.5 border-l-2 border-purple-500/30 pl-2">
-                                  <Brain size={9} className="text-purple-400 mt-0.5 shrink-0" />
-                                  <p className="text-[10px] text-purple-300 leading-relaxed">{stepInsights[s.step]}</p>
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )
-                  })
-                })()}
-
-                {runStatus === 'completed' && (
-                  <div className="rounded-lg px-3 py-2 border border-green-500/30 bg-green-500/5 text-center mt-2">
-                    <div className="text-sm font-semibold text-green-300">{totalFindings} findings</div>
-                    <div className="text-[10px] text-green-600">total discovered</div>
-                  </div>
-                )}
-
-                {/* Step-through pause card */}
-                {paused && pausedState && (
-                  <div className="rounded-lg px-3 py-3 border border-amber-500/30 space-y-2 mt-2" style={{ background: 'rgba(245,158,11,0.05)' }}>
-                    {lastInsight && (
-                      <div className="rounded border border-purple-500/20 px-2.5 py-2 space-y-1" style={{ background: 'rgba(168,85,247,0.06)' }}>
-                        <div className="flex items-center gap-1.5">
-                          <Brain size={10} className="text-purple-400" />
-                          <span className="text-[10px] font-semibold text-purple-400 uppercase tracking-wider">AI Analysis</span>
-                        </div>
-                        <p className="text-[10px] text-purple-200 leading-relaxed">{lastInsight}</p>
-                      </div>
-                    )}
-                    {pausedState.parallel ? (
-                      <>
-                        <div className="flex items-center gap-1.5 text-xs text-amber-300 font-medium">
-                          <Layers size={11} /> Next: parallel group ({pausedState.groupSteps.length} tools)
-                        </div>
-                        <div className="space-y-0.5 pl-1">
-                          {pausedState.groupSteps.map((gs, i) => (
-                            <div key={i} className="flex items-center gap-1.5 text-[10px] text-slate-400">
-                              <span className="text-purple-500">∥</span>
-                              <span className="font-mono text-slate-300">{gs.tool}</span>
-                              <span className="text-slate-500 truncate">{gs.description}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div className="text-xs text-amber-300 font-medium">Next: {pausedState.tool}</div>
-                        <div className="text-[10px] text-slate-400">{pausedState.description}</div>
-                      </>
-                    )}
-                    <button
-                      onClick={handleContinue}
-                      className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium text-white bg-amber-600 hover:bg-amber-500 transition-colors"
-                    >
-                      <StepForward size={12} /> Continue
-                    </button>
-                  </div>
-                )}
+        {/* ── Right pane: Detail / Active run ── */}
+        <div style={{ overflowY: 'auto', padding: 'var(--pad)', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {displayPb && !showBuilder && (
+            <>
+              {/* Title row */}
+              <div>
+                <div className="smcap" style={{ marginBottom: 6 }}>playbook · {displayPb.id.slice(0, 8)}</div>
+                <h2 className="mono" style={{ margin: 0, fontWeight: 500, fontSize: 20, fontFamily: 'var(--font-mono)' }}>{displayPb.name}</h2>
               </div>
 
-              {/* Terminal */}
-              <div
-                ref={termRef}
-                className="glass rounded-xl p-4 font-mono text-xs text-slate-300 overflow-y-auto leading-relaxed"
-                style={{ background: '#030508' }}
-              >
-                {termLines.map((line, i) => (
-                  <div key={i} className="whitespace-pre-wrap break-all"
-                    dangerouslySetInnerHTML={{ __html: ansiToHtml(line) }}
-                  />
-                ))}
-                {runStatus === 'running' && currentTool && (
-                  <div className="flex items-center gap-2 text-blue-400 mt-1">
-                    <Loader size={10} className="animate-spin" />
-                    <span>{currentTool} running...</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── History ──────────────────────────────────────────────────────────────── */}
-      {view === 'history' && (
-        <div className="space-y-3">
-          {runs.length === 0 ? (
-            <div className="text-center glass rounded-xl py-16 text-slate-400">
-              <History size={40} className="mx-auto mb-3 opacity-30" />
-              <p className="text-sm">No runs yet.</p>
-            </div>
-          ) : (
-            <div className="rounded-xl overflow-hidden border border-cyan-900/20">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-cyan-900/20 text-left" style={{ background: '#090d14' }}>
-                    {['Playbook', 'Target', 'Mode', 'Status', 'Started', 'Completed'].map(h => (
-                      <th key={h} className="px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {runs.map(run => (
-                    <tr key={run.id} className="border-b border-cyan-900/10 last:border-0 hover:bg-cyan-950/10 transition-colors">
-                      <td className="px-4 py-3 text-slate-200 font-medium">{run.playbook_name}</td>
-                      <td className="px-4 py-3 font-mono text-slate-300 text-xs">{run.target_host}</td>
-                      <td className="px-4 py-3">
-                        <span className="flex items-center gap-1 text-xs text-slate-400">
-                          {run.mode === 'step_through' ? <StepForward size={11} /> : <Zap size={11} />}
-                          {run.mode === 'step_through' ? 'Step-through' : 'Auto'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs px-2 py-0.5 rounded border font-medium capitalize ${STATUS_BG[run.status] || STATUS_BG.pending}`}>
-                          {run.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{formatDate(run.started_at)}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{formatDate(run.completed_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Builder ──────────────────────────────────────────────────────────────── */}
-      {view === 'builder' && (
-        <div className="space-y-4">
-          {/* Metadata */}
-          <div className="glass rounded-xl p-5 space-y-3">
-            <div className="flex items-center gap-2 mb-1">
-              <PenLine size={15} className="text-cyan-400" />
-              <h2 className="text-sm font-semibold text-white">
-                {editingPlaybookId ? 'Edit Playbook' : 'New Playbook'}
-              </h2>
-              {editingPlaybookId && (
-                <button onClick={resetBuilder} className="ml-auto text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1">
-                  <X size={11} /> Clear
+              {/* Action row */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="btn-primary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => openWizard(displayPb)}>
+                  <Play size={11} /> Run
                 </button>
-              )}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Name *</label>
-                <input
-                  value={builderName}
-                  onChange={e => setBuilderName(e.target.value)}
-                  placeholder="e.g. Custom Web Audit"
-                  className="mt-1 w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none"
-                  style={{ background: '#090d14' }}
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Description</label>
-                <input
-                  value={builderDesc}
-                  onChange={e => setBuilderDesc(e.target.value)}
-                  placeholder="What does this playbook do?"
-                  className="mt-1 w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none"
-                  style={{ background: '#090d14' }}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className={`grid gap-4 ${editingIdx !== null ? 'grid-cols-[1fr_360px]' : 'grid-cols-1'}`}>
-            {/* Step list */}
-            <div className="glass rounded-xl p-4 space-y-2">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Steps ({builderSteps.length})
-                </span>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-slate-600">Drag to reorder</span>
-                  <button
-                    onClick={() => setShowFlowPreview(p => !p)}
-                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
-                      showFlowPreview
-                        ? 'text-cyan-400 border-cyan-500/40 bg-cyan-500/10'
-                        : 'text-slate-500 border-slate-700/40 hover:text-slate-300'
-                    }`}
-                  >
-                    {showFlowPreview ? 'Hide' : 'Flow'} preview
-                  </button>
-                </div>
+                <button className="btn btn-sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => { setMode('step_through'); openWizard(displayPb) }}>
+                  <StepForward size={11} /> Step through
+                </button>
+                <button className="btn btn-sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => setRunsModalPb(displayPb)}>
+                  Runs · {runsFor(displayPb)}
+                </button>
+                {!displayPb.is_builtin && (
+                  <>
+                    <button className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={() => loadPlaybookForEdit(displayPb)}>
+                      <Icon name="edit" size={11} />
+                    </button>
+                    <button className="btn btn-sm" onClick={() => handleDeletePlaybook(displayPb.id)}>
+                      <Trash2 size={11} />
+                    </button>
+                  </>
+                )}
               </div>
 
-              {builderSteps.length === 0 && (
-                <div className="text-center py-10 text-slate-600 text-sm">
-                  No steps yet. Click "Add Step" to begin.
+              {/* ATT&CK technique chips */}
+              {displayPb.mitre_techniques?.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 2 }}>ATT&CK</span>
+                  {displayPb.mitre_techniques.map(tid => (
+                    <a
+                      key={tid}
+                      href={`https://attack.mitre.org/techniques/${tid.replace('.', '/')}/`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mono"
+                      style={{
+                        fontSize: 10, padding: '2px 7px',
+                        background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.3)',
+                        color: 'var(--accent)', textDecoration: 'none',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'rgba(240,168,58,0.16)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'rgba(240,168,58,0.08)')}
+                    >
+                      {tid}
+                    </a>
+                  ))}
                 </div>
               )}
 
-              {(() => {
-                return builderGroups.map((group, gi) => {
-                  const isParGroup = group.length > 1
-                  const color = GROUP_COLORS[gi % GROUP_COLORS.length]
+              {/* Step list */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                {/* Header row */}
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '30px 130px 1fr 80px 80px 110px',
+                  gap: 12, padding: '6px 0', borderBottom: rule,
+                }}>
+                  {['#', 'Tool', 'Command', 'Timeout', 'State', 'Description'].map(h => (
+                    <div key={h} className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{h}</div>
+                  ))}
+                </div>
+                {displayPb.steps.map((step, i) => {
+                  const runStep = steps.find(s => s.step === i)
+                  const state = runStep?.status ?? 'pending'
+                  const tone = stepToneMap[state] ?? 'info'
                   return (
-                    <div key={gi} className={isParGroup ? `border-l-2 ${color} pl-2 space-y-1` : 'space-y-1'}>
-                      {isParGroup && (
-                        <div className="flex items-center gap-1 mb-0.5 pt-0.5">
-                          <Layers size={9} className="text-purple-400" />
-                          <span className="text-[9px] text-purple-400 font-semibold uppercase tracking-wider">
-                            parallel group — runs simultaneously
-                          </span>
-                        </div>
-                      )}
+                    <div key={i} style={{
+                      display: 'grid', gridTemplateColumns: '30px 130px 1fr 80px 80px 110px',
+                      gap: 12, padding: '10px 0', borderBottom: rule, alignItems: 'center',
+                    }}>
+                      <div className="mono tnum" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
+                        {String(i + 1).padStart(2, '0')}
+                      </div>
+                      <div className="mono" style={{ fontSize: 11.5, color: 'var(--accent)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {step.name}
+                      </div>
+                      <div style={{ overflow: 'hidden' }}>
+                        <code className="mono" style={{
+                          fontSize: 11, color: 'var(--fg-2)', background: 'var(--bg-2)',
+                          padding: '3px 8px', overflow: 'hidden', textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap', display: 'block',
+                        }}>{step.cmd_template}</code>
+                      </div>
+                      <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>{step.timeout}s</div>
+                      <div>{activeRunId ? <Pill tone={tone}>{state}</Pill> : <Pill tone="info">pending</Pill>}</div>
+                      <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {step.description || '—'}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Active run terminal output */}
+              {activeRunId && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div className="smcap">Live output</div>
+                    {runStatus === 'running' && currentTool && (
+                      <span className="mono" style={{ fontSize: 10, color: 'var(--accent)' }}>
+                        <Loader size={10} style={{ display: 'inline', marginRight: 4 }} />{currentTool}
+                      </span>
+                    )}
+                    {paused && pausedState && (
+                      <button
+                        className="btn btn-sm"
+                        onClick={handleContinue}
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <StepForward size={10} /> Continue
+                      </button>
+                    )}
+                    {runStatus === 'completed' && (
+                      <Pill tone="pass">{totalFindings} findings</Pill>
+                    )}
+                  </div>
+                  <div
+                    ref={termRef}
+                    style={{
+                      border: rule, padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 11,
+                      color: 'var(--fg-2)', overflowY: 'auto', lineHeight: 1.6, background: 'var(--bg)',
+                      maxHeight: 260,
+                    }}
+                  >
+                    {termLines.map((line, i) => (
+                      <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+                        dangerouslySetInnerHTML={{ __html: ansiToHtml(line) }}
+                      />
+                    ))}
+                  </div>
+                  {lastInsight && useAi && (
+                    <div style={{ border: '1px solid rgba(168,85,247,0.2)', padding: '8px 12px', background: 'rgba(168,85,247,0.05)', display: 'flex', gap: 8 }}>
+                      <Brain size={12} color="#a855f7" style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span style={{ fontSize: 11, color: '#ddd6fe' }}>{lastInsight}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Builder mode */}
+          {showBuilder && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <PenLine size={14} color="var(--accent)" />
+                <span className="mono" style={{ fontSize: 14, fontWeight: 500 }}>
+                  {editingPlaybookId ? 'Edit Playbook' : 'New Playbook'}
+                </span>
+                <button onClick={resetBuilder} style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-3)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>Name *</label>
+                  <input value={builderName} onChange={e => setBuilderName(e.target.value)} placeholder="e.g. Custom Web Audit" style={{ ...INPUT_STYLE, marginTop: 5 }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>Description</label>
+                  <input value={builderDesc} onChange={e => setBuilderDesc(e.target.value)} placeholder="What does this playbook do?" style={{ ...INPUT_STYLE, marginTop: 5 }} />
+                </div>
+              </div>
+
+              {/* ATT&CK Technique Picker */}
+              <div>
+                <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>
+                  MITRE ATT&amp;CK Techniques
+                </label>
+                <div style={{ marginTop: 5, position: 'relative' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...INPUT_STYLE, padding: '5px 10px' }}>
+                    {techSearching
+                      ? <Loader size={12} color="var(--fg-3)" style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
+                      : <Search size={12} color="var(--fg-3)" style={{ flexShrink: 0 }} />}
+                    <input
+                      value={techQuery}
+                      onChange={e => handleTechQueryChange(e.target.value)}
+                      placeholder="Search techniques (e.g. credential dumping, T1059)…"
+                      style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontSize: 12, color: 'var(--fg)', fontFamily: 'var(--font-sans)' }}
+                    />
+                  </div>
+                  {techResults.length > 0 && (
+                    <div style={{
+                      position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+                      background: 'var(--bg-2)', border: ruleStrong, marginTop: 2,
+                      maxHeight: 220, overflowY: 'auto',
+                    }}>
+                      {techResults.map(t => (
+                        <button
+                          key={t.technique_id}
+                          onClick={() => addTechnique(t.technique_id)}
+                          style={{
+                            display: 'block', width: '100%', textAlign: 'left', padding: '7px 12px',
+                            background: 'transparent', border: 'none', borderBottom: rule, cursor: 'pointer',
+                          }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent-2)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                        >
+                          <span className="mono" style={{ fontSize: 11, color: 'var(--accent)', marginRight: 8 }}>{t.technique_id}</span>
+                          <span style={{ fontSize: 11, color: 'var(--fg-2)' }}>{t.name}</span>
+                          <span style={{ fontSize: 10, color: 'var(--fg-3)', marginLeft: 8 }}>{t.tactic}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {builderTechniques.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
+                    {builderTechniques.map(tid => (
+                      <span key={tid} className="mono" style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        fontSize: 10, padding: '2px 7px',
+                        background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.3)',
+                        color: 'var(--accent)',
+                      }}>
+                        {tid}
+                        <button onClick={() => removeTechnique(tid)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--fg-3)', display: 'flex', alignItems: 'center' }}>
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>Steps ({builderSteps.length})</span>
+                </div>
+
+                {builderGroups.map((group, gi) => {
+                  const isParGroup = group.length > 1
+                  const groupColor = GROUP_PALETTE[gi % GROUP_PALETTE.length]
+                  return (
+                    <div key={gi} style={{ borderLeft: isParGroup ? `2px solid ${groupColor}40` : 'none', paddingLeft: isParGroup ? 8 : 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {group.map(si => {
                         const s = builderSteps[si]
                         const isEditing = editingIdx === si
+                        const isDragging = dragIdx === si
+                        const isDragOver = dragOverIdx === si && dragIdx !== si
                         return (
                           <div
                             key={si}
@@ -886,69 +876,37 @@ export default function Playbooks() {
                             onDrop={e => handleDrop(e, si)}
                             onDragEnd={handleDragEnd}
                             onClick={() => setEditingIdx(si)}
-                            className={`rounded-lg border px-3 py-2.5 cursor-grab active:cursor-grabbing transition-all ${
-                              dragOverIdx === si && dragIdx !== si
-                                ? 'border-cyan-500/70 bg-cyan-500/10 scale-[1.01]'
-                                : dragIdx === si
-                                  ? 'opacity-40 border-dashed border-slate-600'
-                                  : isEditing
-                                    ? 'border-cyan-500/50 bg-cyan-500/5'
-                                    : 'border-cyan-900/20 hover:border-cyan-900/40'
-                            }`}
+                            style={{
+                              borderRadius: 3, padding: '8px 10px', cursor: 'grab', transition: 'all 0.15s',
+                              border: isDragOver ? '1px solid var(--accent)' : isEditing ? '1px solid rgba(240,168,58,0.4)' : ruleStrong,
+                              background: isDragOver ? 'rgba(240,168,58,0.08)' : isEditing ? 'rgba(240,168,58,0.04)' : 'transparent',
+                              opacity: isDragging ? 0.4 : 1,
+                            }}
                           >
-                            <div className="flex items-center gap-2">
-                              {/* Order buttons */}
-                              <div className="flex flex-col gap-0.5 shrink-0" onClick={e => e.stopPropagation()}>
-                                <button onClick={() => moveStep(si, -1)} disabled={si === 0}
-                                  className="text-slate-600 hover:text-slate-300 disabled:opacity-20 transition-colors">
-                                  <ArrowUp size={11} />
-                                </button>
-                                <button onClick={() => moveStep(si, 1)} disabled={si === builderSteps.length - 1}
-                                  className="text-slate-600 hover:text-slate-300 disabled:opacity-20 transition-colors">
-                                  <ArrowDown size={11} />
-                                </button>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                                <button onClick={() => moveStep(si, -1)} disabled={si === 0} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0, opacity: si === 0 ? 0.2 : 1 }}><ArrowUp size={11} /></button>
+                                <button onClick={() => moveStep(si, 1)} disabled={si === builderSteps.length - 1} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0, opacity: si === builderSteps.length - 1 ? 0.2 : 1 }}><ArrowDown size={11} /></button>
                               </div>
-
-                              <span className="text-slate-600 font-mono text-xs w-5 text-right shrink-0">{si + 1}</span>
-
-                              {s.parallel
-                                ? <span className="text-purple-400 text-xs font-mono shrink-0" title="Runs in parallel with previous step">∥</span>
-                                : <ChevronRight size={10} className="text-slate-600 shrink-0" />
-                              }
-
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className={`font-mono text-sm font-medium ${s.name ? 'text-slate-200' : 'text-slate-600'}`}>
-                                    {s.name || 'unnamed'}
-                                  </span>
-                                  {s.conditional && (
-                                    <span className="text-[10px] text-slate-600 italic">cond.</span>
-                                  )}
+                              <span className="mono tnum" style={{ fontSize: 10, color: 'var(--fg-3)', width: 18, textAlign: 'right', flexShrink: 0 }}>{si + 1}</span>
+                              {s.parallel ? <span style={{ color: '#a855f7', fontSize: 12, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>∥</span> : <Icon name="chev_r" size={10} color="var(--fg-3)" />}
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', fontWeight: 500, color: s.name ? 'var(--fg-2)' : 'var(--fg-3)' }}>
+                                  {s.name || 'unnamed'}
                                 </div>
-                                {s.description && (
-                                  <p className="text-[10px] text-slate-500 truncate">{s.description}</p>
-                                )}
                               </div>
-
-                              {/* Parallel pill */}
                               {si > 0 && (
                                 <button
                                   onClick={e => { e.stopPropagation(); updateStep(si, { parallel: !s.parallel }) }}
-                                  className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-all ${
-                                    s.parallel
-                                      ? 'border-purple-500/50 text-purple-300 bg-purple-500/10'
-                                      : 'border-slate-700/40 text-slate-600 hover:border-slate-600/60 hover:text-slate-400'
-                                  }`}
-                                  title={s.parallel ? 'Running in parallel — click to make sequential' : 'Click to run in parallel with previous step'}
-                                >
-                                  {s.parallel ? '∥ parallel' : '→ seq'}
-                                </button>
+                                  style={{
+                                    flexShrink: 0, padding: '2px 7px', borderRadius: 2, fontSize: 10, fontWeight: 600, cursor: 'pointer',
+                                    ...(s.parallel
+                                      ? { border: '1px solid rgba(168,85,247,0.5)', color: '#c4b5fd', background: 'rgba(168,85,247,0.1)' }
+                                      : { border: ruleStrong, color: 'var(--fg-3)', background: 'transparent' }),
+                                  }}
+                                >{s.parallel ? '∥ parallel' : '→ seq'}</button>
                               )}
-
-                              <button
-                                onClick={e => { e.stopPropagation(); removeStep(si) }}
-                                className="text-slate-600 hover:text-red-400 transition-colors shrink-0 p-0.5"
-                              >
+                              <button onClick={e => { e.stopPropagation(); removeStep(si) }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 2, flexShrink: 0 }}>
                                 <Trash2 size={12} />
                               </button>
                             </div>
@@ -957,314 +915,239 @@ export default function Playbooks() {
                       })}
                     </div>
                   )
-                })
+                })}
+
+                <button onClick={addStep} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 0', border: '1px dashed var(--rule-strong)', cursor: 'pointer', background: 'transparent', color: 'var(--fg-3)', fontSize: 12 }}>
+                  <Plus size={13} /> Add Step
+                </button>
+              </div>
+
+              {/* Step editor */}
+              {editingIdx !== null && builderSteps[editingIdx] && (() => {
+                const s = builderSteps[editingIdx]
+                return (
+                  <div style={{ border: rule, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg)' }}>Edit Step {editingIdx + 1}</span>
+                      <button onClick={() => setEditingIdx(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0 }}><Icon name="x" size={13} /></button>
+                    </div>
+                    {[
+                      { label: 'Tool Name *', key: 'name', placeholder: 'e.g. nmap' },
+                      { label: 'Scan Type', key: 'scan_type', placeholder: 'e.g. nmap (defaults to tool name)' },
+                      { label: 'Description', key: 'description', placeholder: 'Human-readable step description' },
+                    ].map(({ label, key, placeholder }) => (
+                      <div key={key}>
+                        <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>{label}</label>
+                        <input value={(s as any)[key]} onChange={e => updateStep(editingIdx, { [key]: e.target.value })} placeholder={placeholder} style={{ ...INPUT_STYLE, marginTop: 5 }} />
+                      </div>
+                    ))}
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>Command Template *</label>
+                      <textarea value={s.cmd_template} onChange={e => updateStep(editingIdx, { cmd_template: e.target.value })} placeholder="nmap -sV {target}" rows={2} style={{ ...INPUT_STYLE, marginTop: 5, fontFamily: 'var(--font-mono)', resize: 'none', lineHeight: 1.5 }} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div>
+                        <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>Timeout (s)</label>
+                        <input type="number" value={s.timeout} onChange={e => updateStep(editingIdx, { timeout: parseInt(e.target.value, 10) || 300 })} style={{ ...INPUT_STYLE, marginTop: 5 }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>Trigger Ports</label>
+                        <input value={s.trigger_ports_raw} onChange={e => updateStep(editingIdx, { trigger_ports_raw: e.target.value })} placeholder="80,443 (blank = always)" style={{ ...INPUT_STYLE, marginTop: 5 }} />
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: ruleStrong, borderRadius: 3, padding: '9px 12px' }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--fg-2)' }}>Conditional</div>
+                        <div style={{ fontSize: 10, color: 'var(--fg-3)' }}>Only run if trigger ports are open</div>
+                      </div>
+                      <Toggle checked={s.conditional} onChange={() => updateStep(editingIdx, { conditional: !s.conditional })} />
+                    </div>
+                    {editingIdx > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: ruleStrong, borderRadius: 3, padding: '9px 12px' }}>
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--fg-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Layers size={11} color="#a855f7" /> Run in parallel
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--fg-3)' }}>Execute alongside the previous step's group</div>
+                        </div>
+                        <Toggle checked={s.parallel} onChange={() => updateStep(editingIdx, { parallel: !s.parallel })} accentColor="#a855f7" />
+                      </div>
+                    )}
+                  </div>
+                )
               })()}
 
-              <button
-                onClick={addStep}
-                className="w-full mt-2 flex items-center justify-center gap-2 py-2 rounded-lg border border-dashed border-cyan-900/30 text-sm text-slate-500 hover:text-slate-300 hover:border-cyan-700/40 transition-colors"
-              >
-                <Plus size={13} /> Add Step
-              </button>
-
-              {/* Flow diagram preview */}
-              {showFlowPreview && builderSteps.length > 0 && (
-                <div className="mt-3 rounded-lg border border-slate-800 p-4 space-y-1" style={{ background: '#060b14' }}>
-                  <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Execution flow</div>
-                  {builderGroups.map((group, gi) => (
-                    <div key={gi} className="space-y-1">
-                      {/* Connector arrow between groups */}
-                      {gi > 0 && (
-                        <div className="flex justify-center py-0.5">
-                          <div className="flex flex-col items-center gap-0">
-                            <div className="w-px h-3 bg-slate-700" />
-                            <div className="w-0 h-0" style={{ borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderTop: '5px solid #334155' }} />
-                          </div>
-                        </div>
-                      )}
-                      {/* Group: parallel steps side-by-side, sequential single */}
-                      <div className={`flex gap-2 ${group.length > 1 ? 'border border-purple-500/20 rounded-lg p-2 bg-purple-500/5' : ''}`}>
-                        {group.length > 1 && (
-                          <div className="flex items-center pr-1">
-                            <span className="text-[9px] text-purple-400 font-mono rotate-[-90deg] whitespace-nowrap" style={{ writingMode: 'vertical-rl' }}>∥ parallel</span>
-                          </div>
-                        )}
-                        {group.map((si, i) => {
-                          const s = builderSteps[si]
-                          return (
-                            <div key={si} className="flex items-center gap-1 flex-1 min-w-0">
-                              {i > 0 && <div className="w-4 h-px bg-purple-500/40 flex-shrink-0" />}
-                              <div
-                                className={`flex-1 min-w-0 rounded border px-2 py-1.5 text-center cursor-pointer transition-colors ${
-                                  editingIdx === si
-                                    ? 'border-cyan-500/60 bg-cyan-500/10'
-                                    : 'border-slate-700/60 hover:border-slate-600'
-                                }`}
-                                onClick={() => setEditingIdx(si)}
-                                style={{ background: editingIdx === si ? undefined : '#0a1020' }}
-                              >
-                                <div className="text-[10px] font-semibold text-slate-300 truncate">{s.name || `Step ${si + 1}`}</div>
-                                {s.conditional && (
-                                  <div className="text-[8px] text-amber-400">◆ cond.</div>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ))}
+              {builderError && (
+                <div style={{ padding: '8px 14px', border: '1px solid rgba(232,64,64,0.3)', background: 'rgba(232,64,64,0.06)', fontSize: 12, color: 'var(--crit)' }}>
+                  {builderError}
                 </div>
               )}
-            </div>
 
-            {/* Step editor */}
-            {editingIdx !== null && builderSteps[editingIdx] && (() => {
-              const s = builderSteps[editingIdx]
-              return (
-                <div className="glass rounded-xl p-4 space-y-3 self-start sticky top-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-300">
-                      Edit Step {editingIdx + 1}
-                    </span>
-                    <button onClick={() => setEditingIdx(null)} className="text-slate-600 hover:text-slate-300">
-                      <X size={13} />
-                    </button>
-                  </div>
-
-                  {[
-                    { label: 'Tool Name *', key: 'name', placeholder: 'e.g. nmap', hint: 'Must match the executable name (shutil.which check)' },
-                    { label: 'Scan Type', key: 'scan_type', placeholder: 'e.g. nmap (defaults to tool name)' },
-                    { label: 'Description', key: 'description', placeholder: 'Human-readable step description' },
-                  ].map(({ label, key, placeholder, hint }) => (
-                    <div key={key}>
-                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
-                      {hint && <p className="text-[9px] text-slate-600 mt-0.5">{hint}</p>}
-                      <input
-                        value={(s as any)[key]}
-                        onChange={e => updateStep(editingIdx, { [key]: e.target.value })}
-                        placeholder={placeholder}
-                        className="mt-1 w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none"
-                        style={{ background: '#090d14' }}
-                      />
-                    </div>
-                  ))}
-
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Command Template *</label>
-                    <p className="text-[9px] text-slate-600 mt-0.5">Use <code className="text-cyan-500">&#123;target&#125;</code> as the target placeholder</p>
-                    <textarea
-                      value={s.cmd_template}
-                      onChange={e => updateStep(editingIdx, { cmd_template: e.target.value })}
-                      placeholder="nmap -sV {target}"
-                      rows={2}
-                      className="mt-1 w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none font-mono resize-none"
-                      style={{ background: '#090d14' }}
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Timeout (s)</label>
-                      <input
-                        type="number"
-                        value={s.timeout}
-                        onChange={e => updateStep(editingIdx, { timeout: parseInt(e.target.value, 10) || 300 })}
-                        className="mt-1 w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none"
-                        style={{ background: '#090d14' }}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Trigger Ports</label>
-                      <input
-                        value={s.trigger_ports_raw}
-                        onChange={e => updateStep(editingIdx, { trigger_ports_raw: e.target.value })}
-                        placeholder="80,443 (blank = always)"
-                        className="mt-1 w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none"
-                        style={{ background: '#090d14' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-lg border border-cyan-900/20 px-3 py-2.5">
-                    <div>
-                      <div className="text-xs font-medium text-slate-300">Conditional</div>
-                      <div className="text-[10px] text-slate-500">Only run if trigger ports are open</div>
-                    </div>
-                    <button
-                      onClick={() => updateStep(editingIdx, { conditional: !s.conditional })}
-                      className={`relative w-9 h-5 rounded-full transition-colors ${s.conditional ? 'bg-cyan-600' : 'bg-slate-700'}`}
-                    >
-                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${s.conditional ? 'translate-x-4' : 'translate-x-0'}`} />
-                    </button>
-                  </div>
-
-                  {editingIdx > 0 && (
-                    <div className="flex items-center justify-between rounded-lg border border-cyan-900/20 px-3 py-2.5">
-                      <div>
-                        <div className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                          <Layers size={11} className="text-purple-400" /> Run in parallel
-                        </div>
-                        <div className="text-[10px] text-slate-500">Execute alongside the previous step's group</div>
-                      </div>
-                      <button
-                        onClick={() => updateStep(editingIdx, { parallel: !s.parallel })}
-                        className={`relative w-9 h-5 rounded-full transition-colors ${s.parallel ? 'bg-purple-600' : 'bg-slate-700'}`}
-                      >
-                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${s.parallel ? 'translate-x-4' : 'translate-x-0'}`} />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )
-            })()}
-          </div>
-
-          {/* Save bar */}
-          {builderError && (
-            <div className="rounded-lg px-4 py-2.5 border border-red-500/30 bg-red-500/5 text-sm text-red-300">
-              {builderError}
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={resetBuilder} style={{ padding: '7px 16px', cursor: 'pointer', background: 'transparent', border: ruleStrong, color: 'var(--fg-3)', fontSize: 12 }}>Cancel</button>
+                <button onClick={handleSavePlaybook} disabled={saving} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 20px', border: 'none', cursor: 'pointer', background: 'var(--accent)', color: 'var(--bg)', fontSize: 12, fontWeight: 700, opacity: saving ? 0.6 : 1 }}>
+                  {saving ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={13} />}
+                  {editingPlaybookId ? 'Save Changes' : 'Create Playbook'}
+                </button>
+              </div>
             </div>
           )}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => { resetBuilder(); setView('library') }}
-              className="px-4 py-2 rounded-lg text-sm text-slate-400 glass glass-hover transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSavePlaybook}
-              disabled={saving}
-              className="flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 transition-all"
-            >
-              {saving ? <Loader size={13} className="animate-spin" /> : <Save size={13} />}
-              {editingPlaybookId ? 'Save Changes' : 'Create Playbook'}
-            </button>
-          </div>
-        </div>
-      )}
 
-      {/* ── Run Wizard Modal ──────────────────────────────────────────────────────── */}
+          {!displayPb && !showBuilder && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '64px 0', color: 'var(--fg-3)' }}>
+              <Icon name="book" size={32} color="var(--rule-strong)" />
+              <span style={{ fontSize: 13 }}>Select a playbook from the list</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Run Wizard Modal ── */}
       {showWizard && selectedPlaybook && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
-          <div className="glass rounded-2xl p-6 w-full max-w-md space-y-5 border border-cyan-900/30">
+        <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'rgba(0,0,0,0.75)' }}>
+          <div style={{ border: rule, padding: 24, width: '100%', maxWidth: 440, display: 'flex', flexDirection: 'column', gap: 18, background: 'var(--bg-2)' }}>
             <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Play size={16} className="text-cyan-400" />
-                <h2 className="text-lg font-semibold text-white">Run: {selectedPlaybook.name}</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <Icon name="play" size={15} color="var(--accent)" />
+                <h2 style={{ fontSize: 14, fontWeight: 700, color: 'var(--fg)', margin: 0 }}>Run: {selectedPlaybook.name}</h2>
               </div>
-              <p className="text-xs text-slate-400">{selectedPlaybook.description}</p>
+              <p style={{ fontSize: 12, color: 'var(--fg-3)', margin: 0 }}>{selectedPlaybook.description}</p>
             </div>
 
             {/* Steps preview */}
-            <div className="rounded-lg px-4 py-3 space-y-1 border border-cyan-900/10 max-h-44 overflow-y-auto" style={{ background: '#090d14' }}>
+            <div style={{ border: ruleStrong, padding: '10px 12px', maxHeight: 140, overflowY: 'auto', background: 'var(--bg)', display: 'flex', flexDirection: 'column', gap: 4 }}>
               {(() => {
                 const gs = buildGroups(selectedPlaybook.steps)
                 const gm = stepGroupMap(gs)
                 return selectedPlaybook.steps.map((s, i) => {
                   const isParGroup = gs[gm[i]].length > 1
                   return (
-                    <div key={i} className={`flex items-center gap-2 text-xs text-slate-400 ${isParGroup ? 'pl-2 border-l border-purple-500/30' : ''}`}>
-                      <span className="text-slate-600 font-mono w-4 text-right">{i + 1}</span>
-                      {s.parallel ? <span className="text-purple-400">∥</span> : <ChevronRight size={10} className="text-slate-700" />}
-                      <span className="font-mono text-slate-300">{s.name}</span>
-                      <span className="text-slate-500 truncate">{s.description}</span>
-                      {s.conditional && <span className="ml-auto text-[10px] text-slate-600 italic shrink-0">if ports</span>}
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-3)', paddingLeft: isParGroup ? 8 : 4, borderLeft: isParGroup ? '1px solid rgba(168,85,247,0.3)' : 'none' }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', width: 16, textAlign: 'right', flexShrink: 0 }}>{i + 1}</span>
+                      {s.parallel ? <span style={{ color: '#a855f7' }}>∥</span> : <Icon name="chev_r" size={10} color="var(--fg-3)" />}
+                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-2)' }}>{s.name}</span>
+                      <span style={{ color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.description}</span>
                     </div>
                   )
                 })
               })()}
             </div>
 
-            {/* Project */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Project</label>
-              <select value={selectedProject} onChange={e => setSelectedProject(e.target.value)}
-                className="w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none"
-                style={{ background: '#090d14' }}>
-                <option value="">Select project...</option>
-                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </div>
-
             {/* Target */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Target size={11} /> Target
-              </label>
-              <select value={selectedTarget} onChange={e => setSelectedTarget(e.target.value)}
-                disabled={!selectedProject}
-                className="w-full rounded-lg px-3 py-2 text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none disabled:opacity-40"
-                style={{ background: '#090d14' }}>
-                <option value="">Select target...</option>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>Target</label>
+              <select value={selectedTarget} onChange={e => setSelectedTarget(e.target.value)} disabled={!projectId} style={{ ...INPUT_STYLE, opacity: !projectId ? 0.5 : 1 }}>
+                <option value="">Select target…</option>
                 {targets.map(t => <option key={t.id} value={t.id}>{t.hostname_or_ip}</option>)}
               </select>
             </div>
 
             {/* Execution mode */}
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Execution Mode</label>
-              <div className="grid grid-cols-2 gap-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>Execution Mode</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 {([
-                  { value: 'auto',        label: 'Auto',         icon: <Zap size={13} />,       desc: 'All steps run automatically' },
-                  { value: 'step_through',label: 'Step-through', icon: <StepForward size={13} />,desc: 'Pause before each group' },
+                  { value: 'auto', label: 'Auto', icon: <Zap size={13} />, desc: 'All steps run automatically' },
+                  { value: 'step_through', label: 'Step-through', icon: <StepForward size={13} />, desc: 'Pause before each group' },
                 ] as const).map(opt => (
-                  <button key={opt.value} onClick={() => setMode(opt.value)}
-                    className={`rounded-xl px-3 py-3 text-left border transition-all ${mode === opt.value ? 'border-cyan-500/50 bg-cyan-500/10' : 'border-cyan-900/20 glass'}`}>
-                    <div className={`flex items-center gap-1.5 text-sm font-semibold mb-0.5 ${mode === opt.value ? 'text-cyan-300' : 'text-slate-300'}`}>
+                  <button key={opt.value} onClick={() => setMode(opt.value)} style={{
+                    padding: '10px 12px', textAlign: 'left', cursor: 'pointer',
+                    border: mode === opt.value ? '1px solid rgba(240,168,58,0.4)' : ruleStrong,
+                    background: mode === opt.value ? 'rgba(240,168,58,0.06)' : 'transparent',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, marginBottom: 3, color: mode === opt.value ? 'var(--accent)' : 'var(--fg-2)' }}>
                       {opt.icon} {opt.label}
                     </div>
-                    <div className="text-[10px] text-slate-500">{opt.desc}</div>
+                    <div style={{ fontSize: 10, color: 'var(--fg-3)' }}>{opt.desc}</div>
                   </button>
                 ))}
               </div>
             </div>
 
             {/* AI toggle */}
-            <div className="flex items-center justify-between rounded-xl border border-cyan-900/20 px-4 py-3 glass">
-              <div className="flex items-center gap-2.5">
-                <Brain size={15} className={useAi ? 'text-purple-400' : 'text-slate-500'} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: ruleStrong, padding: '10px 14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Brain size={15} color={useAi ? '#a855f7' : 'var(--fg-3)'} />
                 <div>
-                  <div className="text-sm font-semibold text-slate-200">AI Assistance</div>
-                  <div className="text-[10px] text-slate-500">Analyze each step's output (requires AI model in Settings)</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-2)' }}>AI Assistance</div>
+                  <div style={{ fontSize: 10, color: 'var(--fg-3)' }}>Analyze each step's output</div>
                 </div>
               </div>
-              <button onClick={() => setUseAi(v => !v)}
-                className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${useAi ? 'bg-purple-600' : 'bg-slate-700'}`}>
-                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${useAi ? 'translate-x-5' : 'translate-x-0'}`} />
-              </button>
+              <Toggle checked={useAi} onChange={() => setUseAi(v => !v)} accentColor="#a855f7" />
             </div>
 
-            <div className="flex gap-3 pt-1">
-              <button onClick={() => setShowWizard(false)}
-                className="flex-1 py-2 rounded-lg text-sm text-slate-400 glass glass-hover transition-colors">
-                Cancel
-              </button>
-              <button onClick={handleStartRun}
-                disabled={starting || !selectedProject || !selectedTarget}
-                className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 transition-all">
-                {starting ? <Loader size={13} className="animate-spin" /> : <Play size={13} />}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setShowWizard(false)} style={{ flex: 1, padding: '8px 0', cursor: 'pointer', background: 'transparent', border: ruleStrong, color: 'var(--fg-3)', fontSize: 12 }}>Cancel</button>
+              <button
+                onClick={handleStartRun}
+                disabled={starting || !projectId || !selectedTarget}
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 0', border: 'none', cursor: 'pointer', background: 'var(--accent)', color: 'var(--bg)', fontSize: 12, fontWeight: 700, opacity: (starting || !projectId || !selectedTarget) ? 0.5 : 1 }}
+              >
+                {starting ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Play size={13} />}
                 Start Run
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ── Runs history modal ── */}
+      {runsModalPb && (() => {
+        const pbRuns = runs.filter(r => r.playbook_id === runsModalPb.id)
+          .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+        return (
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.75)' }}
+            onClick={() => setRunsModalPb(null)}
+          >
+            <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-2)', border: rule, width: '100%', maxWidth: 640, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+              <div className="sec-h" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className="title" style={{ marginRight: 'auto' }}>Runs · {runsModalPb.name}</span>
+                <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>{pbRuns.length} total</span>
+                <button className="btn btn-sm" onClick={() => setRunsModalPb(null)}><X size={11} /></button>
+              </div>
+              <div style={{ overflowY: 'auto' }}>
+                {pbRuns.length === 0 ? (
+                  <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--fg-3)', fontSize: 12 }}>
+                    No runs recorded for this playbook yet.
+                  </div>
+                ) : (
+                  <table className="data">
+                    <thead>
+                      <tr><th>Status</th><th>Target</th><th>Mode</th><th>Step</th><th>Started</th></tr>
+                    </thead>
+                    <tbody>
+                      {pbRuns.map(r => (
+                        <tr key={r.id}>
+                          <td className="mono" style={{ fontSize: 11 }}>{r.status}</td>
+                          <td className="mono" style={{ fontSize: 11, color: 'var(--fg-2)' }}>{r.target_host || '—'}</td>
+                          <td className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{r.mode}</td>
+                          <td className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{r.current_step || '—'}</td>
+                          <td className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>{formatDate(r.started_at ?? r.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
 
-// Minimal ANSI → HTML for the terminal
+// ── Minimal ANSI → HTML ───────────────────────────────────────────────────────
 function ansiToHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/\x1b\[0m/g, '</span>')
     .replace(/\x1b\[(\d+)m/g, (_: string, code: string) => {
       const colorMap: Record<string, string> = {
-        '30': '#475569', '31': '#ef4444', '32': '#22c55e', '33': '#f59e0b',
-        '34': '#3b82f6', '35': '#a855f7', '36': '#06b6d4', '37': '#e2e8f0',
-        '90': '#475569',
+        '30': '#475569', '31': '#e84040', '32': '#54af61', '33': '#f0a83a',
+        '34': '#f0a83a', '35': '#a855f7', '36': '#f0a83a', '37': '#e8e3d8',
+        '90': '#5a5550',
       }
       const color = colorMap[code]
       return color ? `<span style="color:${color}">` : ''

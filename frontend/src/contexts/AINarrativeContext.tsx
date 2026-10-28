@@ -1,4 +1,6 @@
 import { createContext, useContext, useRef, useState, useCallback } from 'react'
+import { getApiBase } from '@/lib/config'
+import { generateLocalNarrative } from '@/lib/narrate'
 
 // ── Timing helpers ────────────────────────────────────────────────────────────
 
@@ -59,12 +61,20 @@ export function AINarrativeProvider({ children }: { children: React.ReactNode })
   const dismissDone = useCallback(() => setDone(false), [])
 
   const generate = useCallback(async (projectId: string, style: string): Promise<NarrativeResult | null> => {
-    // Fetch current model for timing key
-    let model = ''
-    try {
-      const cfg = await fetch('/api/v1/ai/config').then(r => r.json())
-      model = cfg.model || ''
-    } catch { /* ignore */ }
+    // No local-Ollama option in a browser build — window.electronAPI doesn't exist there.
+    const ollamaSettings = __IS_ELECTRON__
+      ? await window.electronAPI!.ollamaGetSettings()
+      : { useLocalOllama: false, localOllamaUrl: '', localOllamaModel: '' }
+    const useLocal = ollamaSettings.useLocalOllama
+
+    // For timing key: use local model name or fetch from server config
+    let model = useLocal ? (ollamaSettings.localOllamaModel || 'local') : ''
+    if (!useLocal) {
+      try {
+        const cfg = await fetch(`${getApiBase()}/ai/config`).then(r => r.json())
+        model = cfg.model || ''
+      } catch { /* ignore */ }
+    }
 
     setDone(false)
     setGenerating(true)
@@ -83,13 +93,20 @@ export function AINarrativeProvider({ children }: { children: React.ReactNode })
     }
 
     try {
-      const res = await fetch('/api/v1/ai/narrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: projectId, style }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Narrative generation failed')
+      let result: NarrativeResult
+
+      if (useLocal) {
+        result = await generateLocalNarrative(projectId, style)
+      } else {
+        const res = await fetch(`${getApiBase()}/ai/narrate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: projectId, style }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.detail || 'Narrative generation failed')
+        result = { narrative: data.narrative || '', savedAt: new Date().toISOString() }
+      }
 
       const elapsed = Date.now() - startMs.current
       if (model) storeDuration(model, elapsed)
@@ -99,7 +116,7 @@ export function AINarrativeProvider({ children }: { children: React.ReactNode })
       setGenerating(false)
       setDone(true)
 
-      return { narrative: data.narrative || '', savedAt: new Date().toISOString() }
+      return result
     } catch (err) {
       stopTimer()
       setProgress(null)

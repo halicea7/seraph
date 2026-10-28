@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { Users } from 'lucide-react'
+import { wsUrl } from '@/lib/config'
 
 interface PresenceUser {
   id: string
@@ -28,8 +29,8 @@ function initials(name: string): string {
 
 // Deterministic colour from username
 const AVATAR_COLORS = [
-  '#06b6d4', '#8b5cf6', '#ec4899', '#f97316',
-  '#22c55e', '#3b82f6', '#ef4444', '#f59e0b',
+  '#f0a83a', '#b794f6', '#ec4899', '#f97316',
+  '#22c55e', '#8ad26b', '#ef4444', '#d4c45a',
 ]
 function avatarColor(name: string): string {
   let h = 0
@@ -51,8 +52,7 @@ export default function ActiveUsers({ projectId, page = '' }: ActiveUsersProps) 
   useEffect(() => {
     if (!projectId) return
     const displayName = user?.full_name || user?.username || 'anonymous'
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${proto}://${window.location.host}/ws/presence/${projectId}?user=${encodeURIComponent(displayName)}`
+    const url = wsUrl(`/ws/presence/${projectId}?user=${encodeURIComponent(displayName)}`)
 
     let ws: WebSocket
     let reconnectTimer: ReturnType<typeof setTimeout>
@@ -111,27 +111,25 @@ export default function ActiveUsers({ projectId, page = '' }: ActiveUsersProps) 
   const overflow = others.length - MAX_SHOWN
 
   return (
-    <div className="flex items-center gap-2">
-      <Users size={13} className="text-slate-500" />
-      <div className="flex items-center -space-x-1.5">
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <Users size={13} style={{ color: 'var(--fg-4)' }} />
+      <div style={{ display: 'flex', alignItems: 'center' }}>
         {shown.map(u => (
           <div
             key={u.id}
-            className="relative"
+            style={{ position: 'relative', marginLeft: -6 }}
             onMouseEnter={() => setTooltip(u.id)}
             onMouseLeave={() => setTooltip(null)}
           >
             <div
-              className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white border-2 cursor-default select-none"
-              style={{ background: avatarColor(u.user), borderColor: '#05080d' }}
+              style={{ width: 22, height: 22, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 700, color: '#fff', border: '2px solid var(--bg)', background: avatarColor(u.user), cursor: 'default', userSelect: 'none' }}
               title={u.page ? `${u.user} — ${u.page}` : u.user}
             >
               {initials(u.user)}
             </div>
             {tooltip === u.id && (
               <div
-                className="absolute top-8 left-1/2 -translate-x-1/2 z-50 whitespace-nowrap rounded-md px-2 py-1 text-[10px] text-slate-200 border border-slate-700 pointer-events-none"
-                style={{ background: '#0b1120' }}
+                style={{ position: 'absolute', top: 28, left: '50%', transform: 'translateX(-50%)', zIndex: 50, whiteSpace: 'nowrap', padding: '3px 8px', fontSize: 10, color: 'var(--fg)', border: '1px solid var(--rule-strong)', background: 'var(--bg-3)', pointerEvents: 'none', fontFamily: 'var(--font-mono)' }}
               >
                 {u.user}{u.page ? ` · ${u.page}` : ''}
               </div>
@@ -140,8 +138,7 @@ export default function ActiveUsers({ projectId, page = '' }: ActiveUsersProps) 
         ))}
         {overflow > 0 && (
           <div
-            className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-semibold text-slate-400 border-2"
-            style={{ background: '#1e293b', borderColor: '#05080d' }}
+            style={{ width: 22, height: 22, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 600, color: 'var(--fg-3)', border: '2px solid var(--bg)', background: 'var(--bg-3)', marginLeft: -6 }}
             title={`+${overflow} more`}
           >
             +{overflow}

@@ -27,10 +27,15 @@ internal_scan.xml
 *.log
 logs/
 
-# ── Frontend ──────────────────────────────────────────────────────────────────
+# ── Frontend / Electron (npm workspace: root, frontend/, electron/) ──────────
+/node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+electron/node_modules/
+electron/out/
+*.tsbuildinfo
+# NOT electron/build/ — that's the tracked app-icon source, not build output.
 
 # ── Python / Backend ──────────────────────────────────────────────────────────
 __pycache__/
@@ -40,8 +45,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
-dist/
-build/
+/dist/
+/build/
 .venv/
 venv/
 env/

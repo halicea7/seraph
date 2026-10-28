@@ -22,18 +22,11 @@ export interface ToolCardProps {
   onViewOutput?: () => void
 }
 
-const statusBorder: Record<ToolStatus, string> = {
-  idle: 'border-l-slate-800',
-  running: 'border-l-blue-500',
-  completed: 'border-l-green-500',
-  failed: 'border-l-red-500',
-}
-
-const statusGlow: Record<ToolStatus, string> = {
-  idle: '',
-  running: 'shadow-glow-blue',
-  completed: 'shadow-glow-green',
-  failed: 'shadow-glow-red',
+const statusBorderColor: Record<ToolStatus, string> = {
+  idle: 'var(--rule-strong)',
+  running: 'var(--accent)',
+  completed: 'var(--ok)',
+  failed: 'var(--crit)',
 }
 
 export default function ToolCard({
@@ -83,20 +76,20 @@ export default function ToolCard({
   }
 
   const statusIcon = {
-    idle: <Circle size={14} className="text-slate-600" />,
-    running: <Loader size={14} className="text-blue-400 animate-spin" />,
-    completed: <CheckCircle size={14} className="text-green-500" />,
-    failed: <XCircle size={14} className="text-red-500" />,
+    idle: <Circle size={14} style={{ color: 'var(--fg-4)' }} />,
+    running: <Loader size={14} style={{ color: 'var(--accent)', animation: 'spin 1s linear infinite' }} />,
+    completed: <CheckCircle size={14} style={{ color: 'var(--ok)' }} />,
+    failed: <XCircle size={14} style={{ color: 'var(--crit)' }} />,
   }[status]
 
   return (
-    <div className={`glass glass-hover rounded-xl border-l-4 ${statusBorder[status]} ${statusGlow[status]} overflow-hidden transition-all`}>
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--rule-strong)', borderLeft: `3px solid ${statusBorderColor[status]}`, overflow: 'hidden' }}>
       {/* Header */}
       <div className="flex items-start gap-3 p-4">
         <div className="mt-0.5">{statusIcon}</div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
-            <span className="font-mono text-sm font-semibold text-cyan-400">{tool}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>{tool}</span>
             {!isToolAvailable && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-400 border border-amber-700/30">
                 not installed
@@ -113,32 +106,31 @@ export default function ToolCard({
           <div className="space-y-2">
             <textarea
               ref={textareaRef}
+              className="on-term"
               value={editedCommand}
               onChange={e => setEditedCommand(e.target.value)}
-              className="w-full rounded px-3 py-2 font-mono text-xs text-slate-200 focus:outline-none resize-none border border-cyan-500/40"
-              style={{ background: '#05080d' }}
+              style={{ width: '100%', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg)', background: 'var(--bg-term)', border: '1px solid var(--accent-border)', outline: 'none', resize: 'none' }}
               rows={Math.max(2, editedCommand.split('\n').length)}
               autoFocus
             />
             <div className="flex gap-2">
               <button
                 onClick={handleEditSave}
-                className="flex items-center gap-1.5 px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-xs text-white transition-colors"
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: 11, background: 'var(--accent)', color: '#1a1408', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
               >
                 <Check size={12} /> Save
               </button>
               <button
                 onClick={handleEditCancel}
-                className="flex items-center gap-1.5 px-3 py-1 rounded text-xs text-slate-300 transition-colors border border-cyan-900/30 hover:border-cyan-900/50"
-                style={{ background: '#0d1520' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: 11, color: 'var(--fg-2)', background: 'var(--bg-2)', border: '1px solid var(--rule-strong)', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
               >
                 <X size={12} /> Cancel
               </button>
             </div>
           </div>
         ) : (
-          <div className="group relative">
-            <div className="rounded px-3 py-2 font-mono text-xs text-slate-300 break-all border border-cyan-900/20" style={{ background: '#05080d' }}>
+          <div>
+            <div className="on-term" style={{ padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-2)', wordBreak: 'break-all', border: '1px solid var(--rule)', background: 'var(--bg-term)' }}>
               {renderedCommand}
             </div>
           </div>
@@ -157,16 +149,14 @@ export default function ToolCard({
         </button>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-slate-300 transition-colors border border-cyan-900/20 hover:border-cyan-900/40"
-          style={{ background: '#0d1520' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: 11, color: copied ? 'var(--ok)' : 'var(--fg-2)', background: 'var(--bg)', border: '1px solid var(--rule)', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
         >
-          {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+          {copied ? <Check size={12} /> : <Copy size={12} />}
           {copied ? 'Copied!' : 'Copy'}
         </button>
         <button
           onClick={() => { setIsEditing(!isEditing); setEditedCommand(renderedCommand) }}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-slate-300 transition-colors border border-cyan-900/20 hover:border-cyan-900/40"
-          style={{ background: '#0d1520' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: 11, color: 'var(--fg-2)', background: 'var(--bg)', border: '1px solid var(--rule)', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
         >
           <Edit2 size={12} /> Edit
         </button>
@@ -177,7 +167,7 @@ export default function ToolCard({
           {scanId && onViewOutput && (
             <button
               onClick={onViewOutput}
-              className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
               title="Load saved output into terminal"
             >
               <FileText size={12} />
@@ -199,8 +189,8 @@ export default function ToolCard({
 
       {/* Output */}
       {showOutput && output && (
-        <div className="border-t border-cyan-900/20 px-4 py-3 max-h-48 overflow-y-auto" style={{ background: '#05080d' }}>
-          <pre className="font-mono text-xs text-slate-300 whitespace-pre-wrap">{output}</pre>
+        <div className="on-term" style={{ borderTop: '1px solid var(--rule)', padding: '10px 14px', maxHeight: 192, overflowY: 'auto', background: 'var(--bg-term)' }}>
+          <pre style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', margin: 0 }}>{output}</pre>
         </div>
       )}
     </div>

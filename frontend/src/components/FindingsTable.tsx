@@ -1,15 +1,19 @@
 import { useState, useMemo, useEffect } from 'react'
-import { ChevronDown, ChevronUp, ChevronRight, Filter, Plus, Trash2, Zap, Loader } from 'lucide-react'
+import type React from 'react'
+import { ChevronDown, ChevronUp, ChevronRight, Filter, Plus, Trash2, Zap, Loader, RefreshCw } from 'lucide-react'
 import type { Finding, FindingNote } from '../types/index'
+import { getApiBase, authedUrl } from '@/lib/config'
+import { useAiModel, completeFeature } from '@/lib/ai'
+import AiModelSelect from './AiModelSelect'
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info']
 
-const SEVERITY_STYLES: Record<string, string> = {
-  critical: 'bg-red-950/60 text-red-400 border-red-500/50 severity-critical',
-  high:     'bg-orange-950/60 text-orange-400 border-orange-500/40 severity-high',
-  medium:   'bg-amber-950/40 text-amber-400 border-amber-500/30',
-  low:      'bg-green-950/40 text-green-400 border-green-500/30',
-  info:     'bg-blue-950/40 text-blue-400 border-blue-500/30',
+const SEVERITY_INLINE: Record<string, React.CSSProperties> = {
+  critical: { color: 'var(--crit)', background: 'rgba(232,92,78,0.1)',  border: '1px solid rgba(232,92,78,0.5)' },
+  high:     { color: 'var(--high)', background: 'rgba(240,168,58,0.1)',  border: '1px solid rgba(240,168,58,0.5)' },
+  medium:   { color: 'var(--med)',  background: 'rgba(212,196,90,0.08)', border: '1px solid rgba(212,196,90,0.4)' },
+  low:      { color: 'var(--low)',  background: 'rgba(107,138,114,0.08)', border: '1px solid rgba(107,138,114,0.4)' },
+  info:     { color: 'var(--fg-3)', background: 'var(--bg-2)',           border: '1px solid var(--rule-strong)' },
 }
 
 const SEVERITY_ACCENT: Record<string, string> = {
@@ -24,9 +28,11 @@ interface FindingsTableProps {
   findings: Finding[]
   loading?: boolean
   onDelete?: (id: string) => void
+  /** When provided, shows a "Retest" action that re-runs the finding's originating check. */
+  onRetest?: (finding: Finding) => void
 }
 
-export default function FindingsTable({ findings, loading, onDelete }: FindingsTableProps) {
+export default function FindingsTable({ findings, loading, onDelete, onRetest }: FindingsTableProps) {
   const [sortField, setSortField] = useState<'severity' | 'title' | 'framework'>('severity')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [filterSeverity, setFilterSeverity] = useState<string>('all')
@@ -38,6 +44,11 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
   const [savingNote, setSavingNote] = useState<string | null>(null)
   const [enriching, setEnriching] = useState<string | null>(null)
   const [enrichedData, setEnrichedData] = useState<Record<string, { cvss_score: string | null; cve_id: string | null }>>({})
+  const [shots, setShots] = useState<Record<string, { id: string; url: string }[]>>({})
+  const [lightboxShot, setLightboxShot] = useState<string | null>(null)
+  const [aiRemediation, setAiRemediation] = useState<Record<string, string>>({})
+  const [aiLoading, setAiLoading] = useState<string | null>(null)
+  const { options: aiModels, modelKey: aiModelKey, setModelKey: setAiModelKey } = useAiModel()
 
   const frameworks = useMemo(() => {
     const set = new Set(findings.map(f => f.framework).filter(Boolean) as string[])
@@ -75,17 +86,25 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
   }, [findings, sortField, sortDir, filterSeverity, filterFramework, search])
 
   useEffect(() => {
-    if (!expandedId || notes[expandedId]) return
-    fetch(`/api/v1/findings/${expandedId}/notes`)
-      .then(r => r.json())
-      .then(data => setNotes(prev => ({ ...prev, [expandedId]: data })))
+    if (!expandedId) return
+    if (!notes[expandedId]) {
+      fetch(`${getApiBase()}/findings/${expandedId}/notes`)
+        .then(r => r.json())
+        .then(data => setNotes(prev => ({ ...prev, [expandedId]: data })))
+    }
+    if (!shots[expandedId]) {
+      fetch(`${getApiBase()}/screenshots?finding_id=${expandedId}`)
+        .then(r => r.ok ? r.json() : [])
+        .then(data => setShots(prev => ({ ...prev, [expandedId]: data })))
+        .catch(() => {})
+    }
   }, [expandedId])
 
   async function handleAddNote(findingId: string) {
     const content = (noteInput[findingId] || '').trim()
     if (!content) return
     setSavingNote(findingId)
-    const res = await fetch(`/api/v1/findings/${findingId}/notes`, {
+    const res = await fetch(`${getApiBase()}/findings/${findingId}/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
@@ -96,9 +115,19 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
     setSavingNote(null)
   }
 
+  async function handleRemediate(findingId: string) {
+    setAiLoading(findingId)
+    try {
+      const text = await completeFeature(aiModelKey, `/findings/${findingId}/ai-remediate`, {})
+      setAiRemediation(prev => ({ ...prev, [findingId]: text }))
+    } catch (e) {
+      setAiRemediation(prev => ({ ...prev, [findingId]: `⚠ ${e instanceof Error ? e.message : 'AI request failed'}` }))
+    } finally { setAiLoading(null) }
+  }
+
   async function handleEnrich(findingId: string) {
     setEnriching(findingId)
-    const res = await fetch(`/api/v1/findings/${findingId}/enrich`, { method: 'POST' })
+    const res = await fetch(`${getApiBase()}/findings/${findingId}/enrich`, { method: 'POST' })
     const data = await res.json()
     if (data.status === 'enriched') {
       setEnrichedData(prev => ({ ...prev, [findingId]: { cvss_score: data.cvss_score, cve_id: data.cve_id } }))
@@ -107,7 +136,7 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
   }
 
   async function handleDeleteNote(findingId: string, noteId: string) {
-    await fetch(`/api/v1/findings/notes/${noteId}`, { method: 'DELETE' })
+    await fetch(`${getApiBase()}/findings/notes/${noteId}`, { method: 'DELETE' })
     setNotes(prev => ({ ...prev, [findingId]: prev[findingId].filter(n => n.id !== noteId) }))
   }
 
@@ -117,10 +146,10 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
   }
 
   function SortIcon({ field }: { field: typeof sortField }) {
-    if (sortField !== field) return <ChevronDown size={14} className="text-slate-600" />
+    if (sortField !== field) return <ChevronDown size={14} style={{ color: 'var(--fg-4)' }} />
     return sortDir === 'asc'
-      ? <ChevronUp size={14} className="text-cyan-400" />
-      : <ChevronDown size={14} className="text-cyan-400" />
+      ? <ChevronUp size={14} style={{ color: 'var(--accent)' }} />
+      : <ChevronDown size={14} style={{ color: 'var(--accent)' }} />
   }
 
   if (loading) {
@@ -131,7 +160,7 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
     )
   }
 
-  const inputClass = "bg-[#090d14] border border-cyan-900/30 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
+  const filterInputStyle: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--rule)', padding: '5px 10px', fontSize: 12, color: 'var(--fg)', outline: 'none', fontFamily: 'var(--font-mono)', borderRadius: 0 }
 
   return (
     <div className="space-y-3">
@@ -146,32 +175,27 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
           placeholder="Search findings..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className={`${inputClass} w-52`}
+          style={{ ...filterInputStyle, width: 200 }}
         />
-        <select
-          value={filterSeverity}
-          onChange={e => setFilterSeverity(e.target.value)}
-          className={inputClass}
-        >
+        <select value={filterSeverity} onChange={e => setFilterSeverity(e.target.value)} style={filterInputStyle}>
           <option value="all">All Severities</option>
           {SEVERITY_ORDER.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
         </select>
         {frameworks.length > 0 && (
-          <select
-            value={filterFramework}
-            onChange={e => setFilterFramework(e.target.value)}
-            className={inputClass}
-          >
+          <select value={filterFramework} onChange={e => setFilterFramework(e.target.value)} style={filterInputStyle}>
             <option value="all">All Frameworks</option>
             {frameworks.map(f => <option key={f} value={f}>{f.replace(/_/g, ' ')}</option>)}
           </select>
         )}
-        <span className="text-xs text-slate-400 ml-auto">{sorted.length} findings</span>
+        <div className="ml-auto" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AiModelSelect value={aiModelKey} onChange={setAiModelKey} options={aiModels} />
+          <span className="text-xs text-slate-400">{sorted.length} findings</span>
+        </div>
       </div>
 
       {/* Table */}
-      <div className="glass rounded-xl overflow-hidden">
-        <div className="grid grid-cols-[120px_1fr_140px_100px] gap-0 border-b border-cyan-900/20">
+      <div style={{ border: '1px solid var(--rule-strong)', overflow: 'hidden' }}>
+        <div className="grid grid-cols-[120px_1fr_140px_100px] gap-0" style={{ borderBottom: '1px solid var(--rule-strong)' }}>
           {[
             { label: 'Severity', field: 'severity' as const },
             { label: 'Finding', field: 'title' as const },
@@ -195,7 +219,10 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
           sorted.map(finding => (
             <div key={finding.id}>
               <div
-                className="grid grid-cols-[120px_1fr_140px_100px] gap-0 border-b border-cyan-900/10 hover:bg-cyan-950/10 cursor-pointer transition-colors relative"
+                className="grid grid-cols-[120px_1fr_140px_100px] gap-0 cursor-pointer relative"
+                style={{ borderBottom: '1px solid var(--rule-2)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-2)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 onClick={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
               >
                 {/* Left accent bar for critical/high */}
@@ -206,12 +233,20 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
                   />
                 )}
                 <div className="px-4 py-3 flex items-center">
-                  <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold uppercase ${SEVERITY_STYLES[finding.severity] || SEVERITY_STYLES.info}`}>
+                  <span style={{ fontSize: 9, padding: '2px 6px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)', ...SEVERITY_INLINE[finding.severity] || SEVERITY_INLINE.info }}>
                     {finding.severity}
                   </span>
                 </div>
                 <div className="px-4 py-3">
-                  <div className="text-sm text-slate-200 leading-snug">{finding.title}</div>
+                  <div className="text-sm text-slate-200 leading-snug flex items-center gap-2 flex-wrap">
+                    <span>{finding.title}</span>
+                    {finding.overdue && (
+                      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', padding: '1px 6px', color: 'var(--crit)', border: '1px solid var(--crit)', background: 'rgba(232,92,78,0.12)', fontFamily: 'var(--font-mono)' }}>SLA OVERDUE</span>
+                    )}
+                    {(finding.occurrences ?? 0) > 1 && (
+                      <span title={`Seen in ${finding.occurrences} scans`} style={{ fontSize: 9, padding: '1px 6px', color: 'var(--fg-3)', border: '1px solid var(--rule-strong)', fontFamily: 'var(--font-mono)' }}>×{finding.occurrences}</span>
+                    )}
+                  </div>
                   {finding.description && (
                     <div className="text-xs text-slate-400 truncate mt-0.5">{finding.description}</div>
                   )}
@@ -221,7 +256,7 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
                     <div className="text-xs text-slate-300">{finding.framework.replace(/_/g, ' ')}</div>
                   )}
                   {finding.control_id && (
-                    <div className="text-xs font-mono text-cyan-400">{finding.control_id}</div>
+                    <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{finding.control_id}</div>
                   )}
                   {/* Extra framework tags (OWASP / MITRE / PCI) */}
                   {finding.tags && (() => {
@@ -256,7 +291,7 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
 
               {/* Expanded row */}
               {expandedId === finding.id && (
-                <div className="border-b border-cyan-900/20 px-6 py-4 space-y-3" style={{ background: 'rgba(5,8,13,0.6)' }}>
+                <div style={{ borderBottom: '1px solid var(--rule)', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, background: 'var(--bg)' }}>
                   {/* CVE / CVSS row */}
                   {(() => {
                     const cvssScore = enrichedData[finding.id]?.cvss_score ?? finding.cvss_score
@@ -266,7 +301,7 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
                       <div className="flex items-center gap-3 flex-wrap">
                         {cveId && (
                           <a href={`https://nvd.nist.gov/vuln/detail/${cveId}`} target="_blank" rel="noopener noreferrer"
-                             className="text-xs font-mono text-cyan-400 hover:text-cyan-300 underline decoration-dotted">
+                             style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--accent)', textDecoration: 'underline dotted' }}>
                             {cveId}
                           </a>
                         )}
@@ -279,7 +314,7 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
                           <button
                             onClick={() => handleEnrich(finding.id)}
                             disabled={enriching === finding.id}
-                            className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-cyan-900/30 text-cyan-500 hover:text-cyan-300 hover:border-cyan-700/50 disabled:opacity-50 transition-all"
+                            style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '2px 7px', color: 'var(--accent)', border: '1px solid var(--accent-border)', background: 'var(--accent-2)', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
                           >
                             {enriching === finding.id ? <Loader size={10} className="animate-spin" /> : <Zap size={10} />}
                             {enriching === finding.id ? 'Fetching...' : 'Enrich CVE'}
@@ -288,6 +323,14 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
                       </div>
                     )
                   })()}
+                  {(finding.occurrences || finding.first_seen || finding.sla_due) && (
+                    <div className="flex items-center gap-4 flex-wrap" style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
+                      {(finding.occurrences ?? 0) > 1 && <span>seen ×{finding.occurrences}</span>}
+                      {finding.first_seen && <span>first {finding.first_seen.slice(0, 10)}</span>}
+                      {finding.last_seen && <span>last {finding.last_seen.slice(0, 10)}</span>}
+                      {finding.sla_due && <span style={{ color: finding.overdue ? 'var(--crit)' : 'var(--fg-3)' }}>SLA due {finding.sla_due.slice(0, 10)}{finding.overdue ? ' · overdue' : ''}</span>}
+                    </div>
+                  )}
                   {finding.description && (
                     <div>
                       <div className="text-xs font-semibold text-slate-400 uppercase mb-1">Description</div>
@@ -303,19 +346,67 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
                   {finding.evidence && (
                     <div>
                       <div className="text-xs font-semibold text-slate-400 uppercase mb-1">Evidence</div>
-                      <pre className="text-xs font-mono text-slate-300 rounded p-3 overflow-x-auto whitespace-pre-wrap border border-cyan-900/20" style={{ background: '#05080d' }}>{finding.evidence}</pre>
+                      <pre className="on-term" style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-2)', padding: '10px 12px', overflowX: 'auto', whiteSpace: 'pre-wrap', border: '1px solid var(--rule)', background: 'var(--bg-term)', margin: 0 }}>{finding.evidence}</pre>
                     </div>
                   )}
 
-                  {/* Delete finding */}
-                  {onDelete && (
-                    <div className="flex justify-end pt-1">
-                      <button
-                        onClick={() => onDelete(finding.id)}
-                        className="flex items-center gap-1.5 px-3 py-1 rounded text-xs text-red-400 border border-red-900/40 hover:bg-red-900/20 transition-colors"
-                      >
-                        <Trash2 size={11} /> Delete Finding
-                      </button>
+                  {/* Linked screenshot evidence */}
+                  {(shots[finding.id]?.length ?? 0) > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-slate-400 uppercase mb-1">Evidence ({shots[finding.id].length})</div>
+                      <div className="flex flex-wrap gap-2">
+                        {shots[finding.id].map(sh => (
+                          <img
+                            key={sh.id}
+                            src={authedUrl(`/screenshots/${sh.id}/image`)}
+                            alt={sh.url}
+                            title={sh.url}
+                            onClick={() => setLightboxShot(sh.id)}
+                            style={{ width: 160, height: 100, objectFit: 'cover', objectPosition: 'top', border: '1px solid var(--rule)', cursor: 'zoom-in', borderRadius: 3 }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* AI remediation */}
+                  <div>
+                    {aiRemediation[finding.id] && (
+                      <div className="text-sm text-slate-300" style={{ whiteSpace: 'pre-wrap', background: 'var(--bg)', border: '1px solid var(--rule)', borderRadius: 3, padding: '10px 12px', marginBottom: 8, lineHeight: 1.55 }}>
+                        {aiRemediation[finding.id]}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => handleRemediate(finding.id)}
+                      disabled={aiLoading === finding.id}
+                      style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, padding: '5px 10px', color: 'var(--accent)', border: '1px solid var(--accent-border)', background: 'var(--accent-2)', cursor: aiLoading === finding.id ? 'default' : 'pointer', fontFamily: 'var(--font-mono)', opacity: aiLoading === finding.id ? 0.6 : 1 }}
+                    >
+                      {aiLoading === finding.id ? <Loader size={11} className="animate-spin" /> : <Zap size={11} />}
+                      {aiLoading === finding.id ? 'Thinking…' : aiRemediation[finding.id] ? 'Regenerate (AI)' : 'Suggest remediation (AI)'}
+                    </button>
+                  </div>
+
+                  {/* Actions */}
+                  {(onDelete || onRetest) && (
+                    <div className="flex justify-end gap-2 pt-1">
+                      {onRetest && (
+                        <button
+                          onClick={() => onRetest(finding)}
+                          title="Re-run the originating check to verify a fix"
+                          className="flex items-center gap-1.5 px-3 py-1 rounded text-xs"
+                          style={{ color: 'var(--accent)', border: '1px solid var(--accent-border)', background: 'var(--accent-2)' }}
+                        >
+                          <RefreshCw size={11} /> Retest
+                        </button>
+                      )}
+                      {onDelete && (
+                        <button
+                          onClick={() => onDelete(finding.id)}
+                          className="flex items-center gap-1.5 px-3 py-1 rounded text-xs text-red-400 border border-red-900/40 hover:bg-red-900/20 transition-colors"
+                        >
+                          <Trash2 size={11} /> Delete Finding
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -324,7 +415,7 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
                     <div className="text-xs font-semibold text-slate-400 uppercase mb-2">Analyst Notes</div>
                     <div className="space-y-2 mb-2">
                       {(notes[finding.id] || []).map(note => (
-                        <div key={note.id} className="flex items-start gap-2 group rounded-lg px-3 py-2 border border-cyan-900/20" style={{ background: '#05080d' }}>
+                        <div key={note.id} className="flex items-start gap-2 group" style={{ padding: '8px 10px', border: '1px solid var(--rule)', background: 'var(--bg)' }}>
                           <p className="text-xs text-slate-300 flex-1 whitespace-pre-wrap">{note.content}</p>
                           <button
                             onClick={() => handleDeleteNote(finding.id, note.id)}
@@ -345,12 +436,12 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
                         onChange={e => setNoteInput(prev => ({ ...prev, [finding.id]: e.target.value }))}
                         onKeyDown={e => e.key === 'Enter' && handleAddNote(finding.id)}
                         placeholder="Add a note..."
-                        className="flex-1 rounded px-3 py-1.5 text-xs text-slate-200 border border-cyan-900/20 focus:outline-none focus:border-cyan-500/50 bg-[#05080d]"
+                        style={{ flex: 1, fontSize: 11, padding: '5px 10px', background: 'var(--bg)', border: '1px solid var(--rule)', color: 'var(--fg)', outline: 'none', fontFamily: 'var(--font-mono)' }}
                       />
                       <button
                         onClick={() => handleAddNote(finding.id)}
                         disabled={savingNote === finding.id || !noteInput[finding.id]?.trim()}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-cyan-900/40 hover:bg-cyan-800/50 disabled:opacity-40 text-xs text-cyan-400 border border-cyan-900/30 transition-all"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', fontSize: 11, color: 'var(--accent)', border: '1px solid var(--accent-border)', background: 'var(--accent-2)', cursor: 'pointer', opacity: (savingNote === finding.id || !noteInput[finding.id]?.trim()) ? 0.4 : 1, fontFamily: 'var(--font-mono)' }}
                       >
                         <Plus size={11} /> Add
                       </button>
@@ -362,6 +453,21 @@ export default function FindingsTable({ findings, loading, onDelete }: FindingsT
           ))
         )}
       </div>
+
+      {/* Evidence lightbox */}
+      {lightboxShot && (
+        <div
+          onClick={() => setLightboxShot(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}
+        >
+          <img
+            src={authedUrl(`/screenshots/${lightboxShot}/image`)}
+            alt="evidence"
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: '90vw', maxHeight: '88vh', objectFit: 'contain', border: '1px solid var(--rule-strong)' }}
+          />
+        </div>
+      )}
     </div>
   )
 }

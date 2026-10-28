@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { ArrowRight, Plus, Minus } from 'lucide-react'
+import { getApiBase } from '@/lib/config'
 
 interface ScanInfo {
   id: string
@@ -29,12 +30,14 @@ interface DiffResult {
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: 'text-red-400',
-  high: 'text-orange-400',
-  medium: 'text-amber-400',
-  low: 'text-green-400',
-  info: 'text-blue-400',
+  critical: 'var(--crit)',
+  high:     'var(--high)',
+  medium:   'var(--accent)',
+  low:      'var(--ok)',
+  info:     'var(--med)',
 }
+
+const ruleStrong = '1px solid var(--rule-strong)'
 
 interface ScanDiffProps {
   targetId: string
@@ -50,7 +53,7 @@ export default function ScanDiff({ targetId }: ScanDiffProps) {
 
   useEffect(() => {
     if (!targetId) return
-    fetch(`/api/v1/diff/target/${targetId}/scans`)
+    fetch(`${getApiBase()}/diff/target/${targetId}/scans`)
       .then(r => r.json())
       .then(data => {
         setScans(data)
@@ -70,7 +73,7 @@ export default function ScanDiff({ targetId }: ScanDiffProps) {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`/api/v1/diff/scans/${scanA}/${scanB}`)
+      const res = await fetch(`${getApiBase()}/diff/scans/${scanA}/${scanB}`)
       if (!res.ok) throw new Error('Diff failed')
       setDiff(await res.json())
     } catch (e: any) {
@@ -82,27 +85,31 @@ export default function ScanDiff({ targetId }: ScanDiffProps) {
 
   if (scans.length < 2) {
     return (
-      <div className="text-center text-slate-500 py-8 text-sm">
+      <div style={{ textAlign: 'center', color: 'var(--fg-3)', padding: '32px 0', fontSize: 13 }}>
         Run at least two scans on this target to compare results.
       </div>
     )
   }
 
-  const selectClass = "bg-[#0f1419] border border-slate-700 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+  const selectStyle: React.CSSProperties = {
+    background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4,
+    padding: '6px 10px', fontSize: 13, color: 'var(--fg)',
+    outline: 'none', fontFamily: 'var(--font-sans)',
+  }
 
   return (
-    <div className="space-y-4">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Scan selectors */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <select className={selectClass} value={scanA} onChange={e => setScanA(e.target.value)}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <select style={selectStyle} value={scanA} onChange={e => setScanA(e.target.value)}>
           {scans.map(s => (
             <option key={s.id} value={s.id}>
               {s.scan_type} ({s.started_at?.slice(0, 10) || 'pending'}) — {s.finding_count} findings
             </option>
           ))}
         </select>
-        <ArrowRight size={16} className="text-slate-500 flex-shrink-0" />
-        <select className={selectClass} value={scanB} onChange={e => setScanB(e.target.value)}>
+        <ArrowRight size={16} style={{ color: 'var(--fg-3)', flexShrink: 0 }} />
+        <select style={selectStyle} value={scanB} onChange={e => setScanB(e.target.value)}>
           {scans.map(s => (
             <option key={s.id} value={s.id}>
               {s.scan_type} ({s.started_at?.slice(0, 10) || 'pending'}) — {s.finding_count} findings
@@ -112,48 +119,55 @@ export default function ScanDiff({ targetId }: ScanDiffProps) {
         <button
           onClick={runDiff}
           disabled={loading}
-          className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-sm text-white font-medium transition-colors"
+          style={{
+            padding: '6px 14px', borderRadius: 4, fontSize: 13, fontWeight: 600,
+            background: loading ? 'var(--bg-2)' : 'rgba(240,168,58,0.12)',
+            border: '1px solid rgba(240,168,58,0.35)',
+            color: loading ? 'var(--fg-3)' : 'var(--accent)',
+            cursor: loading ? 'not-allowed' : 'pointer',
+            fontFamily: 'var(--font-sans)',
+          }}
         >
           {loading ? 'Comparing...' : 'Compare'}
         </button>
       </div>
 
       {error && (
-        <div className="text-sm text-red-400 bg-red-900/20 rounded-lg px-4 py-2 border border-red-700/30">
+        <div style={{ fontSize: 13, color: 'var(--crit)', background: 'rgba(232,64,64,0.08)', borderRadius: 4, padding: '8px 14px', border: '1px solid rgba(232,64,64,0.3)' }}>
           {error}
         </div>
       )}
 
       {diff && (
-        <div className="space-y-4">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* Summary */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-green-900/20 border border-green-700/30 rounded-xl p-4 text-center">
-              <div className="text-2xl font-bold text-green-400">{diff.summary.new}</div>
-              <div className="text-xs text-green-600 mt-1">New Findings</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+            <div style={{ background: 'rgba(84,175,97,0.08)', border: '1px solid rgba(84,175,97,0.3)', borderRadius: 8, padding: 16, textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--ok)' }}>{diff.summary.new}</div>
+              <div style={{ fontSize: 11, color: 'var(--ok)', opacity: 0.7, marginTop: 4 }}>New Findings</div>
             </div>
-            <div className="bg-blue-900/20 border border-blue-700/30 rounded-xl p-4 text-center">
-              <div className="text-2xl font-bold text-blue-400">{diff.summary.resolved}</div>
-              <div className="text-xs text-blue-600 mt-1">Resolved</div>
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 8, padding: 16, textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--fg-2)' }}>{diff.summary.resolved}</div>
+              <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4 }}>Resolved</div>
             </div>
-            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 text-center">
-              <div className="text-2xl font-bold text-slate-400">{diff.summary.unchanged}</div>
-              <div className="text-xs text-slate-600 mt-1">Unchanged</div>
+            <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 8, padding: 16, textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--fg-3)' }}>{diff.summary.unchanged}</div>
+              <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 4 }}>Unchanged</div>
             </div>
           </div>
 
           {/* New findings */}
           {diff.new_findings.length > 0 && (
             <div>
-              <h4 className="text-sm font-semibold text-green-400 mb-2 flex items-center gap-2">
+              <h4 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600, color: 'var(--ok)', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Plus size={14} /> New Findings ({diff.new_findings.length})
               </h4>
-              <div className="space-y-1">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {diff.new_findings.map(f => (
-                  <div key={f.id} className="flex items-center gap-3 bg-green-900/10 border border-green-800/30 rounded-lg px-4 py-2">
-                    <span className={`text-xs font-semibold uppercase ${SEVERITY_COLORS[f.severity] || 'text-slate-400'}`}>{f.severity}</span>
-                    <span className="text-sm text-slate-300">{f.title}</span>
-                    {f.control_id && <span className="text-xs text-slate-500 ml-auto font-mono">{f.control_id}</span>}
+                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(84,175,97,0.06)', border: '1px solid rgba(84,175,97,0.2)', borderRadius: 4, padding: '6px 12px' }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: SEVERITY_COLORS[f.severity] ?? 'var(--fg-3)', flexShrink: 0 }}>{f.severity}</span>
+                    <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{f.title}</span>
+                    {f.control_id && <span style={{ fontSize: 11, color: 'var(--fg-3)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>{f.control_id}</span>}
                   </div>
                 ))}
               </div>
@@ -163,14 +177,14 @@ export default function ScanDiff({ targetId }: ScanDiffProps) {
           {/* Resolved findings */}
           {diff.resolved_findings.length > 0 && (
             <div>
-              <h4 className="text-sm font-semibold text-blue-400 mb-2 flex items-center gap-2">
+              <h4 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600, color: 'var(--fg-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Minus size={14} /> Resolved ({diff.resolved_findings.length})
               </h4>
-              <div className="space-y-1">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {diff.resolved_findings.map(f => (
-                  <div key={f.id} className="flex items-center gap-3 bg-blue-900/10 border border-blue-800/30 rounded-lg px-4 py-2 opacity-70">
-                    <span className={`text-xs font-semibold uppercase ${SEVERITY_COLORS[f.severity] || 'text-slate-400'}`}>{f.severity}</span>
-                    <span className="text-sm text-slate-400 line-through">{f.title}</span>
+                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, padding: '6px 12px', opacity: 0.7 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: SEVERITY_COLORS[f.severity] ?? 'var(--fg-3)', flexShrink: 0 }}>{f.severity}</span>
+                    <span style={{ fontSize: 13, color: 'var(--fg-3)', textDecoration: 'line-through' }}>{f.title}</span>
                   </div>
                 ))}
               </div>

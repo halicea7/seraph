@@ -30,8 +30,8 @@ export default function ScriptPreview({ script, className = '' }: ScriptPreviewP
   }
 
   return (
-    <div className={`overflow-auto rounded-xl border border-cyan-900/20 ${className}`} style={{ backgroundColor: '#05080d' }}>
-      <pre className="m-0 p-4 text-xs leading-relaxed overflow-x-auto font-mono">
+    <div className={`overflow-auto on-term ${className}`} style={{ border: '1px solid var(--rule)', background: 'var(--bg-term)' }}>
+      <pre style={{ margin: 0, padding: '12px 14px', fontSize: 11, lineHeight: 1.55, overflowX: 'auto', fontFamily: 'var(--font-mono)' }}>
         <code ref={codeRef} className="language-bash" />
       </pre>
     </div>

@@ -1,21 +1,21 @@
-import { useState, useEffect } from 'react'
-import { ShieldAlert, RefreshCw, Eye, ChevronDown, ChevronRight, Clock, AlertTriangle } from 'lucide-react'
-import type { Project } from '../types/index'
+import { useState, useEffect, useCallback } from 'react'
+import Icon from '../components/Icon'
+import EmptyState from '../components/EmptyState'
+import { getApiBase } from '@/lib/config'
+import { useAppStore } from '@/stores/appStore'
+import { useToast } from '@/contexts/ToastContext'
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface WatchedService {
   id: string
   target_id: string
   service_term: string
   last_checked: string | null
-  known_cves: string[]  // parsed from JSON
-  created_at: string
+  known_cves: string[]
 }
 
-interface Target {
-  id: string
-  hostname_or_ip: string
-  project_id: string
-}
+interface Target { id: string; hostname_or_ip: string; project_id: string }
 
 interface CveFinding {
   id: string
@@ -26,234 +26,218 @@ interface CveFinding {
   created_at: string
 }
 
-const SEV_BADGE: Record<string, string> = {
-  critical: 'bg-red-900/40 text-red-300 border-red-500/30',
-  high:     'bg-orange-900/40 text-orange-300 border-orange-500/30',
-  medium:   'bg-amber-900/40 text-amber-300 border-amber-500/30',
-  low:      'bg-green-900/40 text-green-300 border-green-500/30',
-  info:     'bg-blue-900/40 text-blue-300 border-blue-500/30',
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const rule = '1px solid var(--rule)'
+const SEV_COLOR: Record<string, string> = {
+  critical: 'var(--crit)', high: 'var(--high)', medium: 'var(--med)', low: 'var(--low)', info: 'var(--fg-3)',
 }
 
+function ageOf(iso: string | null): string {
+  if (!iso) return '—'
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 0) return '0h'
+  const h = Math.floor(ms / 3_600_000)
+  if (h < 24) return `${h}h`
+  return `${Math.floor(h / 24)}d`
+}
+
+function PageHeader({ title, sub, right }: { title: string; sub: string; right?: React.ReactNode }) {
+  return (
+    <div style={{ borderBottom: rule, padding: '24px var(--pad) 18px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexShrink: 0 }}>
+      <div>
+        <h1 className="mono" style={{ margin: 0, fontWeight: 500, fontSize: 22, letterSpacing: '-0.01em' }}>{title}</h1>
+        <div style={{ color: 'var(--fg-3)', fontSize: 12, marginTop: 6 }}>{sub}</div>
+      </div>
+      {right && <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>{right}</div>}
+    </div>
+  )
+}
+
+function SegBtns({ options, value, onChange }: { options: string[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ display: 'flex', border: rule, height: 26 }}>
+      {options.map((o, i) => (
+        <button key={o} onClick={() => onChange(o)} style={{
+          background: value === o ? 'var(--accent-2)' : 'transparent',
+          color: value === o ? 'var(--accent)' : 'var(--fg-3)',
+          border: 'none', borderLeft: i > 0 ? rule : 'none',
+          padding: '0 10px', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em',
+          cursor: 'pointer', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap',
+        }}>{o}</button>
+      ))}
+    </div>
+  )
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 export default function CveWatch() {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [selectedProject, setSelectedProject] = useState('')
+  const { selectedProject: sp } = useAppStore()
+  const projectId = sp?.id ?? ''
+  const { show: toast } = useToast()
+
   const [targets, setTargets] = useState<Target[]>([])
-  const [watchedServices, setWatchedServices] = useState<Record<string, WatchedService[]>>({})  // target_id → services
+  const [watched, setWatched] = useState<WatchedService[]>([])
   const [cveFindings, setCveFindings] = useState<CveFinding[]>([])
-  const [expandedTarget, setExpandedTarget] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [tab, setTab] = useState('All')
 
-  useEffect(() => {
-    fetch('/api/v1/projects').then(r => r.json()).then(data => {
-      setProjects(data)
-      if (data.length > 0) setSelectedProject(data[0].id)
-    })
-  }, [])
+  // add-watch form
+  const [newTerm, setNewTerm] = useState('')
+  const [newTargetId, setNewTargetId] = useState('')
 
-  useEffect(() => {
-    if (selectedProject) loadData()
-  }, [selectedProject])
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
+    if (!projectId) return
     setLoading(true)
     try {
-      const [targetsRes, wsRes, findingsRes] = await Promise.all([
-        fetch(`/api/v1/projects/${selectedProject}/targets`),
-        fetch(`/api/v1/cve-watch?project_id=${selectedProject}`),
-        fetch(`/api/v1/findings?project_id=${selectedProject}`),
+      const [tRes, wRes, fRes] = await Promise.all([
+        fetch(`${getApiBase()}/projects/${projectId}/targets`),
+        fetch(`${getApiBase()}/cve-watch?project_id=${projectId}`),
+        fetch(`${getApiBase()}/findings?project_id=${projectId}`),
       ])
+      const tData: Target[] = tRes.ok ? await tRes.json() : []
+      setTargets(tData)
+      if (tData.length && !newTargetId) setNewTargetId(tData[0].id)
+      setWatched(wRes.ok ? await wRes.json() : [])
+      const fData: CveFinding[] = fRes.ok ? (await fRes.json()).filter((f: CveFinding) => f.cve_id) : []
+      setCveFindings(fData)
+    } finally { setLoading(false) }
+  }, [projectId, newTargetId])
 
-      const targetsData: Target[] = targetsRes.ok ? await targetsRes.json() : []
-      setTargets(targetsData)
+  useEffect(() => { loadData() }, [loadData])
 
-      // Group watched services by target
-      const wsData: WatchedService[] = wsRes.ok ? await wsRes.json() : []
-      const grouped: Record<string, WatchedService[]> = {}
-      for (const ws of wsData) {
-        if (!grouped[ws.target_id]) grouped[ws.target_id] = []
-        grouped[ws.target_id].push(ws)
-      }
-      setWatchedServices(grouped)
-
-      // CVE-related findings only
-      const findingsData: CveFinding[] = findingsRes.ok ? (await findingsRes.json()).filter((f: CveFinding) => f.cve_id) : []
-      setCveFindings(findingsData)
-    } finally {
-      setLoading(false)
-    }
+  async function addWatched() {
+    if (!newTerm.trim() || !newTargetId) { toast('Enter a service term and target', 'error'); return }
+    const r = await fetch(`${getApiBase()}/cve-watch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_id: newTargetId, service_term: newTerm.trim() }),
+    })
+    if (r.ok) { setNewTerm(''); toast('Now watching for CVEs', 'success'); loadData() }
+    else toast('Failed to add watch', 'error')
   }
 
-  const totalServices = Object.values(watchedServices).flat().length
-  const totalCves = Object.values(watchedServices).flat().reduce((acc, ws) => acc + ws.known_cves.length, 0)
+  async function deleteWatched(id: string) {
+    await fetch(`${getApiBase()}/cve-watch/${id}`, { method: 'DELETE' })
+    setWatched(w => w.filter(x => x.id !== id))
+  }
+
+  async function checkOne(id: string) {
+    await fetch(`${getApiBase()}/cve-watch/${id}/check`, { method: 'POST' })
+    toast('CVE check queued', 'info')
+    setTimeout(loadData, 2500)
+  }
+
+  async function syncAll() {
+    setSyncing(true)
+    try {
+      await fetch(`${getApiBase()}/cve-watch/check-all`, { method: 'POST' })
+      toast('Checking all watched services against NVD…', 'info')
+      setTimeout(loadData, 3000)
+    } finally { setSyncing(false) }
+  }
+
+  const targetName = (id: string) => targets.find(t => t.id === id)?.hostname_or_ip ?? '—'
+
+  // Real filters on real findings.
+  const now = Date.now()
+  const filtered = cveFindings.filter(f => {
+    if (tab === 'Critical') return f.severity === 'critical'
+    if (tab === 'High') return f.severity === 'high'
+    if (tab === 'Last 24h') return f.created_at && (now - new Date(f.created_at).getTime()) < 86_400_000
+    return true
+  })
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            <ShieldAlert size={20} className="text-amber-400" />
-            CVE Watchlist
-          </h1>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Services discovered via auto-probe are watched for new CVEs daily.
-          </p>
-        </div>
-        <button
-          onClick={loadData}
-          disabled={loading}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg glass glass-hover text-xs text-slate-300"
-        >
-          <RefreshCw size={12} className={loading ? 'animate-spin text-cyan-400' : ''} />
-          Refresh
-        </button>
-      </div>
+    <div className="page-enter" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)', color: 'var(--fg)' }}>
+      <PageHeader
+        title="CVE Watch"
+        sub="Watch service versions for newly-published CVEs (NVD). Discovered CVEs surface as findings."
+        right={
+          <button className="btn btn-primary" onClick={syncAll} disabled={syncing || watched.length === 0}>
+            <Icon name="refresh" size={12} color="currentColor" />
+            {syncing ? 'Syncing…' : 'Sync now'}
+          </button>
+        }
+      />
 
-      {/* Project selector */}
-      <div className="flex items-center gap-3">
-        <label className="text-xs text-slate-400 shrink-0">Project</label>
-        <select
-          className="bg-slate-900/60 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500/50"
-          value={selectedProject}
-          onChange={e => setSelectedProject(e.target.value)}
-        >
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-      </div>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-3 gap-4 max-w-lg">
-        <div className="glass rounded-xl p-4 text-center">
-          <p className="text-2xl font-bold text-white">{targets.length}</p>
-          <p className="text-xs text-slate-400 mt-0.5">Targets</p>
-        </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <p className="text-2xl font-bold text-white">{totalServices}</p>
-          <p className="text-xs text-slate-400 mt-0.5">Watched Services</p>
-        </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <p className={`text-2xl font-bold ${totalCves > 0 ? 'text-amber-400' : 'text-white'}`}>{totalCves}</p>
-          <p className="text-xs text-slate-400 mt-0.5">Known CVEs</p>
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <RefreshCw size={24} className="animate-spin text-cyan-400" />
-        </div>
-      ) : targets.length === 0 ? (
-        <div className="glass rounded-xl p-12 text-center text-slate-500">
-          <ShieldAlert size={40} className="mx-auto opacity-20 mb-3" />
-          <p className="text-sm">No targets in this project. Add a target with Auto-Probe enabled to start watching for CVEs.</p>
-        </div>
+      {!projectId ? (
+        <EmptyState icon="eye" title="No project selected" hint="Pick an engagement to watch its services for CVEs." />
       ) : (
-        <div className="space-y-3 max-w-3xl">
-          {targets.map(target => {
-            const services = watchedServices[target.id] || []
-            const expanded = expandedTarget === target.id
-            const cveCount = services.reduce((acc, ws) => acc + ws.known_cves.length, 0)
-
-            return (
-              <div key={target.id} className="glass rounded-xl overflow-hidden">
-                <button
-                  onClick={() => setExpandedTarget(expanded ? null : target.id)}
-                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left"
-                >
-                  {expanded ? <ChevronDown size={14} className="text-slate-400 shrink-0" /> : <ChevronRight size={14} className="text-slate-400 shrink-0" />}
-                  <span className="flex-1 text-sm font-medium text-white">{target.hostname_or_ip}</span>
-                  <div className="flex items-center gap-2">
-                    {services.length > 0 && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full border border-blue-500/30 text-blue-400 bg-blue-900/20">
-                        {services.length} service{services.length !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {cveCount > 0 && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full border border-amber-500/30 text-amber-400 bg-amber-900/20 flex items-center gap-1">
-                        <AlertTriangle size={9} /> {cveCount} CVE{cveCount !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {services.length === 0 && (
-                      <span className="text-[10px] text-slate-500">No services detected yet</span>
-                    )}
-                  </div>
-                </button>
-
-                {expanded && services.length > 0 && (
-                  <div className="border-t border-slate-800/60 divide-y divide-slate-800/40">
-                    {services.map(ws => (
-                      <div key={ws.id} className="px-5 py-3 space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-mono text-cyan-300">{ws.service_term}</span>
-                          {ws.last_checked && (
-                            <span className="text-[10px] text-slate-500 flex items-center gap-1">
-                              <Clock size={9} /> {new Date(ws.last_checked).toLocaleDateString()}
-                            </span>
-                          )}
-                        </div>
-                        {ws.known_cves.length > 0 ? (
-                          <div className="flex flex-wrap gap-1.5">
-                            {ws.known_cves.map(cve => (
-                              <a
-                                key={cve}
-                                href={`https://nvd.nist.gov/vuln/detail/${cve}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30 text-amber-400 bg-amber-900/20 hover:bg-amber-900/40 transition-colors font-mono"
-                              >
-                                {cve}
-                              </a>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-slate-500">No CVEs found yet — will check nightly.</p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {expanded && services.length === 0 && (
-                  <div className="px-5 py-3 border-t border-slate-800/60">
-                    <p className="text-xs text-slate-500">Enable Auto-Probe to automatically discover and watch services on this target.</p>
-                  </div>
-                )}
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', minHeight: 0 }}>
+          {/* Watched services rail */}
+          <div style={{ width: 320, flexShrink: 0, borderRight: rule, padding: '16px var(--pad)', overflowY: 'auto' }}>
+            <div className="smcap" style={{ fontSize: 10, color: 'var(--fg-3)', marginBottom: 10 }}>Watched services ({watched.length})</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+              <select value={newTargetId} onChange={e => setNewTargetId(e.target.value)} style={{ background: 'var(--bg)', border: rule, color: 'var(--fg)', fontFamily: 'var(--font-mono)', fontSize: 11, padding: '6px 8px' }}>
+                {targets.length === 0 && <option value="">— no targets —</option>}
+                {targets.map(t => <option key={t.id} value={t.id}>{t.hostname_or_ip}</option>)}
+              </select>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input value={newTerm} onChange={e => setNewTerm(e.target.value)} onKeyDown={e => e.key === 'Enter' && addWatched()}
+                  placeholder="e.g. Apache httpd 2.4.52" style={{ flex: 1, background: 'var(--bg)', border: rule, color: 'var(--fg)', fontFamily: 'var(--font-mono)', fontSize: 11, padding: '6px 8px' }} />
+                <button className="btn btn-sm" onClick={addWatched}><Icon name="plus" size={11} /></button>
               </div>
-            )
-          })}
-        </div>
-      )}
+            </div>
 
-      {/* CVE Findings from this project */}
-      {cveFindings.length > 0 && (
-        <div className="space-y-3 max-w-3xl">
-          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-            <Eye size={14} className="text-amber-400" />
-            CVE Findings ({cveFindings.length})
-          </h2>
-          <div className="glass rounded-xl divide-y divide-slate-800/40">
-            {cveFindings.map(f => (
-              <div key={f.id} className="px-4 py-3 flex items-start gap-3">
-                <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border font-semibold uppercase ${SEV_BADGE[f.severity] || SEV_BADGE.info}`}>
-                  {f.severity}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-white truncate">{f.title}</p>
-                  {f.cve_id && (
-                    <a
-                      href={`https://nvd.nist.gov/vuln/detail/${f.cve_id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[10px] text-amber-400 font-mono hover:underline"
-                    >
-                      {f.cve_id}
-                    </a>
-                  )}
+            {watched.length === 0 ? (
+              <div style={{ fontSize: 11, color: 'var(--fg-4)' }}>Nothing watched yet. Add a service version above (often auto-populated by scans).</div>
+            ) : watched.map(w => (
+              <div key={w.id} style={{ border: rule, borderRadius: 3, padding: '8px 10px', marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={w.service_term}>{w.service_term}</span>
+                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                    <button className="btn btn-sm" title="Check now" onClick={() => checkOne(w.id)} style={{ padding: '2px 5px' }}><Icon name="refresh" size={10} /></button>
+                    <button title="Delete" onClick={() => deleteWatched(w.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-4)' }}><Icon name="trash" size={11} /></button>
+                  </div>
                 </div>
-                <span className="text-[10px] text-slate-500 shrink-0">
-                  {new Date(f.created_at).toLocaleDateString()}
-                </span>
+                <div className="mono" style={{ fontSize: 9.5, color: 'var(--fg-4)', marginTop: 3 }}>
+                  {targetName(w.target_id)} · {w.known_cves.length} known CVE{w.known_cves.length !== 1 ? 's' : ''} · checked {ageOf(w.last_checked)} ago
+                </div>
               </div>
             ))}
+          </div>
+
+          {/* Detected CVEs */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px var(--pad)', borderBottom: rule }}>
+              <span className="smcap" style={{ fontSize: 10, color: 'var(--fg-3)' }}>Detected CVEs ({filtered.length})</span>
+              <SegBtns options={['All', 'Critical', 'High', 'Last 24h']} value={tab} onChange={setTab} />
+            </div>
+            {loading ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px 0' }}><Icon name="refresh" size={24} color="var(--accent)" /></div>
+            ) : filtered.length === 0 ? (
+              <EmptyState icon="eye" title="No CVEs detected" hint="CVEs found against watched services (or carrying a CVE id in scans) appear here." />
+            ) : (
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th style={{ width: 30 }}></th>
+                    <th style={{ width: 160 }}>CVE</th>
+                    <th style={{ width: 90 }}>Severity</th>
+                    <th>Title</th>
+                    <th style={{ width: 70 }}>Age</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(f => {
+                    const c = SEV_COLOR[f.severity] ?? 'var(--fg-3)'
+                    return (
+                      <tr key={f.id}>
+                        <td style={{ textAlign: 'center' }}><span style={{ display: 'inline-block', width: 10, height: 10, background: c }} /></td>
+                        <td>{f.cve_id
+                          ? <a href={`https://nvd.nist.gov/vuln/detail/${f.cve_id}`} target="_blank" rel="noreferrer" className="mono" style={{ color: 'var(--accent)', fontSize: 12 }}>{f.cve_id}</a>
+                          : <span className="mono" style={{ color: 'var(--fg-3)', fontSize: 12 }}>—</span>}</td>
+                        <td><span className="mono" style={{ color: c, fontSize: 11, textTransform: 'uppercase' }}>{f.severity}</span></td>
+                        <td style={{ fontSize: 13 }}>{f.title}</td>
+                        <td><span className="mono" style={{ color: 'var(--fg-3)', fontSize: 11 }}>{ageOf(f.created_at)}</span></td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

@@ -1,22 +1,27 @@
-import { useState, useEffect } from 'react'
-import {
-  KeyRound, Plus, Copy, Check, Trash2, Eye, EyeOff, ShieldAlert,
-} from 'lucide-react'
-import type { Credential, CredType, CredSource, Project } from '../types/index'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
+import Icon from '../components/Icon'
+import type { Credential, CredType, CredSource } from '../types/index'
+import { getApiBase } from '@/lib/config'
+import { useAppStore } from '@/stores/appStore'
+import { useToast } from '@/contexts/ToastContext'
 
-const CRED_TYPE_STYLES: Record<CredType, string> = {
-  password:  'bg-cyan-950/60 text-cyan-400 border-cyan-500/40',
-  hash:      'bg-purple-950/60 text-purple-400 border-purple-500/40',
-  key:       'bg-amber-950/60 text-amber-400 border-amber-500/40',
-  token:     'bg-blue-950/60 text-blue-400 border-blue-500/40',
-  other:     'bg-slate-800/60 text-slate-400 border-slate-600/40',
+const CRED_TYPES: CredType[] = ['password', 'hash', 'key', 'token', 'other']
+const CRED_SOURCES: CredSource[] = ['manual', 'c2_loot', 'osint', 'brute_force']
+
+const TYPE_STYLE: Record<CredType, { color: string; bg: string; border: string }> = {
+  password: { color: 'var(--accent)', bg: 'rgba(240,168,58,0.08)',  border: 'rgba(240,168,58,0.25)' },
+  hash:     { color: '#a855f7',      bg: 'rgba(168,85,247,0.08)',  border: 'rgba(168,85,247,0.25)' },
+  key:      { color: 'var(--accent)', bg: 'rgba(240,168,58,0.08)', border: 'rgba(240,168,58,0.25)' },
+  token:    { color: 'var(--med)',   bg: 'rgba(240,168,58,0.06)',  border: 'rgba(240,168,58,0.15)' },
+  other:    { color: 'var(--fg-3)', bg: 'rgba(100,116,139,0.08)', border: 'rgba(100,116,139,0.2)' },
 }
 
-const SOURCE_STYLES: Record<CredSource, string> = {
-  manual:      'text-slate-400',
-  c2_loot:     'text-red-400',
-  osint:       'text-yellow-400',
-  brute_force: 'text-orange-400',
+const SOURCE_COLOR: Record<CredSource, string> = {
+  manual:      'var(--fg-3)',
+  c2_loot:     'var(--crit)',
+  osint:       'var(--accent)',
+  brute_force: '#f97316',
 }
 
 const SOURCE_LABELS: Record<CredSource, string> = {
@@ -35,44 +40,89 @@ const EMPTY_FORM = {
   notes: '',
 }
 
+const rule = '1px solid var(--rule)'
+
+function KPICell({
+  label, value, sub, accentVar, divider,
+}: {
+  label: string; value: number | string; sub?: string; accentVar?: string; divider?: boolean
+}) {
+  const color = accentVar ? `var(${accentVar})` : 'var(--fg)'
+  return (
+    <div style={{ padding: '18px var(--pad)', borderLeft: divider ? rule : 'none' }}>
+      <div className="smcap">{label}</div>
+      <div className="mono tnum" style={{ fontSize: 32, color, marginTop: 6, lineHeight: 1, letterSpacing: '-0.02em', fontWeight: 500 }}>
+        {String(value).padStart(2, '0')}
+      </div>
+      {sub && <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 8, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{sub}</div>}
+    </div>
+  )
+}
+
+function TypePill({ type }: { type: CredType }) {
+  const s = TYPE_STYLE[type]
+  return (
+    <span style={{
+      fontSize: 9, padding: '2px 7px', fontWeight: 700, textTransform: 'uppercase',
+      letterSpacing: '0.08em', fontFamily: 'var(--font-mono)',
+      color: s.color, background: s.bg, border: `1px solid ${s.border}`,
+    }}>{type}</span>
+  )
+}
+
+function SegBtns({ options, value, onChange }: { options: string[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ display: 'flex', border: rule, height: 26 }}>
+      {options.map((o, i) => (
+        <button key={o} onClick={() => onChange(o)} style={{
+          background: value === o ? 'var(--accent-2)' : 'transparent',
+          color: value === o ? 'var(--accent)' : 'var(--fg-3)',
+          border: 'none', borderLeft: i > 0 ? rule : 'none',
+          padding: '0 10px', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em',
+          cursor: 'pointer', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap',
+        }}>{o}</button>
+      ))}
+    </div>
+  )
+}
+
 export default function CredentialVault() {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [selectedProject, setSelectedProject] = useState('')
+  const { selectedProject: sp } = useAppStore()
+  const projectId = sp?.id ?? ''
+  const toast = useToast()
+  const navigate = useNavigate()
+  const importInputRef = useRef<HTMLInputElement>(null)
   const [credentials, setCredentials] = useState<Credential[]>([])
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set())
+  // Secrets are never in `credentials` — fetched on demand via /reveal(-batch) and cached here.
+  const [revealedSecrets, setRevealedSecrets] = useState<Record<string, string>>({})
   const [copied, setCopied] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string>('all')
   const [filterSource, setFilterSource] = useState<string>('all')
   const [search, setSearch] = useState('')
 
   useEffect(() => {
-    fetch('/api/v1/projects')
-      .then(r => r.json())
-      .then(data => {
-        setProjects(data)
-        if (data.length > 0) setSelectedProject(data[0].id)
-      })
-  }, [])
-
-  useEffect(() => {
-    if (selectedProject) loadCredentials()
-  }, [selectedProject])
+    loadCredentials()
+  }, [projectId])
 
   async function loadCredentials() {
-    const res = await fetch(`/api/v1/credentials?project_id=${selectedProject}`)
+    const url = projectId
+      ? `${getApiBase()}/credentials?project_id=${projectId}`
+      : `${getApiBase()}/credentials`
+    const res = await fetch(url)
     setCredentials(await res.json())
   }
 
   async function handleSave() {
-    if (!selectedProject) return
+    if (!projectId) return
     setSaving(true)
-    await fetch('/api/v1/credentials', {
+    await fetch(`${getApiBase()}/credentials`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, project_id: selectedProject }),
+      body: JSON.stringify({ ...form, project_id: projectId }),
     })
     setSaving(false)
     setShowModal(false)
@@ -81,16 +131,83 @@ export default function CredentialVault() {
   }
 
   async function handleDelete(id: string) {
-    await fetch(`/api/v1/credentials/${id}`, { method: 'DELETE' })
+    await fetch(`${getApiBase()}/credentials/${id}`, { method: 'DELETE' })
     setCredentials(prev => prev.filter(c => c.id !== id))
   }
 
-  function toggleReveal(id: string) {
-    setRevealedIds(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
+  // Import a hash file — one hash per line (raw hash kept intact, NTLM colons preserved).
+  async function handleImportHashes(file: File) {
+    if (!projectId) { toast.error('Select a project before importing'); return }
+    const text = await file.text()
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    if (lines.length === 0) { toast.error('No hashes found in file'); return }
+    let created = 0
+    for (const secret of lines) {
+      const res = await fetch(`${getApiBase()}/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: '', secret, cred_type: 'hash', source: 'manual',
+          target_host: '', notes: `Imported from ${file.name}`, project_id: projectId,
+        }),
+      })
+      if (res.ok) created++
+    }
+    toast.success(`Imported ${created} hash${created !== 1 ? 'es' : ''}`)
+    loadCredentials()
+  }
+
+  // Export stored hashes as a plain hashcat input file (one hash per line).
+  // Secrets aren't on `credentials` any more — fetch them via the audited
+  // batch-reveal endpoint right before export.
+  async function handleExportHashcat() {
+    const hashes = credentials.filter(c => c.cred_type === 'hash' && c.has_secret)
+    if (hashes.length === 0) { toast.error('No hashes to export'); return }
+    const res = await fetch(`${getApiBase()}/credentials/reveal-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: hashes.map(c => c.id) }),
     })
+    const revealed: { id: string; secret: string }[] = await res.json()
+    const blob = new Blob([revealed.map(r => r.secret).join('\n') + '\n'], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `hashes-${sp?.name ?? 'all'}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success(`Exported ${revealed.length} hash${revealed.length !== 1 ? 'es' : ''}`)
+  }
+
+  // Hand off stored hashes to the Password Auditing page, pre-selected for cracking.
+  function handleSendToCracking() {
+    const credIds = credentials.filter(c => c.cred_type === 'hash').map(c => c.id)
+    if (credIds.length === 0) { toast.error('No hashes to crack'); return }
+    navigate('/cracking', { state: { credIds } })
+  }
+
+  async function fetchSecret(id: string): Promise<string> {
+    if (revealedSecrets[id] !== undefined) return revealedSecrets[id]
+    const res = await fetch(`${getApiBase()}/credentials/${id}/reveal`, { method: 'POST' })
+    const data = await res.json()
+    setRevealedSecrets(prev => ({ ...prev, [id]: data.secret ?? '' }))
+    return data.secret ?? ''
+  }
+
+  async function toggleReveal(id: string) {
+    if (revealedIds.has(id)) {
+      setRevealedIds(prev => { const next = new Set(prev); next.delete(id); return next })
+      return
+    }
+    await fetchSecret(id)
+    setRevealedIds(prev => new Set(prev).add(id))
+  }
+
+  async function copySecret(id: string, key: string) {
+    const secret = await fetchSecret(id)
+    navigator.clipboard.writeText(secret)
+    setCopied(key)
+    setTimeout(() => setCopied(null), 1500)
   }
 
   function copyText(text: string, key: string) {
@@ -109,211 +226,349 @@ export default function CredentialVault() {
     return true
   })
 
-  const inputClass = "w-full rounded px-3 py-2 text-sm text-slate-200 focus:outline-none border border-cyan-900/20 focus:border-cyan-500/50 bg-[#05080d]"
+  // KPI computations
+  const total = credentials.length
+  const byType = CRED_TYPES.reduce<Record<string, number>>((a, t) => ({ ...a, [t]: credentials.filter(c => c.cred_type === t).length }), {})
+  const fromC2 = credentials.filter(c => c.source === 'c2_loot').length
+  const uniqueHosts = new Set(credentials.map(c => c.target_host).filter(Boolean)).size
+
+  // Password audit summary from real data
+  const sourceBreakdown = CRED_SOURCES.map(s => ({
+    label: SOURCE_LABELS[s],
+    count: credentials.filter(c => c.source === s).length,
+    color: SOURCE_COLOR[s],
+  })).filter(s => s.count > 0)
+
+  const typeBreakdown = CRED_TYPES.map(t => ({
+    label: t,
+    count: credentials.filter(c => c.cred_type === t).length,
+    style: TYPE_STYLE[t],
+  })).filter(t => t.count > 0)
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    boxSizing: 'border-box',
+    background: 'var(--bg)',
+    border: rule,
+    padding: '6px 10px',
+    fontSize: 12,
+    color: 'var(--fg)',
+    fontFamily: 'var(--font-sans)',
+    outline: 'none',
+  }
 
   return (
-    <div className="p-6 flex flex-col gap-6 h-full min-h-0">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-shrink-0">
+    <div className="page-enter" style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Page header */}
+      <div style={{ padding: '18px var(--pad)', borderBottom: rule, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 }}>
         <div>
-          <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
-            <KeyRound size={20} className="text-cyan-400" />
-            Credential Vault
-          </h1>
-          <p className="text-sm text-slate-400 mt-0.5">Harvested credentials, hashes, keys, and tokens</p>
+          <div className="smcap" style={{ marginBottom: 4 }}>{sp?.name ?? 'All Projects'}</div>
+          <h1 className="mono" style={{ margin: 0, fontWeight: 500, fontSize: 22, letterSpacing: '-0.01em' }}>Credential Vault</h1>
+          <div style={{ color: 'var(--fg-3)', fontSize: 12, marginTop: 6 }}>
+            Captured passwords, hashes, keys, and tokens. AES-256 at rest, redacted by default.
+          </div>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          disabled={!selectedProject}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-sm text-white font-medium transition-all hover:shadow-glow-cyan"
-        >
-          <Plus size={15} /> Add Credential
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".txt,.hash,.lst,text/plain"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (file) handleImportHashes(file)
+              e.target.value = ''
+            }}
+          />
+          <button className="btn" onClick={() => importInputRef.current?.click()} disabled={!projectId}>
+            <Icon name="upload" size={11} /> Import hashes
+          </button>
+          <button className="btn" onClick={handleExportHashcat}>
+            <Icon name="download" size={11} /> Export hashcat
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowModal(true)}
+            disabled={!projectId}
+          >
+            <Icon name="plus" size={11} color="#1a1408" /> Add credential
+          </button>
+        </div>
       </div>
 
-      {/* Project selector + filters */}
-      <div className="flex flex-wrap gap-3 items-center flex-shrink-0">
-        <select
-          value={selectedProject}
-          onChange={e => setSelectedProject(e.target.value)}
-          className="rounded px-3 py-1.5 text-sm text-slate-200 border border-cyan-900/20 focus:outline-none focus:border-cyan-500/50 bg-[#090d14]"
-        >
-          <option value="">Select project...</option>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+      {/* KPI strip */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', borderBottom: rule }}>
+        <KPICell label="Credentials · captured" value={total} sub={`${uniqueHosts} host${uniqueHosts !== 1 ? 's' : ''}`} />
+        <KPICell label="Passwords" value={byType.password ?? 0} sub="plaintext / cracked" accentVar="--ok" divider />
+        <KPICell label="Hashes" value={byType.hash ?? 0} sub="ntlm · kerberos · etc" accentVar="--warn" divider />
+        <KPICell label="Keys + tokens" value={(byType.key ?? 0) + (byType.token ?? 0)} sub="ssh · api · bearer" divider />
+        <KPICell label="From C2 loot" value={fromC2} sub={fromC2 === 0 ? 'none harvested' : 'session harvest'} accentVar={fromC2 > 0 ? '--crit' : undefined} divider />
+      </div>
 
-        <select
+      {/* Filter strip */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px var(--pad)', borderBottom: rule, background: 'var(--bg-2)', flexWrap: 'wrap' }}>
+        <SegBtns
+          options={['all', ...CRED_TYPES.filter(t => byType[t] > 0)]}
           value={filterType}
-          onChange={e => setFilterType(e.target.value)}
-          className="rounded px-3 py-1.5 text-sm text-slate-200 border border-cyan-900/20 focus:outline-none focus:border-cyan-500/50 bg-[#090d14]"
-        >
-          <option value="all">All Types</option>
-          {(['password','hash','key','token','other'] as CredType[]).map(t => (
-            <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
-          ))}
-        </select>
+          onChange={setFilterType}
+        />
 
-        <select
+        <div style={{ width: 1, height: 18, background: 'var(--rule)' }} />
+
+        <SegBtns
+          options={['all', ...CRED_SOURCES.filter(s => credentials.some(c => c.source === s))]}
           value={filterSource}
-          onChange={e => setFilterSource(e.target.value)}
-          className="rounded px-3 py-1.5 text-sm text-slate-200 border border-cyan-900/20 focus:outline-none focus:border-cyan-500/50 bg-[#090d14]"
-        >
-          <option value="all">All Sources</option>
-          {(['manual','c2_loot','osint','brute_force'] as CredSource[]).map(s => (
-            <option key={s} value={s}>{SOURCE_LABELS[s]}</option>
-          ))}
-        </select>
+          onChange={setFilterSource}
+        />
 
         <input
           type="text"
-          placeholder="Search..."
+          placeholder="Search…"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="rounded px-3 py-1.5 text-sm text-slate-200 border border-cyan-900/20 focus:outline-none focus:border-cyan-500/50 bg-[#090d14] w-44"
+          style={{ marginLeft: 8, width: 150 }}
         />
 
-        <span className="ml-auto text-xs text-slate-500 font-mono">{filtered.length} credential{filtered.length !== 1 ? 's' : ''}</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <button className="btn btn-sm" onClick={loadCredentials}>
+            <Icon name="refresh" size={9} /> Refresh
+          </button>
+          <button className="btn btn-sm" onClick={() => setRevealedIds(new Set())}>
+            <Icon name="eye_off" size={9} /> Hide all
+          </button>
+        </div>
+
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+          {filtered.length} of {total}
+        </span>
       </div>
 
       {/* Table */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div style={{ overflowY: 'auto' }}>
         {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-slate-500">
-            <ShieldAlert size={36} className="mb-3 opacity-30 text-cyan-600" />
-            <p className="text-sm">{credentials.length === 0 ? 'No credentials stored yet' : 'No credentials match current filters'}</p>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', color: 'var(--fg-3)' }}>
+            <Icon name="shield" size={32} color="var(--rule-strong)" />
+            <p style={{ margin: '12px 0 0', fontSize: 13, fontFamily: 'var(--font-mono)' }}>
+              {credentials.length === 0 ? 'No credentials stored yet' : 'No credentials match current filters'}
+            </p>
           </div>
         ) : (
-          <div className="glass rounded-xl overflow-hidden">
-            {/* Header row */}
-            <div className="grid grid-cols-[120px_160px_1fr_120px_130px_100px] gap-0 border-b border-cyan-900/20 px-4 py-2.5">
-              {['Type', 'Username', 'Secret', 'Source', 'Target Host', 'Actions'].map(h => (
-                <div key={h} className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{h}</div>
-              ))}
-            </div>
-
-            {filtered.map(cred => {
-              const revealed = revealedIds.has(cred.id)
-              return (
-                <div key={cred.id} className="grid grid-cols-[120px_160px_1fr_120px_130px_100px] gap-0 border-b border-cyan-900/10 hover:bg-cyan-950/10 transition-colors px-4 py-3 items-center">
-                  {/* Type */}
-                  <div>
-                    <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold uppercase ${CRED_TYPE_STYLES[cred.cred_type]}`}>
-                      {cred.cred_type}
-                    </span>
-                  </div>
-
-                  {/* Username */}
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-sm text-slate-200 font-mono truncate">{cred.username || '—'}</span>
-                    {cred.username && (
-                      <button onClick={() => copyText(cred.username, `u-${cred.id}`)} className="text-slate-600 hover:text-cyan-400 flex-shrink-0">
-                        {copied === `u-${cred.id}` ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Secret */}
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-sm text-slate-300 font-mono truncate">
-                      {revealed ? cred.secret : '••••••••••••'}
-                    </span>
-                    <button onClick={() => toggleReveal(cred.id)} className="text-slate-600 hover:text-cyan-400 flex-shrink-0">
-                      {revealed ? <EyeOff size={11} /> : <Eye size={11} />}
-                    </button>
-                    {cred.secret && (
-                      <button onClick={() => copyText(cred.secret, `s-${cred.id}`)} className="text-slate-600 hover:text-cyan-400 flex-shrink-0">
-                        {copied === `s-${cred.id}` ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Source */}
-                  <div className={`text-xs font-medium ${SOURCE_STYLES[cred.source]}`}>
-                    {SOURCE_LABELS[cred.source]}
-                  </div>
-
-                  {/* Target Host */}
-                  <div className="text-xs font-mono text-slate-400 truncate">{cred.target_host || '—'}</div>
-
-                  {/* Actions */}
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleDelete(cred.id)}
-                      className="text-slate-600 hover:text-red-400 transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+          <table className="data">
+            <thead>
+              <tr>
+                <th style={{ width: 36 }}>#</th>
+                <th style={{ width: 160 }}>User</th>
+                <th style={{ width: 100 }}>Kind</th>
+                <th>Secret</th>
+                <th style={{ width: 110 }}>Source</th>
+                <th style={{ width: 160 }}>Target host</th>
+                <th style={{ width: 80 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((cred, idx) => {
+                const revealed = revealedIds.has(cred.id)
+                return (
+                  <tr key={cred.id}>
+                    <td className="mono tnum" style={{ color: 'var(--fg-4)' }}>{String(idx + 1).padStart(2, '0')}</td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        <span className="mono" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {cred.username || '—'}
+                        </span>
+                        {cred.username && (
+                          <button
+                            onClick={() => copyText(cred.username, `u-${cred.id}`)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === `u-${cred.id}` ? 'var(--ok)' : 'var(--fg-4)', padding: 0, flexShrink: 0 }}
+                          >
+                            <Icon name={copied === `u-${cred.id}` ? 'check' : 'copy'} size={11} color="currentColor" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td><TypePill type={cred.cred_type} /></td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {revealed ? (revealedSecrets[cred.id] ?? '') : '••••••••••••'}
+                        </span>
+                        <button
+                          onClick={() => toggleReveal(cred.id)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 0, flexShrink: 0 }}
+                        >
+                          <Icon name={revealed ? 'eye_off' : 'eye'} size={11} color="currentColor" />
+                        </button>
+                        {cred.has_secret && (
+                          <button
+                            onClick={() => copySecret(cred.id, `s-${cred.id}`)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === `s-${cred.id}` ? 'var(--ok)' : 'var(--fg-4)', padding: 0, flexShrink: 0 }}
+                          >
+                            <Icon name={copied === `s-${cred.id}` ? 'check' : 'copy'} size={11} color="currentColor" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td style={{ fontSize: 11, fontWeight: 500, color: SOURCE_COLOR[cred.source] }}>{SOURCE_LABELS[cred.source]}</td>
+                    <td className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {cred.target_host || '—'}
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button className="btn btn-sm" title="Copy secret" onClick={() => copySecret(cred.id, `c-${cred.id}`)}>
+                          <Icon name="copy" size={9} />
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          title="Delete"
+                          onClick={() => handleDelete(cred.id)}
+                          onMouseEnter={e => (e.currentTarget.style.color = 'var(--crit)')}
+                          onMouseLeave={e => (e.currentTarget.style.color = '')}
+                        >
+                          <Icon name="trash" size={9} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         )}
+      </div>
+
+      {/* Bottom strip — cracking queue + audit */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', borderTop: rule }}>
+        {/* Cracking queue */}
+        <div style={{ border: 'none' }}>
+          <div className="sec-h">
+            <span className="title">Hashcat Queue</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-4)' }}>no active jobs</span>
+          </div>
+          {byType.hash === 0 ? (
+            <div style={{ padding: 'var(--pad)', fontSize: 12, color: 'var(--fg-3)' }}>
+              No hashes stored. Harvest them from a C2 session or add manually.
+            </div>
+          ) : (
+            <div style={{ padding: 'var(--pad)' }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 12 }}>
+                {byType.hash} hash{byType.hash !== 1 ? 'es' : ''} stored. Hashcat integration is configured via Settings → Tools.
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-sm" onClick={handleExportHashcat}>
+                  <Icon name="download" size={9} /> Export hashcat
+                </button>
+                <button className="btn btn-sm btn-primary" onClick={handleSendToCracking}>
+                  <Icon name="target" size={9} color="#1a1408" /> Send to cracking
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Credential audit */}
+        <div style={{ borderLeft: rule }}>
+          <div className="sec-h">
+            <span className="title">Credential Audit</span>
+          </div>
+          <div style={{ padding: 'var(--pad)' }}>
+            {total === 0 ? (
+              <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>No credentials yet.</div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', marginBottom: 12 }}>
+                  {typeBreakdown.map(t => (
+                    <div key={t.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px dashed var(--rule)' }}>
+                      <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>{t.label}</span>
+                      <TypePill type={t.label as CredType} />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 8, padding: '10px 12px', background: 'var(--bg-2)', border: rule }}>
+                  <div className="smcap" style={{ marginBottom: 8 }}>By source</div>
+                  {sourceBreakdown.map(s => (
+                    <div key={s.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px dashed var(--rule)' }}>
+                      <span className="mono" style={{ fontSize: 11, color: s.color }}>{s.label}</span>
+                      <span className="mono tnum" style={{ fontSize: 11, color: 'var(--fg-3)' }}>×{s.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Add Credential Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
-          <div className="glass rounded-2xl p-6 w-full max-w-md border border-cyan-900/30 shadow-glow-cyan" style={{ backdropFilter: 'blur(16px)' }}>
-            <h2 className="text-base font-bold text-slate-100 mb-5 flex items-center gap-2">
-              <KeyRound size={16} className="text-cyan-400" /> Add Credential
+        <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.75)' }}>
+          <div style={{ background: 'var(--bg-2)', border: rule, padding: 24, width: '100%', maxWidth: 420, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+            <h2 style={{ margin: '0 0 18px', fontSize: 14, fontWeight: 700, color: 'var(--fg)', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-mono)' }}>
+              <Icon name="key" size={14} color="var(--accent)" /> Add Credential
             </h2>
 
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">Type</label>
-                  <select value={form.cred_type} onChange={e => setForm(f => ({ ...f, cred_type: e.target.value as CredType }))} className={inputClass}>
-                    {(['password','hash','key','token','other'] as CredType[]).map(t => (
-                      <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
-                    ))}
+                  <label style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginBottom: 5, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Kind</label>
+                  <select value={form.cred_type} onChange={e => setForm(f => ({ ...f, cred_type: e.target.value as CredType }))} style={inputStyle}>
+                    {CRED_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">Source</label>
-                  <select value={form.source} onChange={e => setForm(f => ({ ...f, source: e.target.value as CredSource }))} className={inputClass}>
-                    {(['manual','c2_loot','osint','brute_force'] as CredSource[]).map(s => (
-                      <option key={s} value={s}>{SOURCE_LABELS[s]}</option>
-                    ))}
+                  <label style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginBottom: 5, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Source</label>
+                  <select value={form.source} onChange={e => setForm(f => ({ ...f, source: e.target.value as CredSource }))} style={inputStyle}>
+                    {CRED_SOURCES.map(s => <option key={s} value={s}>{SOURCE_LABELS[s]}</option>)}
                   </select>
                 </div>
               </div>
-
               <div>
-                <label className="text-xs text-slate-500 mb-1 block">Username / Account</label>
-                <input value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} className={inputClass} placeholder="administrator" />
+                <label style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginBottom: 5, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Username / Account</label>
+                <input value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} style={inputStyle} placeholder="administrator" />
               </div>
-
               <div>
-                <label className="text-xs text-slate-500 mb-1 block">Secret (password / hash / key)</label>
-                <input type="password" value={form.secret} onChange={e => setForm(f => ({ ...f, secret: e.target.value }))} className={inputClass} placeholder="••••••••" />
+                <label style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginBottom: 5, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  {form.cred_type === 'key' ? 'Private key (PEM)' : 'Secret (password / hash)'}
+                </label>
+                {form.cred_type === 'key' ? (
+                  <>
+                    <textarea
+                      value={form.secret}
+                      onChange={e => setForm(f => ({ ...f, secret: e.target.value }))}
+                      style={{ ...inputStyle, resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 11 }}
+                      rows={6}
+                      placeholder={'-----BEGIN OPENSSH PRIVATE KEY-----\n…paste or load a private key…\n-----END OPENSSH PRIVATE KEY-----'}
+                    />
+                    <label className="btn btn-sm" style={{ marginTop: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
+                      <Icon name="upload" size={11} style={{ marginRight: 5 }} /> Load from file
+                      <input type="file" accept=".pem,.key,.ppk,.txt,id_rsa,id_ed25519" style={{ display: 'none' }}
+                        onChange={async e => { const f = e.target.files?.[0]; if (f) { const text = await f.text(); setForm(s => ({ ...s, secret: text })) } }} />
+                    </label>
+                  </>
+                ) : (
+                  <input type="password" value={form.secret} onChange={e => setForm(f => ({ ...f, secret: e.target.value }))} style={inputStyle} placeholder="••••••••" />
+                )}
               </div>
-
               <div>
-                <label className="text-xs text-slate-500 mb-1 block">Target Host</label>
-                <input value={form.target_host} onChange={e => setForm(f => ({ ...f, target_host: e.target.value }))} className={inputClass} placeholder="192.168.1.10" />
+                <label style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginBottom: 5, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Target host</label>
+                <input value={form.target_host} onChange={e => setForm(f => ({ ...f, target_host: e.target.value }))} style={inputStyle} placeholder="192.168.1.10" />
               </div>
-
               <div>
-                <label className="text-xs text-slate-500 mb-1 block">Notes</label>
-                <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className={inputClass} rows={2} placeholder="Found in /etc/shadow, domain admin..." />
+                <label style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginBottom: 5, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Notes</label>
+                <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} style={{ ...inputStyle, resize: 'vertical' }} rows={2} placeholder="Found in /etc/shadow…" />
               </div>
             </div>
 
-            <div className="flex gap-3 mt-5">
-              <button
-                onClick={() => { setShowModal(false); setForm(EMPTY_FORM) }}
-                className="flex-1 py-2 rounded-lg border border-cyan-900/30 text-sm text-slate-400 hover:text-slate-200 hover:border-cyan-700/50 transition-all"
-              >
+            <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+              <button onClick={() => { setShowModal(false); setForm(EMPTY_FORM) }} className="btn btn-ghost" style={{ flex: 1, justifyContent: 'center' }}>
                 Cancel
               </button>
               <button
                 onClick={handleSave}
                 disabled={saving || !form.secret}
-                className="flex-1 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-sm text-white font-medium transition-all hover:shadow-glow-cyan"
+                className="btn btn-primary"
+                style={{ flex: 1, justifyContent: 'center', opacity: saving || !form.secret ? 0.5 : 1, cursor: saving || !form.secret ? 'not-allowed' : 'pointer' }}
               >
-                {saving ? 'Saving...' : 'Save Credential'}
+                {saving ? 'Saving…' : 'Save credential'}
               </button>
             </div>
           </div>

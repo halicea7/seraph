@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { Bell, Check, Trash2, X } from 'lucide-react'
+import { getApiBase, wsUrl } from '@/lib/config'
 
 interface Notification {
   id: string
@@ -12,16 +14,16 @@ interface Notification {
   scan_id: string | null
 }
 
-const TYPE_STYLES: Record<string, string> = {
-  info:     'text-blue-400',
-  warning:  'text-amber-400',
-  critical: 'text-red-400',
+const TYPE_COLOR: Record<string, string> = {
+  info:     'var(--fg-2)',
+  warning:  'var(--warn)',
+  critical: 'var(--crit)',
 }
 
-const TYPE_DOT: Record<string, string> = {
-  info:     'bg-blue-400',
-  warning:  'bg-amber-400',
-  critical: 'bg-red-400',
+const TYPE_DOT_COLOR: Record<string, string> = {
+  info:     'var(--fg-3)',
+  warning:  'var(--warn)',
+  critical: 'var(--crit)',
 }
 
 function timeAgo(iso: string | null): string {
@@ -38,11 +40,13 @@ function timeAgo(iso: string | null): string {
 export default function NotificationBell() {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [open, setOpen] = useState(false)
+  const [popupPos, setPopupPos] = useState({ top: 0, left: 0 })
   const ref = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const navigate = useNavigate()
 
   function load() {
-    fetch('/api/v1/notifications')
+    fetch(`${getApiBase()}/notifications`)
       .then(r => r.ok ? r.json() : [])
       .then(setNotifications)
       .catch(() => {})
@@ -56,8 +60,7 @@ export default function NotificationBell() {
     let reconnectTimer: ReturnType<typeof setTimeout>
 
     function connect() {
-      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      ws = new WebSocket(`${proto}://${window.location.host}/ws/events`)
+      ws = new WebSocket(wsUrl(`/ws/events`))
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data)
@@ -85,7 +88,7 @@ export default function NotificationBell() {
   const unread = notifications.filter(n => !n.read).length
 
   function markRead(id: string) {
-    fetch(`/api/v1/notifications/${id}/read`, { method: 'PATCH' }).then(load)
+    fetch(`${getApiBase()}/notifications/${id}/read`, { method: 'PATCH' }).then(load)
   }
 
   function handleClick(n: Notification) {
@@ -97,78 +100,109 @@ export default function NotificationBell() {
   }
 
   function markAllRead() {
-    fetch('/api/v1/notifications/read-all', { method: 'PATCH' }).then(load)
+    fetch(`${getApiBase()}/notifications/read-all`, { method: 'PATCH' }).then(load)
   }
 
   function clearRead() {
-    fetch('/api/v1/notifications/read', { method: 'DELETE' }).then(load)
+    fetch(`${getApiBase()}/notifications/read`, { method: 'DELETE' }).then(load)
   }
 
   return (
     <div className="relative" ref={ref}>
       <button
-        onClick={() => setOpen(o => !o)}
-        className="relative flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-[#0d1520] transition-colors"
+        ref={buttonRef}
+        onClick={() => {
+          if (!open && buttonRef.current) {
+            const r = buttonRef.current.getBoundingClientRect()
+            setPopupPos({ top: Math.max(8, r.top - 320), left: r.right + 8 })
+          }
+          setOpen(o => !o)
+        }}
+        style={{
+          position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 28, height: 28, background: 'transparent', border: 'none', cursor: 'pointer',
+          color: 'var(--fg-3)',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.color = 'var(--fg)')}
+        onMouseLeave={e => (e.currentTarget.style.color = 'var(--fg-3)')}
         title="Notifications"
       >
-        <Bell size={16} />
+        <Bell size={15} />
         {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-[9px] font-bold text-white">
+          <span style={{
+            position: 'absolute', top: -2, right: -2,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 14, height: 14, borderRadius: '50%', background: 'var(--crit)',
+            fontSize: 8, fontWeight: 700, color: '#fff', fontFamily: 'var(--font-mono)',
+          }}>
             {unread > 9 ? '9+' : unread}
           </span>
         )}
       </button>
 
-      {open && (
-        <div className="absolute left-0 bottom-full mb-2 w-80 glass border border-cyan-900/30 rounded-xl shadow-2xl z-30 overflow-hidden">
+      {open && createPortal(
+        <div style={{
+          position: 'fixed', top: popupPos.top, left: popupPos.left,
+          width: 300, background: 'var(--bg-2)', border: '1px solid var(--rule-strong)',
+          boxShadow: '0 16px 48px rgba(0,0,0,0.5)', zIndex: 9999, overflow: 'hidden',
+        }}>
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-900/15">
-            <span className="text-xs font-semibold text-white uppercase tracking-wider">Notifications</span>
-            <div className="flex items-center gap-2">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--rule)' }}>
+            <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>Notifications</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {unread > 0 && (
-                <button onClick={markAllRead} title="Mark all read" className="text-slate-500 hover:text-slate-300 transition-colors">
-                  <Check size={13} />
+                <button onClick={markAllRead} title="Mark all read" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', display: 'flex' }}>
+                  <Check size={12} />
                 </button>
               )}
-              <button onClick={clearRead} title="Clear read" className="text-slate-500 hover:text-slate-300 transition-colors">
-                <Trash2 size={13} />
+              <button onClick={clearRead} title="Clear read" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', display: 'flex' }}>
+                <Trash2 size={12} />
               </button>
-              <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300 transition-colors">
-                <X size={13} />
+              <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', display: 'flex' }}>
+                <X size={12} />
               </button>
             </div>
           </div>
 
           {/* List */}
-          <div className="overflow-y-auto" style={{ maxHeight: '320px' }}>
+          <div style={{ overflowY: 'auto', maxHeight: 300 }}>
             {notifications.length === 0 ? (
-              <div className="py-10 text-center">
-                <Bell size={24} className="mx-auto mb-2 text-slate-700" />
-                <p className="text-xs text-slate-600">No notifications</p>
+              <div style={{ padding: '32px 16px', textAlign: 'center' }}>
+                <Bell size={22} style={{ margin: '0 auto 8px', display: 'block', color: 'var(--fg-4)' }} />
+                <p style={{ fontSize: 11, color: 'var(--fg-4)' }}>No notifications</p>
               </div>
             ) : (
               notifications.map(n => (
                 <div
                   key={n.id}
                   onClick={() => handleClick(n)}
-                  className={`flex gap-3 px-4 py-3 border-b border-cyan-900/10 transition-colors cursor-pointer ${
-                    n.read ? 'opacity-50' : 'hover:bg-cyan-950/20'
-                  }`}
+                  style={{
+                    display: 'flex', gap: 10, padding: '10px 14px',
+                    borderBottom: '1px solid var(--rule-2)', cursor: 'pointer',
+                    opacity: n.read ? 0.5 : 1,
+                    background: 'transparent',
+                  }}
+                  onMouseEnter={e => { if (!n.read) e.currentTarget.style.background = 'var(--bg-3)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                   title={n.scan_id ? 'Click to view scan' : undefined}
                 >
-                  <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${n.read ? 'bg-slate-700' : TYPE_DOT[n.type] ?? 'bg-slate-500'}`} />
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-xs font-medium ${n.read ? 'text-slate-500' : TYPE_STYLES[n.type] ?? 'text-slate-300'}`}>
+                  <span style={{
+                    marginTop: 5, width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                    background: n.read ? 'var(--fg-4)' : (TYPE_DOT_COLOR[n.type] ?? 'var(--fg-3)'),
+                  }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: 11, fontWeight: 500, color: n.read ? 'var(--fg-3)' : (TYPE_COLOR[n.type] ?? 'var(--fg)'), marginBottom: 2 }}>
                       {n.title}
                     </p>
-                    {n.body && <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">{n.body}</p>}
-                    <p className="text-[10px] text-slate-700 mt-1">{timeAgo(n.created_at)}</p>
+                    {n.body && <p style={{ fontSize: 10, color: 'var(--fg-3)', lineHeight: 1.4 }}>{n.body}</p>}
+                    <p style={{ fontSize: 9, color: 'var(--fg-4)', marginTop: 3, fontFamily: 'var(--font-mono)' }}>{timeAgo(n.created_at)}</p>
                   </div>
                 </div>
               ))
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

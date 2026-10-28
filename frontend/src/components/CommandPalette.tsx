@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type React from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Search, Network, Swords, Terminal, BookOpen,
@@ -36,12 +37,12 @@ const ROUTES: Route[] = [
   { label: 'All Scans',          to: '/scans',      icon: <FileSearch size={15} />,     group: 'Core' },
 ]
 
-const GROUP_COLORS: Record<string, string> = {
-  Core:        'text-slate-400',
-  Recon:       'text-blue-400',
-  Offense:     'text-red-400',
-  Credentials: 'text-amber-400',
-  Defense:     'text-green-400',
+const GROUP_COLOR_STYLES: Record<string, React.CSSProperties> = {
+  Core:        { color: 'var(--fg-3)' },
+  Recon:       { color: 'var(--accent)' },
+  Offense:     { color: 'var(--crit)' },
+  Credentials: { color: 'var(--warn)' },
+  Defense:     { color: 'var(--ok)' },
 }
 
 interface Props {
@@ -93,29 +94,33 @@ export default function CommandPalette({ onClose }: Props) {
       style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="w-full max-w-md glass border border-cyan-900/40 rounded-xl shadow-2xl overflow-hidden">
+      <div style={{
+        width: '100%', maxWidth: 460,
+        background: 'var(--bg-2)', border: '1px solid var(--rule-strong)',
+        boxShadow: '0 20px 60px rgba(0,0,0,0.6)', overflow: 'hidden',
+      }}>
         {/* Search input */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-cyan-900/20">
-          <Command size={15} className="text-cyan-500 shrink-0" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: '1px solid var(--rule)' }}>
+          <Command size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
           <input
             ref={inputRef}
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={onKey}
             placeholder="Go to…"
-            className="flex-1 bg-transparent text-sm text-slate-200 placeholder-slate-500 outline-none"
+            style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 13, color: 'var(--fg)', fontFamily: 'var(--font-sans)' }}
           />
-          <kbd className="text-[10px] text-slate-500 border border-slate-700 rounded px-1.5 py-0.5">ESC</kbd>
+          <kbd style={{ fontSize: 10, color: 'var(--fg-4)', border: '1px solid var(--rule-strong)', padding: '1px 5px', fontFamily: 'var(--font-mono)' }}>ESC</kbd>
         </div>
 
         {/* Results */}
-        <div ref={listRef} className="overflow-y-auto" style={{ maxHeight: '340px' }}>
+        <div ref={listRef} style={{ overflowY: 'auto', maxHeight: 340 }}>
           {filtered.length === 0 ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-500">No results</p>
+            <p style={{ padding: '24px 16px', textAlign: 'center', fontSize: 13, color: 'var(--fg-3)' }}>No results</p>
           ) : (
             Object.entries(groups).map(([group, items]) => (
               <div key={group}>
-                <p className={`px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-widest ${GROUP_COLORS[group] ?? 'text-slate-500'}`}>
+                <p style={{ padding: '10px 14px 4px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', fontFamily: 'var(--font-mono)', ...GROUP_COLOR_STYLES[group] }}>
                   {group}
                 </p>
                 {items.map(item => (
@@ -124,18 +129,20 @@ export default function CommandPalette({ onClose }: Props) {
                     data-idx={item.idx}
                     onClick={() => select(item)}
                     onMouseEnter={() => setCursor(item.idx)}
-                    className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors text-left ${
-                      cursor === item.idx
-                        ? 'bg-cyan-950/40 text-white'
-                        : 'text-slate-300 hover:bg-cyan-950/20'
-                    }`}
+                    style={{
+                      width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '8px 14px', fontSize: 13, textAlign: 'left', border: 'none', cursor: 'pointer',
+                      background: cursor === item.idx ? 'var(--accent-2)' : 'transparent',
+                      color: cursor === item.idx ? 'var(--fg)' : 'var(--fg-2)',
+                      fontFamily: 'var(--font-sans)',
+                    }}
                   >
-                    <span className={cursor === item.idx ? 'text-cyan-400' : 'text-slate-500'}>
+                    <span style={{ color: cursor === item.idx ? 'var(--accent)' : 'var(--fg-4)' }}>
                       {item.icon}
                     </span>
                     {item.label}
                     {cursor === item.idx && (
-                      <kbd className="ml-auto text-[10px] text-slate-500 border border-slate-700 rounded px-1.5 py-0.5">↵</kbd>
+                      <kbd style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--fg-4)', border: '1px solid var(--rule-strong)', padding: '1px 4px', fontFamily: 'var(--font-mono)' }}>↵</kbd>
                     )}
                   </button>
                 ))}
@@ -144,10 +151,10 @@ export default function CommandPalette({ onClose }: Props) {
           )}
         </div>
 
-        <div className="px-4 py-2 border-t border-cyan-900/20 flex items-center gap-4 text-[10px] text-slate-600">
-          <span><kbd className="border border-slate-700 rounded px-1">↑↓</kbd> navigate</span>
-          <span><kbd className="border border-slate-700 rounded px-1">↵</kbd> open</span>
-          <span><kbd className="border border-slate-700 rounded px-1">?</kbd> toggle</span>
+        <div style={{ padding: '6px 14px', borderTop: '1px solid var(--rule)', display: 'flex', alignItems: 'center', gap: 16, fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
+          <span><kbd style={{ border: '1px solid var(--rule-strong)', padding: '0 3px' }}>↑↓</kbd> navigate</span>
+          <span><kbd style={{ border: '1px solid var(--rule-strong)', padding: '0 3px' }}>↵</kbd> open</span>
+          <span><kbd style={{ border: '1px solid var(--rule-strong)', padding: '0 3px' }}>?</kbd> toggle</span>
         </div>
       </div>
     </div>

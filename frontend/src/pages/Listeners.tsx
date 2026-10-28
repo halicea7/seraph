@@ -1,10 +1,7 @@
 import { useState, useEffect } from 'react'
-import {
-  Radio, BarChart2, Activity, Cpu,
-  Play, Pause, Square, Trash2, Plus, ChevronDown,
-  ChevronRight, Clock, AlertTriangle, CheckCircle, XCircle,
-  Minus, RefreshCw,
-} from 'lucide-react'
+import { BarChart2, AlertTriangle } from 'lucide-react'
+import Icon from '../components/Icon'
+import { getApiBase } from '@/lib/config'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -37,25 +34,54 @@ interface Target { id: string; hostname_or_ip: string; project_id: string }
 interface ScanCategory { id: string; label: string }
 interface AgentOption { id: string; name: string }
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const rule = '1px solid var(--rule)'
+const ruleStrong = '1px solid var(--rule-strong)'
+
+const inputStyle: React.CSSProperties = {
+  width: '100%', boxSizing: 'border-box', background: 'var(--bg)',
+  border: ruleStrong, borderRadius: 3, padding: '6px 10px',
+  fontSize: 12, color: 'var(--fg)', fontFamily: 'var(--font-sans)', outline: 'none',
+}
+
+const labelStyle: React.CSSProperties = {
+  display: 'block', fontSize: 10, fontWeight: 700, color: 'var(--fg-3)',
+  textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6,
+  fontFamily: 'var(--font-sans)',
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const TYPE_META: Record<ListenerType, { label: string; icon: React.ReactNode; color: string }> = {
-  scheduled:   { label: 'Scheduled',    icon: <Clock size={13} />,    color: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10' },
-  threshold:   { label: 'Threshold',    icon: <BarChart2 size={13} />, color: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
-  healthcheck: { label: 'Health Check', icon: <Activity size={13} />, color: 'text-green-400 border-green-500/30 bg-green-500/10' },
-  agent_audit: { label: 'Agent Audit',  icon: <Cpu size={13} />,      color: 'text-purple-400 border-purple-500/30 bg-purple-500/10' },
+const TYPE_META: Record<ListenerType, { label: string; color: string; background: string; border: string }> = {
+  scheduled:   { label: 'Scheduled',    color: 'var(--med)',    background: 'rgba(180,130,60,0.08)',  border: '1px solid rgba(180,130,60,0.25)' },
+  threshold:   { label: 'Threshold',    color: 'var(--accent)', background: 'rgba(240,168,58,0.08)',  border: '1px solid rgba(240,168,58,0.25)' },
+  healthcheck: { label: 'Health Check', color: 'var(--ok)',     background: 'rgba(84,175,97,0.08)',   border: '1px solid rgba(84,175,97,0.25)' },
+  agent_audit: { label: 'Agent Audit',  color: '#a855f7',       background: 'rgba(168,85,247,0.08)',  border: '1px solid rgba(168,85,247,0.25)' },
 }
 
-const STATUS_META: Record<ListenerStatus, { label: string; color: string; dot: string }> = {
-  running: { label: 'running', color: 'text-green-300',  dot: 'bg-green-400' },
-  paused:  { label: 'paused',  color: 'text-amber-300',  dot: 'bg-amber-400' },
-  stopped: { label: 'stopped', color: 'text-slate-400',  dot: 'bg-slate-500' },
+const STATUS_COLOR: Record<ListenerStatus, string> = {
+  running: 'var(--ok)',
+  paused:  'var(--accent)',
+  stopped: 'var(--fg-3)',
 }
 
-const OUTCOME_META: Record<EventOutcome, { icon: React.ReactNode; color: string }> = {
-  triggered: { icon: <CheckCircle size={12} />, color: 'text-cyan-400' },
-  skipped:   { icon: <Minus size={12} />,       color: 'text-slate-500' },
-  error:     { icon: <XCircle size={12} />,     color: 'text-red-400'  },
+const OUTCOME_ICON: Record<EventOutcome, string> = {
+  triggered: 'check',
+  skipped:   'minus',
+  error:     'x',
+}
+
+const OUTCOME_COLOR: Record<EventOutcome, string> = {
+  triggered: 'var(--med)',
+  skipped:   'var(--fg-3)',
+  error:     'var(--crit)',
+}
+
+function TypeIconEl({ type, color, size = 13 }: { type: ListenerType; color: string; size?: number }) {
+  if (type === 'threshold') return <BarChart2 size={size} color={color} />
+  const names: Record<string, string> = { scheduled: 'clock', healthcheck: 'activity', agent_audit: 'cpu' }
+  return <Icon name={names[type]} size={size} color={color} />
 }
 
 function fmtTime(iso: string | null) {
@@ -95,16 +121,17 @@ function ListenerCard({
   const [expanded, setExpanded] = useState(false)
   const [events, setEvents] = useState<ListenerEvent[]>([])
   const [loadingEvents, setLoadingEvents] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
-  const type = TYPE_META[listener.type]
-  const status = STATUS_META[listener.status]
+  const typeMeta = TYPE_META[listener.type]
+  const statusColor = STATUS_COLOR[listener.status]
   const project = projects.find(p => p.id === listener.project_id)
   const target = targets.find(t => t.id === listener.target_id)
 
   function loadEvents() {
     if (loadingEvents) return
     setLoadingEvents(true)
-    fetch(`/api/v1/listeners/${listener.id}/events`)
+    fetch(`${getApiBase()}/listeners/${listener.id}/events`)
       .then(r => r.json())
       .then(setEvents)
       .finally(() => setLoadingEvents(false))
@@ -115,99 +142,122 @@ function ListenerCard({
     setExpanded(e => !e)
   }
 
+  const actionBtnStyle = (color: string): React.CSSProperties => ({
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 26, height: 26, borderRadius: 3, border: 'none',
+    background: 'none', cursor: 'pointer', color,
+  })
+
   return (
-    <div className="rounded-xl border border-cyan-900/20 overflow-hidden" style={{ background: '#090d14' }}>
+    <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden' }}>
       {/* Header row */}
-      <div className="flex items-center gap-3 px-4 py-3">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' }}>
         {/* Status dot */}
-        <div className="relative shrink-0">
-          <span className={`w-2 h-2 rounded-full inline-block ${status.dot}`} />
-          {listener.status === 'running' && (
-            <span className={`absolute inset-0 rounded-full animate-ping ${status.dot} opacity-60`} />
-          )}
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <div style={{
+            width: 8, height: 8, borderRadius: '50%', background: statusColor,
+            boxShadow: listener.status === 'running' ? `0 0 6px ${statusColor}` : 'none',
+          }} />
         </div>
 
         {/* Type badge */}
-        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border ${type.color}`}>
-          {type.icon}{type.label}
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '2px 8px', borderRadius: 3, fontSize: 10, fontWeight: 600,
+          fontFamily: 'var(--font-sans)',
+          color: typeMeta.color, background: typeMeta.background, border: typeMeta.border,
+        }}>
+          <TypeIconEl type={listener.type} color={typeMeta.color} size={11} />
+          {typeMeta.label}
         </span>
 
         {/* Name */}
-        <span className="flex-1 font-semibold text-sm text-slate-200 truncate">{listener.name}</span>
+        <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)' }}>
+          {listener.name}
+        </span>
 
         {/* Meta */}
-        <span className="text-[11px] text-slate-500 hidden sm:block">
-          {project?.name ?? '—'} {target ? `· ${target.hostname_or_ip}` : ''}
+        <span style={{ fontSize: 11, color: 'var(--fg-3)', flexShrink: 0, fontFamily: 'var(--font-sans)' }}>
+          {project?.name ?? '—'}{target ? ` · ${target.hostname_or_ip}` : ''}
         </span>
-        <span className="text-[11px] text-slate-600 hidden md:block">{fmtTime(listener.last_triggered)}</span>
+        <span style={{ fontSize: 10, color: 'var(--fg-3)', flexShrink: 0, fontFamily: 'var(--font-mono)' }}>
+          {fmtTime(listener.last_triggered)}
+        </span>
 
         {/* Actions */}
-        <div className="flex items-center gap-1 shrink-0">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
           {listener.status !== 'running' && (
-            <button
-              onClick={() => onAction(listener.id, 'start')}
-              className="p-1.5 rounded text-green-400 hover:bg-green-500/10 transition-colors"
-              title="Start"
-            >
-              <Play size={13} />
+            <button onClick={() => onAction(listener.id, 'start')} title="Start" style={actionBtnStyle('var(--ok)')}>
+              <Icon name="play" size={12} color="var(--ok)" />
             </button>
           )}
           {listener.status === 'running' && (
-            <button
-              onClick={() => onAction(listener.id, 'pause')}
-              className="p-1.5 rounded text-amber-400 hover:bg-amber-500/10 transition-colors"
-              title="Pause"
-            >
-              <Pause size={13} />
+            <button onClick={() => onAction(listener.id, 'pause')} title="Pause" style={actionBtnStyle('var(--accent)')}>
+              <Icon name="pause" size={12} color="var(--accent)" />
             </button>
           )}
           {listener.status !== 'stopped' && (
-            <button
-              onClick={() => onAction(listener.id, 'stop')}
-              className="p-1.5 rounded text-slate-400 hover:bg-slate-500/10 transition-colors"
-              title="Stop"
-            >
-              <Square size={13} />
+            <button onClick={() => onAction(listener.id, 'stop')} title="Stop" style={actionBtnStyle('var(--fg-3)')}>
+              <Icon name="stop" size={12} color="var(--fg-3)" />
             </button>
           )}
-          <button
-            onClick={() => onDelete(listener.id)}
-            className="p-1.5 rounded text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-            title="Delete"
-          >
-            <Trash2 size={13} />
-          </button>
-          <button onClick={toggle} className="p-1.5 rounded text-slate-500 hover:text-slate-300 transition-colors">
-            <ChevronDown size={13} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+          {confirmDelete ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button
+                onClick={() => onDelete(listener.id)}
+                style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, background: 'rgba(232,64,64,0.12)', border: '1px solid rgba(232,64,64,0.35)', color: 'var(--crit)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+              >Yes</button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, background: 'none', border: ruleStrong, color: 'var(--fg-3)', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+              >No</button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmDelete(true)} title="Delete" style={actionBtnStyle('var(--fg-3)')}>
+              <Icon name="trash" size={12} color="var(--fg-3)" />
+            </button>
+          )}
+          <button onClick={toggle} style={actionBtnStyle('var(--fg-3)')}>
+            <Icon name={expanded ? 'chev_u' : 'chev_d'} size={13} color="var(--fg-3)" />
           </button>
         </div>
       </div>
 
       {/* Config summary bar */}
-      <div className="px-4 pb-2">
-        <span className="text-[11px] font-mono text-slate-500">{configSummary(listener.type, listener.config)}</span>
+      <div style={{ paddingLeft: 14, paddingRight: 14, paddingBottom: 10 }}>
+        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
+          {configSummary(listener.type, listener.config)}
+        </span>
       </div>
 
       {/* Expanded: recent events */}
       {expanded && (
-        <div className="border-t border-cyan-900/15 px-4 py-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Recent events</span>
-            <button onClick={loadEvents} className="text-slate-600 hover:text-cyan-400 transition-colors" title="Refresh">
-              <RefreshCw size={11} className={loadingEvents ? 'animate-spin' : ''} />
+        <div style={{ borderTop: rule, padding: '10px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-sans)' }}>
+              Recent events
+            </span>
+            <button
+              onClick={loadEvents}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+              title="Refresh"
+            >
+              <Icon name="refresh" size={11} color={loadingEvents ? 'var(--accent)' : 'var(--fg-3)'} />
             </button>
           </div>
           {events.length === 0 ? (
-            <p className="text-xs text-slate-600 italic">No events yet</p>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--fg-3)', fontStyle: 'italic', fontFamily: 'var(--font-sans)' }}>
+              No events yet
+            </p>
           ) : (
-            <div className="space-y-1.5">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {events.slice(0, 8).map(ev => {
-                const m = OUTCOME_META[ev.outcome as EventOutcome] ?? OUTCOME_META.error
+                const outcome = (ev.outcome as EventOutcome) in OUTCOME_ICON ? ev.outcome as EventOutcome : 'error'
                 return (
-                  <div key={ev.id} className="flex items-start gap-2">
-                    <span className={`mt-0.5 shrink-0 ${m.color}`}>{m.icon}</span>
-                    <span className="text-[11px] text-slate-400 flex-1">{ev.detail}</span>
-                    <span className="text-[10px] text-slate-600 shrink-0">{fmtTime(ev.fired_at)}</span>
+                  <div key={ev.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                    <Icon name={OUTCOME_ICON[outcome]} size={12} color={OUTCOME_COLOR[outcome]} />
+                    <span style={{ flex: 1, fontSize: 11, color: 'var(--fg-2)', fontFamily: 'var(--font-sans)' }}>{ev.detail}</span>
+                    <span style={{ fontSize: 10, color: 'var(--fg-3)', flexShrink: 0, fontFamily: 'var(--font-mono)' }}>{fmtTime(ev.fired_at)}</span>
                   </div>
                 )
               })}
@@ -244,22 +294,18 @@ function CreateForm({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  // Scheduled
   const [cron, setCron] = useState('0 2 * * *')
   const [selCats, setSelCats] = useState<string[]>([])
 
-  // Threshold
   const [severity, setSeverity] = useState('critical')
   const [limit, setLimit] = useState(5)
   const [checkInterval, setCheckInterval] = useState(60)
 
-  // Healthcheck
   const [port, setPort] = useState(80)
   const [hcInterval, setHcInterval] = useState(5)
   const [timeout, setTimeout_] = useState(10)
   const [alertOn, setAlertOn] = useState('down')
 
-  // Agent Audit
   const [agentId, setAgentId] = useState('')
   const [agentCron, setAgentCron] = useState('0 2 * * *')
   const [agentSelCats, setAgentSelCats] = useState<string[]>([])
@@ -293,18 +339,17 @@ function CreateForm({
     setError('')
     setSaving(true)
     try {
-      const res = await fetch('/api/v1/listeners', {
+      const res = await fetch(`${getApiBase()}/listeners`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: name.trim(),
-          type,
+          name: name.trim(), type,
           project_id: projectId,
           target_id: targetId || null,
           config: buildConfig(),
         }),
       })
-      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed'); }
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed') }
       const listener = await res.json()
       onCreated(listener)
       setName(''); setSelCats([])
@@ -315,49 +360,83 @@ function CreateForm({
     }
   }
 
-  const inputCls = 'w-full px-3 py-2 rounded-lg border border-cyan-900/20 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 transition-colors'
-  const inputStyle = { background: '#05080d' }
+  const sectionStyle: React.CSSProperties = {
+    display: 'flex', flexDirection: 'column', gap: 6,
+  }
+
+  function CatCheckbox({ label, selected, onToggle, activeColor }: {
+    id: string; label: string; selected: boolean; onToggle: () => void; activeColor: string
+  }) {
+    return (
+      <button
+        onClick={onToggle}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
+          borderRadius: 3, border: selected ? `1px solid ${activeColor}55` : ruleStrong,
+          background: selected ? `${activeColor}10` : 'var(--bg)',
+          cursor: 'pointer', textAlign: 'left', fontSize: 12, fontFamily: 'var(--font-sans)',
+          color: selected ? activeColor : 'var(--fg-3)',
+        }}
+      >
+        <Icon name={selected ? 'check' : 'chev_r'} size={11} color={selected ? activeColor : 'var(--fg-3)'} />
+        {label}
+      </button>
+    )
+  }
 
   return (
-    <div className="max-w-xl space-y-5">
+    <div style={{ maxWidth: 540, display: 'flex', flexDirection: 'column', gap: 16 }}>
       {error && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
-          <AlertTriangle size={13} />{error}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 3, background: 'rgba(232,64,64,0.08)', border: '1px solid rgba(232,64,64,0.3)', fontSize: 12, color: 'var(--crit)', fontFamily: 'var(--font-sans)' }}>
+          <AlertTriangle size={13} /> {error}
         </div>
       )}
 
       {/* Name */}
-      <div>
-        <label className="block text-xs text-slate-400 mb-1.5">Listener name</label>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Nightly host audit"
-          className={inputCls} style={inputStyle} />
+      <div style={sectionStyle}>
+        <label style={labelStyle}>Listener name</label>
+        <input
+          value={name} onChange={e => setName(e.target.value)}
+          placeholder="e.g. Nightly host audit"
+          style={inputStyle}
+        />
       </div>
 
-      {/* Type */}
-      <div>
-        <label className="block text-xs text-slate-400 mb-1.5">Type</label>
-        <div className="flex gap-2">
-          {(Object.entries(TYPE_META) as [ListenerType, typeof TYPE_META[ListenerType]][]).map(([t, m]) => (
-            <button
-              key={t}
-              onClick={() => setType(t)}
-              className={`flex-1 flex flex-col items-center gap-1.5 py-3 rounded-lg border text-xs font-medium transition-all ${
-                type === t ? m.color : 'border-cyan-900/20 text-slate-500 hover:text-slate-300'
-              }`}
-              style={{ background: type === t ? undefined : '#05080d' }}
-            >
-              {m.icon}
-              {m.label}
-            </button>
-          ))}
+      {/* Type picker */}
+      <div style={sectionStyle}>
+        <label style={labelStyle}>Type</label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+          {(Object.entries(TYPE_META) as [ListenerType, typeof TYPE_META[ListenerType]][]).map(([t, m]) => {
+            const isActive = type === t
+            return (
+              <button
+                key={t}
+                onClick={() => setType(t)}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                  padding: '10px 6px', borderRadius: 3, cursor: 'pointer',
+                  border: isActive ? m.border : ruleStrong,
+                  background: isActive ? m.background : 'var(--bg)',
+                  color: isActive ? m.color : 'var(--fg-3)',
+                  fontSize: 10, fontFamily: 'var(--font-sans)', fontWeight: 600,
+                }}
+              >
+                <TypeIconEl type={t} color={isActive ? m.color : 'var(--fg-3)'} size={14} />
+                {m.label}
+              </button>
+            )
+          })}
         </div>
       </div>
 
       {/* Project */}
-      <div>
-        <label className="block text-xs text-slate-400 mb-1.5">Project</label>
-        <select value={projectId} onChange={e => { setProjectId(e.target.value); setTargetId('') }}
-          className={inputCls} style={inputStyle}>
+      <div style={sectionStyle}>
+        <label style={labelStyle}>Project</label>
+        <select
+          value={projectId}
+          onChange={e => { setProjectId(e.target.value); setTargetId('') }}
+          style={inputStyle}
+        >
           <option value="">— select project —</option>
           {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
@@ -365,12 +444,13 @@ function CreateForm({
 
       {/* Target */}
       {(type === 'scheduled' || type === 'healthcheck') && (
-        <div>
-          <label className="block text-xs text-slate-400 mb-1.5">
-            Target
-          </label>
-          <select value={targetId} onChange={e => setTargetId(e.target.value)}
-            className={inputCls} style={inputStyle} disabled={!projectId}>
+        <div style={sectionStyle}>
+          <label style={labelStyle}>Target</label>
+          <select
+            value={targetId} onChange={e => setTargetId(e.target.value)}
+            style={{ ...inputStyle, opacity: projectId ? 1 : 0.5 }}
+            disabled={!projectId}
+          >
             <option value="">— select target —</option>
             {filteredTargets.map(t => <option key={t.id} value={t.id}>{t.hostname_or_ip}</option>)}
           </select>
@@ -380,31 +460,26 @@ function CreateForm({
       {/* Type-specific config */}
       {type === 'scheduled' && (
         <>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Cron expression</label>
-            <input value={cron} onChange={e => setCron(e.target.value)} placeholder="0 2 * * *"
-              className={`${inputCls} font-mono`} style={inputStyle} />
-            <p className="text-[10px] text-slate-600 mt-1">
+          <div style={sectionStyle}>
+            <label style={labelStyle}>Cron expression</label>
+            <input
+              value={cron} onChange={e => setCron(e.target.value)} placeholder="0 2 * * *"
+              style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
+            />
+            <p style={{ margin: 0, fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
               0 2 * * * = daily 2AM · 0 2 * * 0 = weekly Sun · 0 * * * * = hourly
             </p>
           </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-2">Scan categories</label>
-            <div className="grid grid-cols-2 gap-1.5">
+          <div style={sectionStyle}>
+            <label style={labelStyle}>Scan categories</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
               {categories.map(cat => (
-                <label key={cat.id}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-all text-xs ${
-                    selCats.includes(cat.id)
-                      ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10'
-                      : 'border-cyan-900/20 text-slate-400 hover:border-cyan-900/40'
-                  }`}
-                  style={{ background: selCats.includes(cat.id) ? undefined : '#05080d' }}
-                >
-                  <input type="checkbox" className="hidden" checked={selCats.includes(cat.id)}
-                    onChange={() => toggleCat(cat.id)} />
-                  <ChevronRight size={11} className={selCats.includes(cat.id) ? 'text-cyan-400' : 'text-slate-600'} />
-                  {cat.label}
-                </label>
+                <CatCheckbox
+                  key={cat.id} id={cat.id} label={cat.label}
+                  selected={selCats.includes(cat.id)}
+                  onToggle={() => toggleCat(cat.id)}
+                  activeColor="var(--med)"
+                />
               ))}
             </div>
           </div>
@@ -413,50 +488,45 @@ function CreateForm({
 
       {type === 'threshold' && (
         <>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">Severity to watch</label>
-              <select value={severity} onChange={e => setSeverity(e.target.value)} className={inputCls} style={inputStyle}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Severity to watch</label>
+              <select value={severity} onChange={e => setSeverity(e.target.value)} style={inputStyle}>
                 {SEVERITIES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">Alert when count exceeds</label>
-              <input type="number" min={1} value={limit} onChange={e => setLimit(Number(e.target.value))}
-                className={inputCls} style={inputStyle} />
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Alert when count exceeds</label>
+              <input type="number" min={1} value={limit} onChange={e => setLimit(Number(e.target.value))} style={inputStyle} />
             </div>
           </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Check interval (minutes)</label>
-            <input type="number" min={1} value={checkInterval} onChange={e => setCheckInterval(Number(e.target.value))}
-              className={inputCls} style={inputStyle} />
+          <div style={sectionStyle}>
+            <label style={labelStyle}>Check interval (minutes)</label>
+            <input type="number" min={1} value={checkInterval} onChange={e => setCheckInterval(Number(e.target.value))} style={inputStyle} />
           </div>
         </>
       )}
 
       {type === 'healthcheck' && (
         <>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">Port</label>
-              <input type="number" min={1} max={65535} value={port} onChange={e => setPort(Number(e.target.value))}
-                className={inputCls} style={inputStyle} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Port</label>
+              <input type="number" min={1} max={65535} value={port} onChange={e => setPort(Number(e.target.value))} style={inputStyle} />
             </div>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">Check interval (minutes)</label>
-              <input type="number" min={1} value={hcInterval} onChange={e => setHcInterval(Number(e.target.value))}
-                className={inputCls} style={inputStyle} />
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Check interval (minutes)</label>
+              <input type="number" min={1} value={hcInterval} onChange={e => setHcInterval(Number(e.target.value))} style={inputStyle} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">Connection timeout (sec)</label>
-              <input type="number" min={1} value={timeout} onChange={e => setTimeout_(Number(e.target.value))}
-                className={inputCls} style={inputStyle} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Connection timeout (sec)</label>
+              <input type="number" min={1} value={timeout} onChange={e => setTimeout_(Number(e.target.value))} style={inputStyle} />
             </div>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">Alert when</label>
-              <select value={alertOn} onChange={e => setAlertOn(e.target.value)} className={inputCls} style={inputStyle}>
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Alert when</label>
+              <select value={alertOn} onChange={e => setAlertOn(e.target.value)} style={inputStyle}>
                 {ALERT_ON_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </div>
@@ -466,38 +536,33 @@ function CreateForm({
 
       {type === 'agent_audit' && (
         <>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Agent</label>
-            <select value={agentId} onChange={e => setAgentId(e.target.value)} className={inputCls} style={inputStyle}>
+          <div style={sectionStyle}>
+            <label style={labelStyle}>Agent</label>
+            <select value={agentId} onChange={e => setAgentId(e.target.value)} style={inputStyle}>
               <option value="">— select agent —</option>
               {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Cron expression</label>
-            <input value={agentCron} onChange={e => setAgentCron(e.target.value)} placeholder="0 2 * * *"
-              className={`${inputCls} font-mono`} style={inputStyle} />
-            <p className="text-[10px] text-slate-600 mt-1">
+          <div style={sectionStyle}>
+            <label style={labelStyle}>Cron expression</label>
+            <input
+              value={agentCron} onChange={e => setAgentCron(e.target.value)} placeholder="0 2 * * *"
+              style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
+            />
+            <p style={{ margin: 0, fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
               0 2 * * * = daily 2AM · 0 2 * * 0 = weekly Sun · 0 * * * * = hourly
             </p>
           </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-2">Audit categories</label>
-            <div className="grid grid-cols-2 gap-1.5">
+          <div style={sectionStyle}>
+            <label style={labelStyle}>Audit categories</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
               {categories.map(cat => (
-                <label key={cat.id}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-all text-xs ${
-                    agentSelCats.includes(cat.id)
-                      ? 'border-purple-500/40 text-purple-300 bg-purple-500/10'
-                      : 'border-cyan-900/20 text-slate-400 hover:border-cyan-900/40'
-                  }`}
-                  style={{ background: agentSelCats.includes(cat.id) ? undefined : '#05080d' }}
-                >
-                  <input type="checkbox" className="hidden" checked={agentSelCats.includes(cat.id)}
-                    onChange={() => toggleAgentCat(cat.id)} />
-                  <ChevronRight size={11} className={agentSelCats.includes(cat.id) ? 'text-purple-400' : 'text-slate-600'} />
-                  {cat.label}
-                </label>
+                <CatCheckbox
+                  key={cat.id} id={cat.id} label={cat.label}
+                  selected={agentSelCats.includes(cat.id)}
+                  onToggle={() => toggleAgentCat(cat.id)}
+                  activeColor="#a855f7"
+                />
               ))}
             </div>
           </div>
@@ -507,10 +572,15 @@ function CreateForm({
       <button
         onClick={submit}
         disabled={saving}
-        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/10 transition-all disabled:opacity-50"
-        style={{ background: 'rgba(6,182,212,0.05)' }}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 16px',
+          borderRadius: 4, border: '1px solid rgba(240,168,58,0.35)',
+          background: 'rgba(240,168,58,0.08)', fontSize: 12, color: 'var(--accent)',
+          cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.6 : 1,
+          fontFamily: 'var(--font-sans)', fontWeight: 600,
+        }}
       >
-        <Plus size={14} />
+        <Icon name="plus" size={13} color="var(--accent)" />
         {saving ? 'Creating…' : 'Create Listener'}
       </button>
     </div>
@@ -524,7 +594,7 @@ function HistoryTab({ listeners }: { listeners: ListenerRecord[] }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/v1/listeners/events/all')
+    fetch(`${getApiBase()}/listeners/events/all`)
       .then(r => r.json())
       .then(setEvents)
       .finally(() => setLoading(false))
@@ -532,54 +602,81 @@ function HistoryTab({ listeners }: { listeners: ListenerRecord[] }) {
 
   const byId = Object.fromEntries(listeners.map(l => [l.id, l]))
 
+  if (loading) {
+    return (
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-3)', padding: '16px 0', fontFamily: 'var(--font-sans)' }}>
+        Loading…
+      </p>
+    )
+  }
+
+  if (events.length === 0) {
+    return (
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-3)', padding: '16px 0', fontFamily: 'var(--font-sans)' }}>
+        No events recorded yet.
+      </p>
+    )
+  }
+
+  const thStyle: React.CSSProperties = {
+    textAlign: 'left', padding: '8px 14px', fontSize: 10, fontWeight: 700,
+    color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.07em',
+    fontFamily: 'var(--font-sans)', background: 'var(--bg)', whiteSpace: 'nowrap',
+  }
+
   return (
-    <div>
-      {loading ? (
-        <p className="text-sm text-slate-500 py-4">Loading…</p>
-      ) : events.length === 0 ? (
-        <p className="text-sm text-slate-500 py-4">No events recorded yet.</p>
-      ) : (
-        <div className="rounded-xl border border-cyan-900/20 overflow-hidden">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-cyan-900/20" style={{ background: '#060a10' }}>
-                <th className="text-left px-4 py-2.5 text-slate-500 font-semibold">Listener</th>
-                <th className="text-left px-4 py-2.5 text-slate-500 font-semibold">Type</th>
-                <th className="text-left px-4 py-2.5 text-slate-500 font-semibold">Outcome</th>
-                <th className="text-left px-4 py-2.5 text-slate-500 font-semibold">Detail</th>
-                <th className="text-right px-4 py-2.5 text-slate-500 font-semibold">Time</th>
+    <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr style={{ borderBottom: ruleStrong }}>
+            <th style={thStyle}>Listener</th>
+            <th style={thStyle}>Type</th>
+            <th style={thStyle}>Outcome</th>
+            <th style={thStyle}>Detail</th>
+            <th style={{ ...thStyle, textAlign: 'right' }}>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((ev, i) => {
+            const outcome = (ev.outcome as EventOutcome) in OUTCOME_ICON ? ev.outcome as EventOutcome : 'error'
+            const listener = byId[ev.listener_id]
+            const tm = listener ? TYPE_META[listener.type] : null
+
+            return (
+              <tr key={ev.id} style={{ borderBottom: i < events.length - 1 ? rule : 'none', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
+                <td style={{ padding: '8px 14px', color: 'var(--fg)', fontWeight: 500, fontFamily: 'var(--font-sans)' }}>
+                  {listener?.name ?? ev.listener_id.slice(0, 8)}
+                </td>
+                <td style={{ padding: '8px 14px' }}>
+                  {tm && listener && (
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                      padding: '1px 7px', borderRadius: 3, fontSize: 10, fontWeight: 600,
+                      fontFamily: 'var(--font-sans)',
+                      color: tm.color, background: tm.background, border: tm.border,
+                    }}>
+                      <TypeIconEl type={listener.type} color={tm.color} size={10} />
+                      {tm.label}
+                    </span>
+                  )}
+                </td>
+                <td style={{ padding: '8px 14px' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: OUTCOME_COLOR[outcome], fontFamily: 'var(--font-sans)' }}>
+                    <Icon name={OUTCOME_ICON[outcome]} size={11} color={OUTCOME_COLOR[outcome]} />
+                    {ev.outcome}
+                  </span>
+                </td>
+                <td style={{ padding: '8px 14px', color: 'var(--fg-2)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-sans)' }}>
+                  {ev.detail}
+                </td>
+                <td style={{ padding: '8px 14px', color: 'var(--fg-3)', textAlign: 'right', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                  {fmtTime(ev.fired_at)}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {events.map((ev, i) => {
-                const m = OUTCOME_META[ev.outcome as EventOutcome] ?? OUTCOME_META.error
-                const listener = byId[ev.listener_id]
-                const tm = listener ? TYPE_META[listener.type] : null
-                return (
-                  <tr key={ev.id}
-                    className="border-b border-cyan-900/10 last:border-0 hover:bg-cyan-900/5 transition-colors"
-                    style={{ background: i % 2 === 0 ? '#090d14' : 'transparent' }}
-                  >
-                    <td className="px-4 py-2.5 text-slate-300 font-medium">{listener?.name ?? ev.listener_id.slice(0, 8)}</td>
-                    <td className="px-4 py-2.5">
-                      {tm && (
-                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] ${tm.color}`}>
-                          {tm.icon}{tm.label}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className={`flex items-center gap-1 ${m.color}`}>{m.icon}{ev.outcome}</span>
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-400 max-w-xs truncate">{ev.detail}</td>
-                    <td className="px-4 py-2.5 text-slate-600 text-right whitespace-nowrap">{fmtTime(ev.fired_at)}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -599,27 +696,26 @@ export default function Listeners() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/v1/listeners').then(r => r.json()),
-      fetch('/api/v1/projects').then(r => r.json()),
-      fetch('/api/v1/targets').then(r => r.json()),
-      fetch('/api/v1/audit/categories').then(r => r.json()),
-      fetch('/api/v1/agents').then(r => r.json()).catch(() => []),
+      fetch(`${getApiBase()}/listeners`).then(r => r.json()),
+      fetch(`${getApiBase()}/projects`).then(r => r.json()),
+      fetch(`${getApiBase()}/targets`).then(r => r.json()),
+      fetch(`${getApiBase()}/audit/categories`).then(r => r.json()),
+      fetch(`${getApiBase()}/agents`).then(r => r.json()).catch(() => []),
     ]).then(([ls, ps, ts, cats, agts]) => {
       setListeners(ls)
       setProjects(ps)
       setTargets(ts)
       setAgents(Array.isArray(agts) ? agts : [])
-      // API returns a dict keyed by id; normalize to [{id, label}]
       const catList = Array.isArray(cats)
         ? cats
         : Object.values(cats as Record<string, { id: string; name: string }>)
-            .map((c) => ({ id: c.id, label: c.name }))
+            .map(c => ({ id: c.id, label: c.name }))
       setCategories(catList)
     }).finally(() => setLoading(false))
   }, [])
 
   async function handleAction(id: string, action: 'start' | 'pause' | 'stop') {
-    const res = await fetch(`/api/v1/listeners/${id}/${action}`, { method: 'PATCH' })
+    const res = await fetch(`${getApiBase()}/listeners/${id}/${action}`, { method: 'PATCH' })
     if (res.ok) {
       const updated = await res.json()
       setListeners(prev => prev.map(l => l.id === id ? updated : l))
@@ -627,8 +723,7 @@ export default function Listeners() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Delete this listener?')) return
-    const res = await fetch(`/api/v1/listeners/${id}`, { method: 'DELETE' })
+    const res = await fetch(`${getApiBase()}/listeners/${id}`, { method: 'DELETE' })
     if (res.ok || res.status === 204) {
       setListeners(prev => prev.filter(l => l.id !== id))
     }
@@ -652,81 +747,97 @@ export default function Listeners() {
   ]
 
   return (
-    <div className="p-6 pb-20 space-y-6">
+    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20, background: 'var(--bg)', color: 'var(--fg)', minHeight: '100%' }}>
+
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
         <div>
-          <div className="flex items-center gap-3 mb-1">
-            <Radio size={20} className="text-cyan-400" />
-            <h1 className="text-xl font-bold text-white tracking-tight">Audit Listeners</h1>
-          </div>
-          <p className="text-sm text-slate-400">
+          <h1 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--fg)', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-sans)' }}>
+            <Icon name="radio" size={18} color="var(--accent)" />
+            Audit Listeners
+          </h1>
+          <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--fg-3)', fontFamily: 'var(--font-sans)' }}>
             Persistent monitors that fire audit scans, threshold alerts, or health checks automatically.
           </p>
         </div>
-        {/* Status summary */}
-        <div className="flex items-center gap-3 shrink-0">
+
+        {/* Status counts */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0 }}>
           {[
-            { label: 'Running', count: counts.running, color: 'text-green-400' },
-            { label: 'Paused',  count: counts.paused,  color: 'text-amber-400' },
-            { label: 'Stopped', count: counts.stopped, color: 'text-slate-500' },
+            { label: 'Running', count: counts.running, color: 'var(--ok)' },
+            { label: 'Paused',  count: counts.paused,  color: 'var(--accent)' },
+            { label: 'Stopped', count: counts.stopped, color: 'var(--fg-3)' },
           ].map(s => (
-            <div key={s.label} className="text-center">
-              <div className={`text-lg font-bold ${s.color}`}>{s.count}</div>
-              <div className="text-[10px] text-slate-600 uppercase tracking-widest">{s.label}</div>
+            <div key={s.label} style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: s.color }}>{s.count}</div>
+              <div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.07em', fontFamily: 'var(--font-sans)' }}>{s.label}</div>
             </div>
           ))}
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-cyan-900/20">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              tab === t.id
-                ? 'border-cyan-500 text-cyan-300'
-                : 'border-transparent text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div style={{ display: 'flex', gap: 0, borderBottom: ruleStrong }}>
+        {TABS.map(t => {
+          const isActive = tab === t.id
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              style={{
+                padding: '8px 16px', fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                background: 'none', border: 'none',
+                borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+                marginBottom: -1,
+                color: isActive ? 'var(--accent)' : 'var(--fg-3)',
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
+              {t.label}
+            </button>
+          )
+        })}
       </div>
 
       {/* Tab content */}
       {loading ? (
-        <p className="text-sm text-slate-500">Loading…</p>
-      ) : tab === 'active' ? (
-        <div>
-          {listeners.length === 0 ? (
-            <div className="text-center py-16">
-              <Radio size={32} className="text-slate-700 mx-auto mb-3" />
-              <p className="text-slate-500 text-sm">No listeners yet</p>
-              <button
-                onClick={() => setTab('create')}
-                className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/10 transition-all"
-              >
-                <Plus size={14} /> Create your first listener
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {listeners.map(l => (
-                <ListenerCard
-                  key={l.id}
-                  listener={l}
-                  projects={projects}
-                  targets={targets}
-                  onAction={handleAction}
-                  onDelete={handleDelete}
-                />
-              ))}
-            </div>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '64px 0' }}>
+          <Icon name="refresh" size={24} color="var(--accent)" />
         </div>
+      ) : tab === 'active' ? (
+        listeners.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '80px 0' }}>
+            <Icon name="radio" size={32} color="var(--rule-strong)" />
+            <p style={{ margin: '12px 0 0', fontSize: 13, color: 'var(--fg-3)', fontFamily: 'var(--font-sans)' }}>
+              No listeners yet
+            </p>
+            <button
+              onClick={() => setTab('create')}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 16,
+                padding: '8px 16px', borderRadius: 4, border: '1px solid rgba(240,168,58,0.35)',
+                background: 'rgba(240,168,58,0.08)', fontSize: 12, color: 'var(--accent)',
+                cursor: 'pointer', fontFamily: 'var(--font-sans)', fontWeight: 600,
+              }}
+            >
+              <Icon name="plus" size={13} color="var(--accent)" />
+              Create your first listener
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {listeners.map(l => (
+              <ListenerCard
+                key={l.id}
+                listener={l}
+                projects={projects}
+                targets={targets}
+                onAction={handleAction}
+                onDelete={handleDelete}
+              />
+            ))}
+          </div>
+        )
       ) : tab === 'create' ? (
         <CreateForm
           projects={projects}

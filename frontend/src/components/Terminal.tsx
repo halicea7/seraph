@@ -1,32 +1,44 @@
+import type React from 'react'
 import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
 import { Terminal as XTerm } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
 import { useTheme } from '../contexts/ThemeContext'
+import { wsUrl } from '@/lib/config'
 
-function getXtermTheme(mono: boolean) {
+function cssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
+function getXtermTheme() {
+  const bg   = cssVar('--bg-term') || '#08070a'
+  const fg   = cssVar('--fg')      || '#e8e3d8'
+  const fg2  = cssVar('--fg-2')    || '#b8b2a4'
+  const fg4  = cssVar('--fg-4')    || '#4a463d'
+  const acc  = cssVar('--accent')  || '#f0a83a'
+  const bg3  = cssVar('--bg-3')    || '#1a1814'
   return {
-    background:       mono ? '#050505' : '#05080d',
-    foreground:       '#e2e8f0',
-    cursor:           mono ? '#d4d4d8' : '#06b6d4',
-    cursorAccent:     mono ? '#050505' : '#05080d',
-    selectionBackground: mono ? 'rgba(255,255,255,0.15)' : '#06b6d440',
-    black:            mono ? '#050505' : '#05080d',
-    brightBlack:      mono ? '#2a2a2a' : '#1a2540',
-    red:              '#ef4444',
-    brightRed:        '#f87171',
-    green:            '#22c55e',
-    brightGreen:      '#4ade80',
-    yellow:           '#f59e0b',
-    brightYellow:     '#fbbf24',
-    blue:             mono ? '#a1a1aa' : '#3b82f6',
-    brightBlue:       mono ? '#d4d4d8' : '#60a5fa',
-    magenta:          '#a855f7',
-    brightMagenta:    '#c084fc',
-    cyan:             mono ? '#d4d4d8' : '#06b6d4',
-    brightCyan:       mono ? '#f4f4f5' : '#22d3ee',
-    white:            '#e2e8f0',
-    brightWhite:      '#f8fafc',
+    background:          bg,
+    foreground:          fg,
+    cursor:              acc,
+    cursorAccent:        bg,
+    selectionBackground: acc + '33',
+    black:               bg,
+    brightBlack:         bg3,
+    red:                 '#ef4444',
+    brightRed:           '#f87171',
+    green:               '#22c55e',
+    brightGreen:         '#4ade80',
+    yellow:              '#f59e0b',
+    brightYellow:        '#fbbf24',
+    blue:                fg4,
+    brightBlue:          fg2,
+    magenta:             '#a855f7',
+    brightMagenta:       '#c084fc',
+    cyan:                fg2,
+    brightCyan:          fg,
+    white:               fg,
+    brightWhite:         '#ffffff',
   }
 }
 
@@ -40,9 +52,10 @@ export interface TerminalHandle {
 
 interface TerminalProps {
   className?: string
+  style?: React.CSSProperties
 }
 
-const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ className }, ref) => {
+const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ className, style }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -52,7 +65,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ className }, ref) 
   // Update xterm color theme when app theme changes
   useEffect(() => {
     if (xtermRef.current) {
-      xtermRef.current.options.theme = getXtermTheme(theme === 'mono')
+      xtermRef.current.options.theme = getXtermTheme()
     }
   }, [theme])
 
@@ -60,7 +73,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ className }, ref) 
     if (!containerRef.current) return
 
     const term = new XTerm({
-      theme: getXtermTheme(theme === 'mono'),
+      theme: getXtermTheme(),
       fontFamily: '"JetBrains Mono", "Fira Code", monospace',
       fontSize: 13,
       lineHeight: 1.4,
@@ -79,9 +92,9 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ className }, ref) 
 
     // Typewriter intro
     const lines = [
-      '\x1b[36m╔══════════════════════════════════════════╗\x1b[0m',
-      '\x1b[36m║  \x1b[32mSeraph\x1b[0m \x1b[90m//\x1b[0m \x1b[36mSecurity Terminal\x1b[0m          \x1b[36m║\x1b[0m',
-      '\x1b[36m╚══════════════════════════════════════════╝\x1b[0m',
+      '\x1b[33m╔══════════════════════════════════════════╗\x1b[0m',
+      '\x1b[33m║  \x1b[32mSeraph\x1b[0m \x1b[90m//\x1b[0m \x1b[33mSecurity Terminal\x1b[0m          \x1b[33m║\x1b[0m',
+      '\x1b[33m╚══════════════════════════════════════════╝\x1b[0m',
       '',
       '\x1b[90m  Ready. Awaiting command execution...\x1b[0m',
       '',
@@ -117,9 +130,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ className }, ref) 
 
       wsRef.current?.close()
 
-      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${wsProto}//${window.location.host}/ws/execute/${scanId}`
-      const ws = new WebSocket(wsUrl)
+      const ws = new WebSocket(wsUrl(`/ws/execute/${scanId}`))
       wsRef.current = ws
 
       ws.onopen = () => {
@@ -162,7 +173,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ className }, ref) 
     <div
       ref={containerRef}
       className={className}
-      style={{ backgroundColor: theme === 'mono' ? '#050505' : '#05080d' }}
+      style={{ backgroundColor: 'var(--bg-term)', ...style }}
     />
   )
 })

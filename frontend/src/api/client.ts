@@ -9,14 +9,13 @@ import type {
   UpdateProjectPayload,
   UpdateTargetPayload,
 } from '@/types'
-
-const BASE_URL = '/api/v1'
+import { getApiBase } from '@/lib/config'
 
 async function request<T>(
   path: string,
   options?: RequestInit
 ): Promise<T> {
-  const url = `${BASE_URL}${path}`
+  const url = `${getApiBase()}${path}`
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
@@ -137,7 +136,7 @@ export function generateScript(
 }
 
 export function downloadScriptUrl(scanId: string): string {
-  return `${BASE_URL}/audit/script/${scanId}/download`
+  return `${getApiBase()}/audit/script/${scanId}/download`
 }
 
 // ── Pentest ────────────────────────────────────────────────────────────────────
@@ -163,6 +162,24 @@ export function createPentestScan(data: {
   notes?: string
 }): Promise<{ scan_id: string; command: string }> {
   return request('/pentest/run', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+// Same shape as createPentestScan, but for ad-hoc/model-assembled commands
+// (AI Operator, Hermes) rather than a human picking a reviewed template from
+// the Pentest Workbench — the server requires the admin role for this one.
+export function createRawPentestScan(data: {
+  project_id: string
+  target_id: string
+  engagement_type: string
+  phase_id: string
+  tool_name: string
+  command: string
+  notes?: string
+}): Promise<{ scan_id: string; command: string }> {
+  return request('/pentest/raw', {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -206,7 +223,7 @@ export function generateReport(
 }
 
 export function getReportDownloadUrl(projectId: string, format: 'html' | 'markdown'): string {
-  return `${BASE_URL}/audit/reports/download/${projectId}?format=${format}`
+  return `${getApiBase()}/audit/reports/download/${projectId}?format=${format}`
 }
 
 // ── Profiles ──────────────────────────────────────────────────────────────────
@@ -276,4 +293,116 @@ export interface PlatformStats {
 
 export function getStats(): Promise<PlatformStats> {
   return request<PlatformStats>('/stats')
+}
+
+// ── Nessus ────────────────────────────────────────────────────────────────────
+
+export interface NessusTemplate {
+  uuid: string
+  name: string
+  title: string
+  description: string
+  is_agent: boolean
+}
+
+export interface NessusPolicy {
+  id: number
+  name: string
+  description: string
+}
+
+export interface NessusFolder {
+  id: number
+  name: string
+  type: string
+}
+
+export function getNessusTemplates(): Promise<NessusTemplate[]> {
+  return request<NessusTemplate[]>('/nessus/templates')
+}
+
+export function getNessusPolicies(): Promise<NessusPolicy[]> {
+  return request<NessusPolicy[]>('/nessus/policies')
+}
+
+export function getNessusFolders(): Promise<NessusFolder[]> {
+  return request<NessusFolder[]>('/nessus/folders')
+}
+
+export function launchNessusScan(data: {
+  project_id: string
+  template_uuid: string
+  policy_id?: number | null
+  folder_id?: number | null
+  name?: string
+  targets: string
+}): Promise<{ scan_id: string; nessus_scan_id: number; name: string }> {
+  return request('/nessus/scans/launch', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function controlNessusScan(
+  nessusScanId: number,
+  action: 'pause' | 'resume' | 'stop' | 'kill'
+): Promise<{ ok: boolean; action: string }> {
+  return request(`/nessus/scans/${nessusScanId}/control/${action}`, { method: 'POST' })
+}
+
+export function requestNessusExport(
+  nessusScanId: number,
+  format: 'nessus' | 'pdf' | 'html' | 'csv'
+): Promise<{ ok: boolean; file_id: number; format: string }> {
+  return request(`/nessus/scans/${nessusScanId}/export`, {
+    method: 'POST',
+    body: JSON.stringify({ format }),
+  })
+}
+
+export function nessusExportStatus(
+  nessusScanId: number,
+  fileId: number
+): Promise<{ status: string }> {
+  return request(`/nessus/scans/${nessusScanId}/export/${fileId}/status`)
+}
+
+export function nessusExportDownloadUrl(nessusScanId: number, fileId: number): string {
+  return `${getApiBase()}/nessus/scans/${nessusScanId}/export/${fileId}/download`
+}
+
+// ── Hermes Agent ────────────────────────────────────────────────────────────────
+
+export interface HermesStatus {
+  installed: boolean
+  version: string
+  ollama_url: string
+  ollama_reachable: boolean
+}
+
+export interface HermesConfig {
+  allow_private_urls: boolean
+  sandbox: boolean
+  default_model: string
+}
+
+export function getHermesStatus(): Promise<HermesStatus> {
+  return request<HermesStatus>('/hermes/status')
+}
+
+export function getHermesConfig(): Promise<HermesConfig> {
+  return request<HermesConfig>('/hermes/config')
+}
+
+export function saveHermesConfig(data: HermesConfig): Promise<{ ok: boolean }> {
+  return request('/hermes/config', { method: 'POST', body: JSON.stringify(data) })
+}
+
+export function createHermesRun(data: {
+  project_id: string
+  target_id: string
+  mode: string
+  model: string
+}): Promise<{ scan_id: string; mode: string; model: string }> {
+  return request('/hermes/run', { method: 'POST', body: JSON.stringify(data) })
 }

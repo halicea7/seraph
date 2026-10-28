@@ -1,9 +1,18 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import {
-  ArrowLeft, Zap, Search, GitCompare, X, Plus, Minus, Equal,
-  Terminal as TerminalIcon, Loader, Cpu, Trash2, Ban,
-} from 'lucide-react'
+import { getApiBase } from '@/lib/config'
+import Icon from '@/components/Icon'
+import EmptyState from '@/components/EmptyState'
+import { SkeletonRows } from '@/components/Skeleton'
+import NessusScanModal from '@/components/NessusScanModal'
+import { useLiveEvents } from '@/contexts/LiveEventsContext'
+import { useToast } from '@/contexts/ToastContext'
+import { controlNessusScan, requestNessusExport, nessusExportDownloadUrl } from '@/api/client'
+
+const rule = '1px solid var(--rule)'
+const ruleStrong = '1px solid var(--rule-strong)'
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface ScanRow {
   id: string
@@ -15,6 +24,9 @@ interface ScanRow {
   project_id: string | null
   finding_count: number
   auto_probe: boolean
+  nessus_scan_id: number | null
+  nessus_status: string | null
+  nessus_progress: number | null
   started_at: string | null
   completed_at: string | null
   created_at: string | null
@@ -42,51 +54,119 @@ interface DiffResult {
   unchanged: DiffFinding[]
 }
 
+// ── Style maps ─────────────────────────────────────────────────────────────────
+
 const STATUS_COLORS: Record<string, string> = {
   completed:  '#22c55e',
-  running:    '#3b82f6',
+  running:    'var(--accent)',
   pending:    '#64748b',
   failed:     '#ef4444',
   cancelled:  '#f59e0b',
 }
 
-const STATUS_STYLES: Record<string, string> = {
-  completed:  'bg-green-500/15 text-green-400 border border-green-500/30',
-  running:    'bg-blue-500/15 text-blue-400 border border-blue-500/30',
-  pending:    'bg-slate-500/15 text-slate-400 border border-slate-500/20',
-  failed:     'bg-red-500/15 text-red-400 border border-red-500/30',
-  cancelled:  'bg-amber-500/15 text-amber-400 border border-amber-500/30',
+const STATUS_STYLES: Record<string, { color: string; background: string; border: string }> = {
+  completed: { color: 'var(--ok)',     background: 'rgba(84,175,97,0.08)',   border: '1px solid rgba(84,175,97,0.3)' },
+  running:   { color: 'var(--accent)', background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.3)' },
+  pending:   { color: 'var(--fg-3)',   background: 'rgba(100,116,139,0.08)', border: '1px solid rgba(100,116,139,0.2)' },
+  failed:    { color: 'var(--crit)',   background: 'rgba(232,64,64,0.08)',   border: '1px solid rgba(232,64,64,0.3)' },
+  cancelled: { color: 'var(--accent)', background: 'rgba(240,168,58,0.08)', border: '1px solid rgba(240,168,58,0.3)' },
 }
 
 const SEV_COLOR: Record<string, string> = {
-  critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#22c55e', info: '#3b82f6',
+  critical: 'var(--crit)', high: '#f97316', medium: 'var(--accent)', low: 'var(--ok)', info: 'var(--med)',
 }
 const SEV_BG: Record<string, string> = {
-  critical: 'rgba(239,68,68,0.15)', high: 'rgba(249,115,22,0.15)', medium: 'rgba(245,158,11,0.15)',
-  low: 'rgba(34,197,94,0.15)', info: 'rgba(59,130,246,0.15)',
+  critical: 'rgba(232,64,64,0.1)', high: 'rgba(249,115,22,0.1)', medium: 'rgba(240,168,58,0.1)',
+  low: 'rgba(84,175,97,0.1)', info: 'rgba(180,140,60,0.1)',
 }
 
 const STATUSES = ['all', 'completed', 'running', 'pending', 'failed']
 
+// ── Pill helper ────────────────────────────────────────────────────────────────
+
+function Pill({ tone, children }: { tone: string; children: React.ReactNode }) {
+  const c = tone === 'fail' ? 'var(--crit)'
+          : tone === 'warn' ? 'var(--high)'
+          : tone === 'pass' ? 'var(--ok)'
+          : tone === 'info' ? 'var(--accent)'
+          : 'var(--fg-3)'
+  return (
+    <span
+      className="mono"
+      style={{ fontSize: 10, color: c, padding: '2px 6px', border: `1px solid ${c}`, background: `${c}18` }}
+    >
+      {children}
+    </span>
+  )
+}
+
+// ── DiffBucket ─────────────────────────────────────────────────────────────────
+
+function DiffBucket({ label, iconName, color, findings }: {
+  label: string
+  iconName: string
+  color: string
+  findings: DiffFinding[]
+}) {
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, color }}>
+        <Icon name={iconName} size={12} />
+        <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, fontFamily: 'var(--font-mono)' }}>{findings.length}</span>
+      </div>
+      {findings.length === 0 ? (
+        <p style={{ fontSize: 11, color: 'var(--fg-4)', textAlign: 'center', padding: '16px 0' }}>None</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto', maxHeight: 240 }}>
+          {findings.map(f => (
+            <div key={f.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+              <span
+                style={{
+                  fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                  textTransform: 'uppercase', flexShrink: 0, marginTop: 2,
+                  background: SEV_BG[f.severity] ?? 'rgba(100,116,139,0.15)',
+                  color: SEV_COLOR[f.severity] ?? 'var(--fg-3)',
+                }}
+              >
+                {f.severity}
+              </span>
+              <p style={{ fontSize: 11, color: 'var(--fg-2)', lineHeight: 1.4 }}>{f.title}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
 export default function AllScans() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [scans, setScans] = useState<ScanRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') ?? 'all')
-  const [search, setSearch] = useState(searchParams.get('q') ?? '')
-  const [selected, setSelected] = useState<string[]>([])
-  const [diff, setDiff] = useState<DiffResult | null>(null)
-  const [diffLoading, setDiffLoading] = useState(false)
-  const [diffError, setDiffError] = useState('')
 
-  // Log drawer
-  const [drawerScan, setDrawerScan] = useState<ScanDetail | null>(null)
+  const [scans, setScans]           = useState<ScanRow[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') ?? 'all')
+  const [search, setSearch]         = useState(searchParams.get('q') ?? '')
+  const [selected, setSelected]     = useState<string[]>([])
+  const [diff, setDiff]             = useState<DiffResult | null>(null)
+  const [diffLoading, setDiffLoading] = useState(false)
+  const [diffError, setDiffError]   = useState('')
+
+  // Detail panel
+  const [drawerScan, setDrawerScan]       = useState<ScanDetail | null>(null)
   const [drawerLoading, setDrawerLoading] = useState(false)
-  const [parseLoading, setParseLoading] = useState(false)
-  const [parseMsg, setParseMsg] = useState('')
+  const [parseLoading, setParseLoading]   = useState(false)
+  const [parseMsg, setParseMsg]           = useState('')
   const [cancelLoading, setCancelLoading] = useState(false)
   const [deleteLoading, setDeleteLoading] = useState(false)
+  const [showLaunch, setShowLaunch]       = useState(false)
+  const [ctrlLoading, setCtrlLoading]     = useState(false)
+
+  const toast = useToast()
+  const { subscribe } = useLiveEvents()
 
   function updateFilter(status: string, q: string) {
     const params: Record<string, string> = {}
@@ -97,21 +177,44 @@ export default function AllScans() {
 
   const openParam = searchParams.get('open')
 
-  useEffect(() => {
-    fetch('/api/v1/scans')
+  function loadScans(): Promise<ScanRow[]> {
+    return fetch(`${getApiBase()}/scans`)
       .then(r => r.json())
-      .then((data: ScanRow[]) => {
-        setScans(data)
-        // Auto-open drawer if ?open=<scan_id> was passed (e.g. from a notification)
+      .then((data: ScanRow[]) => { setScans(data); return data })
+  }
+
+  useEffect(() => {
+    loadScans()
+      .then(data => {
         if (openParam) {
           const target = data.find(s => s.id === openParam)
           if (target) openDrawer(target)
-          // Remove the param from the URL so back/refresh doesn't re-open
           setSearchParams(prev => { prev.delete('open'); return prev }, { replace: true })
         }
       })
       .finally(() => setLoading(false))
-  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live updates: Nessus poller pushes scan_update (status/progress) and
+  // finding_created (fan-out complete) over /ws/events.
+  useEffect(() => {
+    const unsub = subscribe((msg: any) => {
+      if (msg?.type === 'scan_update' && msg.scan_id) {
+        setScans(prev => prev.map(s => s.id === msg.scan_id
+          ? { ...s, nessus_status: msg.status ?? s.nessus_status,
+              nessus_progress: typeof msg.progress === 'number' ? msg.progress : s.nessus_progress,
+              status: msg.status === 'completed' ? 'completed' : s.status }
+          : s))
+      } else if (msg?.type === 'finding_created') {
+        loadScans()
+      } else if (msg?.type === 'nessus_export_ready' && msg.nessus_scan_id && msg.file_id) {
+        const url = nessusExportDownloadUrl(msg.nessus_scan_id, msg.file_id)
+        toast.success(`${String(msg.format ?? 'report').toUpperCase()} export ready`)
+        window.open(url, '_blank')
+      }
+    })
+    return unsub
+  }, [subscribe])
 
   const filtered = scans.filter(s => {
     if (statusFilter !== 'all' && s.status !== statusFilter) return false
@@ -136,7 +239,7 @@ export default function AllScans() {
   function parseFindings(scanId: string) {
     setParseLoading(true)
     setParseMsg('')
-    fetch(`/api/v1/audit/scans/${scanId}/parse`, { method: 'POST' })
+    fetch(`${getApiBase()}/audit/scans/${scanId}/parse`, { method: 'POST' })
       .then(r => r.json())
       .then(d => setParseMsg(`${d.parsed ?? 0} findings parsed`))
       .catch(() => setParseMsg('Parse failed'))
@@ -146,7 +249,7 @@ export default function AllScans() {
   async function cancelScan(scanId: string) {
     setCancelLoading(true)
     try {
-      const res = await fetch(`/api/v1/scans/${scanId}/cancel`, { method: 'POST' })
+      const res = await fetch(`${getApiBase()}/scans/${scanId}/cancel`, { method: 'POST' })
       if (res.ok) {
         setScans(prev => prev.map(s => s.id === scanId ? { ...s, status: 'cancelled' } : s))
         setDrawerScan(prev => prev?.id === scanId ? { ...prev, status: 'cancelled' } : prev)
@@ -156,10 +259,36 @@ export default function AllScans() {
     }
   }
 
+  async function nessusControl(scan: ScanRow, action: 'pause' | 'resume' | 'stop') {
+    if (!scan.nessus_scan_id) return
+    setCtrlLoading(true)
+    try {
+      await controlNessusScan(scan.nessus_scan_id, action)
+      const optimistic = action === 'pause' ? 'paused' : action === 'resume' ? 'running' : 'stopping'
+      setScans(prev => prev.map(s => s.id === scan.id ? { ...s, nessus_status: optimistic } : s))
+      setDrawerScan(prev => prev?.id === scan.id ? { ...prev, nessus_status: optimistic } : prev)
+      toast.success(`Scan ${action}d`)
+    } catch (e: any) {
+      toast.error(e?.message ?? `Failed to ${action} scan`)
+    } finally {
+      setCtrlLoading(false)
+    }
+  }
+
+  async function nessusExport(scan: ScanRow, format: 'nessus' | 'pdf' | 'csv') {
+    if (!scan.nessus_scan_id) return
+    try {
+      await requestNessusExport(scan.nessus_scan_id, format)
+      toast.info(`Preparing ${format.toUpperCase()} export — you'll be notified when it's ready`)
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Export failed')
+    }
+  }
+
   async function deleteScan(scanId: string) {
     setDeleteLoading(true)
     try {
-      const res = await fetch(`/api/v1/scans/${scanId}`, { method: 'DELETE' })
+      const res = await fetch(`${getApiBase()}/scans/${scanId}`, { method: 'DELETE' })
       if (res.ok) {
         setScans(prev => prev.filter(s => s.id !== scanId))
         setDrawerScan(null)
@@ -173,7 +302,7 @@ export default function AllScans() {
     setParseMsg('')
     setDrawerLoading(true)
     setDrawerScan({ ...scan, raw_output: null, config_json: null })
-    fetch(`/api/v1/audit/scans/${scan.id}`)
+    fetch(`${getApiBase()}/audit/scans/${scan.id}`)
       .then(r => r.json())
       .then(data => setDrawerScan({ ...scan, raw_output: data.raw_output ?? null, config_json: data.config_json ?? null }))
       .catch(() => setDrawerScan(prev => prev ? { ...prev, raw_output: 'Failed to load output.' } : null))
@@ -184,8 +313,8 @@ export default function AllScans() {
     if (selected.length !== 2) return
     setDiffLoading(true)
     setDiffError('')
-    fetch(`/api/v1/scans/diff?a=${selected[0]}&b=${selected[1]}`)
-      .then(r => r.ok ? r.json() : r.json().then((e: {detail: string}) => Promise.reject(e.detail)))
+    fetch(`${getApiBase()}/scans/diff?a=${selected[0]}&b=${selected[1]}`)
+      .then(r => r.ok ? r.json() : r.json().then((e: { detail: string }) => Promise.reject(e.detail)))
       .then(setDiff)
       .catch(e => setDiffError(String(e)))
       .finally(() => setDiffLoading(false))
@@ -196,126 +325,183 @@ export default function AllScans() {
     return s ? `${s.scan_type} @ ${s.target}` : id.slice(0, 8)
   }
 
+  const badgeStyle = (status: string): React.CSSProperties => {
+    const ss = STATUS_STYLES[status] ?? STATUS_STYLES.pending
+    return {
+      fontSize: 10, padding: '1px 7px', borderRadius: 10,
+      fontFamily: 'var(--font-mono)', color: ss.color, background: ss.background, border: ss.border,
+    }
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────────
+
   return (
-    <div className="flex h-full">
-      {/* Main content */}
-      <div className={`flex-1 p-8 space-y-6 overflow-y-auto transition-all ${drawerScan ? 'mr-[480px]' : ''}`}>
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/')} className="text-slate-400 hover:text-slate-200 transition-colors">
-            <ArrowLeft size={18} />
-          </button>
-          <div className="flex-1">
-            <h1 className="text-2xl font-bold text-white">All Scans</h1>
-            <p className="text-slate-400 text-sm mt-0.5">{scans.length} total scans across all projects</p>
-          </div>
-          {/* Diff controls */}
-          {selected.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">{selected.length}/2 selected</span>
-              {selected.length === 2 && (
-                <button
-                  onClick={runDiff}
-                  disabled={diffLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-600/20 text-cyan-300 border border-cyan-600/30 hover:bg-cyan-600/30 transition-colors disabled:opacity-50"
-                >
-                  <GitCompare size={13} />
-                  {diffLoading ? 'Comparing…' : 'Diff Scans'}
-                </button>
-              )}
-              <button onClick={() => { setSelected([]); setDiff(null) }} className="text-slate-500 hover:text-slate-300 transition-colors">
-                <X size={15} />
+    <div className="page-enter" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+
+      {/* ── Page header ── */}
+      <div style={{ padding: '16px var(--pad)', borderBottom: rule, background: 'var(--bg)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button
+          onClick={() => navigate('/')}
+          className="btn btn-ghost btn-sm"
+          style={{ padding: '4px 6px', display: 'flex', alignItems: 'center' }}
+        >
+          <Icon name="arrow_l" size={15} />
+        </button>
+        <div style={{ flex: 1 }}>
+          <div className="smcap" style={{ marginBottom: 2 }}>All Scans</div>
+          <h1 className="mono" style={{ fontSize: 20, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>Scans</h1>
+        </div>
+
+        <button
+          onClick={() => setShowLaunch(true)}
+          className="btn btn-primary btn-sm"
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <Icon name="target" size={13} />
+          Launch Nessus scan
+        </button>
+
+        {/* Right slot: diff controls */}
+        {selected.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>{selected.length}/2 selected</span>
+            {selected.length === 2 && (
+              <button
+                onClick={runDiff}
+                disabled={diffLoading}
+                className="btn btn-sm"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(240,168,58,0.1)', color: 'var(--accent)', border: '1px solid rgba(240,168,58,0.3)', opacity: diffLoading ? 0.5 : 1 }}
+              >
+                <Icon name="activity" size={13} />
+                {diffLoading ? 'Comparing…' : 'Diff Scans'}
               </button>
+            )}
+            <button
+              onClick={() => { setSelected([]); setDiff(null) }}
+              className="btn btn-ghost btn-sm"
+              style={{ padding: '4px 6px', display: 'flex', alignItems: 'center' }}
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Filter/toolbar strip ── */}
+      <div style={{ padding: '12px var(--pad)', borderBottom: rule, background: 'var(--bg-2)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
+        {/* Search */}
+        <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+          <Icon name="search" size={13} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-3)' }} />
+          <input
+            type="text"
+            placeholder="Search target, project, type…"
+            value={search}
+            onChange={e => { setSearch(e.target.value); updateFilter(statusFilter, e.target.value) }}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: 'var(--bg)', border: ruleStrong, borderRadius: 4,
+              color: 'var(--fg)', fontFamily: 'var(--font-sans)', fontSize: 13,
+              padding: '6px 12px 6px 30px', outline: 'none',
+            }}
+          />
+        </div>
+
+        {/* Status filter pills */}
+        <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', border: ruleStrong, borderRadius: 4, padding: 4 }}>
+          {STATUSES.map(s => (
+            <button
+              key={s}
+              onClick={() => { setStatusFilter(s); updateFilter(s, search) }}
+              style={{
+                padding: '4px 12px', borderRadius: 4, fontSize: 11, fontWeight: 500,
+                textTransform: 'capitalize', border: 'none', cursor: 'pointer',
+                background: statusFilter === s ? 'rgba(240,168,58,0.12)' : 'none',
+                color: statusFilter === s ? 'var(--accent)' : 'var(--fg-3)',
+              }}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
+        <span style={{ fontSize: 11, color: 'var(--fg-4)' }} className="tnum">{filtered.length} shown</span>
+      </div>
+
+      {/* ── Main body: list + detail panel ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: drawerScan ? '1fr 460px' : '1fr', flex: 1, minHeight: 0 }}>
+
+        {/* ── Left: scans list ── */}
+        <div style={{ overflowY: 'auto', borderRight: drawerScan ? rule : 'none' }}>
+
+          {/* Diff result panel */}
+          {diff && (
+            <div style={{ margin: 16, background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', borderBottom: rule }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Icon name="activity" size={14} color="var(--accent)" />
+                  <span className="smcap">Scan Diff</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11 }}>
+                  <span style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>{scanName(diff.scan_a)}</span>
+                  <span style={{ color: 'var(--fg-4)' }}>→</span>
+                  <span style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>{scanName(diff.scan_b)}</span>
+                </div>
+                <button onClick={() => setDiff(null)} className="btn btn-ghost btn-sm" style={{ padding: '4px 6px', display: 'flex', alignItems: 'center' }}>
+                  <Icon name="x" size={13} />
+                </button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', borderTop: rule }}>
+                <DiffBucket label="New"       iconName="plus"  color="var(--crit)" findings={diff.new} />
+                <div style={{ borderLeft: rule, borderRight: rule }}>
+                  <DiffBucket label="Resolved"  iconName="minus" color="var(--ok)"   findings={diff.resolved} />
+                </div>
+                <DiffBucket label="Unchanged" iconName="minus" color="var(--fg-3)"  findings={diff.unchanged} />
+              </div>
             </div>
           )}
-        </div>
 
-        {/* Selection hint */}
-        {selected.length === 0 && (
-          <p className="text-xs text-slate-600 -mt-3">
-            Click a row to view its output · check the box on two rows to <strong className="text-slate-500">Diff Scans</strong>
-          </p>
-        )}
-
-        {/* Diff result panel */}
-        {diff && (
-          <div className="glass rounded-xl border border-cyan-900/20 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3 border-b border-cyan-900/15">
-              <div className="flex items-center gap-2">
-                <GitCompare size={14} className="text-cyan-400" />
-                <span className="text-xs font-semibold text-white uppercase tracking-wider">Scan Diff</span>
-              </div>
-              <div className="flex items-center gap-4 text-[11px]">
-                <span className="text-slate-500 font-mono">{scanName(diff.scan_a)}</span>
-                <span className="text-slate-600">→</span>
-                <span className="text-slate-500 font-mono">{scanName(diff.scan_b)}</span>
-              </div>
-              <button onClick={() => setDiff(null)} className="text-slate-500 hover:text-slate-300 transition-colors">
-                <X size={14} />
-              </button>
+          {diffError && (
+            <div style={{ margin: '0 16px 0', padding: '8px 16px', borderRadius: 4, background: 'rgba(232,64,64,0.08)', border: '1px solid rgba(232,64,64,0.3)', fontSize: 11, color: 'var(--crit)' }}>
+              {diffError}
             </div>
+          )}
 
-            <div className="grid grid-cols-3 divide-x divide-cyan-900/15">
-              <DiffBucket label="New" icon={<Plus size={12} />} color="text-red-400" findings={diff.new} />
-              <DiffBucket label="Resolved" icon={<Minus size={12} />} color="text-green-400" findings={diff.resolved} />
-              <DiffBucket label="Unchanged" icon={<Equal size={12} />} color="text-slate-500" findings={diff.unchanged} />
+          {/* Selection hint */}
+          {selected.length === 0 && !diff && (
+            <div style={{ padding: '10px 20px' }}>
+              <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: 0 }}>
+                Click a row to view output · check the box on two rows to <strong style={{ color: 'var(--fg-3)' }}>Diff Scans</strong>
+              </p>
             </div>
-          </div>
-        )}
+          )}
 
-        {diffError && (
-          <div className="px-4 py-2 rounded-lg bg-red-900/20 border border-red-700/30 text-xs text-red-400">{diffError}</div>
-        )}
-
-        {/* Filters */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="relative">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-            <input
-              type="text"
-              placeholder="Search target, project, type…"
-              value={search}
-              onChange={e => { setSearch(e.target.value); updateFilter(statusFilter, e.target.value) }}
-              className="pl-8 pr-4 py-1.5 rounded-lg text-sm text-slate-200 border border-cyan-900/20 focus:border-cyan-500/50 focus:outline-none w-64"
-              style={{ background: '#090d14' }}
-            />
-          </div>
-          <div className="flex gap-1 glass rounded-lg p-1">
-            {STATUSES.map(s => (
-              <button
-                key={s}
-                onClick={() => { setStatusFilter(s); updateFilter(s, search) }}
-                className={`px-3 py-1 rounded text-xs font-medium capitalize transition-colors ${
-                  statusFilter === s ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-          <span className="text-xs text-slate-500">{filtered.length} shown</span>
-        </div>
-
-        {/* Table */}
-        <div className="glass rounded-xl overflow-hidden">
+          {/* Scans table */}
           {loading ? (
-            <div className="flex items-center justify-center py-16 text-slate-500 text-sm">Loading…</div>
+            <div style={{ paddingTop: 4 }}>
+              <SkeletonRows rows={7} cols={5} />
+            </div>
           ) : filtered.length === 0 ? (
-            <div className="flex items-center justify-center py-16 text-slate-500 text-sm">No scans match the current filter.</div>
+            <EmptyState
+              icon="target"
+              title="No scans match the current filter"
+              hint="Adjust the filters above, or run a scan from a module to populate this list."
+              pad={56}
+            />
           ) : (
-            <table className="w-full text-sm">
+            <table className="data" style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
-                <tr className="border-b border-cyan-900/20 text-left">
-                  <th className="px-3 py-3 w-8" />
-                  <th className="px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Type</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Target</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Project</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Status</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider text-right">Findings</th>
-                  <th className="px-5 py-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Date</th>
+                <tr style={{ borderBottom: rule, textAlign: 'left' }}>
+                  <th style={{ padding: '10px 12px', width: 32 }} />
+                  <th className="smcap" style={{ padding: '10px 16px' }}>Type</th>
+                  <th className="smcap" style={{ padding: '10px 16px' }}>Target</th>
+                  <th className="smcap" style={{ padding: '10px 16px' }}>Project</th>
+                  <th className="smcap" style={{ padding: '10px 16px' }}>Status</th>
+                  <th className="smcap" style={{ padding: '10px 16px', textAlign: 'right' }}>Findings</th>
+                  <th className="smcap" style={{ padding: '10px 16px' }}>Started</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-cyan-900/10">
-                {filtered.map(s => {
+              <tbody>
+                {filtered.map((s, idx) => {
                   const isSelected = selected.includes(s.id)
                   const selIdx = selected.indexOf(s.id)
                   const isOpen = drawerScan?.id === s.id
@@ -323,38 +509,81 @@ export default function AllScans() {
                     <tr
                       key={s.id}
                       onClick={() => openDrawer(s)}
-                      className={`transition-colors cursor-pointer ${isOpen ? 'bg-cyan-950/25' : isSelected ? 'bg-cyan-950/20' : 'hover:bg-cyan-950/10'}`}
+                      className={isOpen ? 'selected' : ''}
+                      style={{
+                        cursor: 'pointer',
+                        borderBottom: idx < filtered.length - 1 ? rule : 'none',
+                        background: isOpen
+                          ? 'rgba(240,168,58,0.06)'
+                          : isSelected
+                            ? 'rgba(240,168,58,0.03)'
+                            : 'none',
+                      }}
                     >
-                      <td className="px-3 py-3" onClick={e => toggleSelect(e, s.id)}>
-                        <div className={`w-5 h-5 rounded border flex items-center justify-center text-[10px] font-bold transition-colors cursor-pointer hover:border-cyan-600 ${
-                          isSelected ? 'border-cyan-500 bg-cyan-500/20 text-cyan-300' : 'border-slate-700 text-transparent'
-                        }`}>
+                      {/* Checkbox column */}
+                      <td style={{ padding: '10px 12px' }} onClick={e => toggleSelect(e, s.id)}>
+                        <div style={{
+                          width: 20, height: 20, borderRadius: 4,
+                          border: isSelected ? '1px solid var(--accent)' : ruleStrong,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                          background: isSelected ? 'rgba(240,168,58,0.2)' : 'none',
+                          color: isSelected ? 'var(--accent)' : 'transparent',
+                          flexShrink: 0,
+                        }}>
                           {isSelected ? selIdx + 1 : ''}
                         </div>
                       </td>
-                      <td className="px-5 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1 h-5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS[s.status] || STATUS_COLORS.pending }} />
-                          <span className="font-mono text-xs text-slate-300">{s.scan_type}</span>
-                          {s.auto_probe && <Zap size={11} className="text-green-400 shrink-0" />}
+
+                      {/* Scan type */}
+                      <td style={{ padding: '10px 16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 3, height: 18, borderRadius: 2, flexShrink: 0, backgroundColor: STATUS_COLORS[s.status] || STATUS_COLORS.pending }} />
+                          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-2)' }}>{s.scan_type}</span>
+                          {s.auto_probe && (
+                            <Icon name="bolt" size={11} color="var(--ok)" />
+                          )}
                         </div>
                       </td>
-                      <td className="px-5 py-3 font-mono text-xs text-slate-300">{s.target}</td>
-                      <td className="px-5 py-3 text-xs text-slate-400">{s.project}</td>
-                      <td className="px-5 py-3">
-                        <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${STATUS_STYLES[s.status] || STATUS_STYLES.pending}`}>
-                          {s.status}
-                        </span>
+
+                      {/* Target */}
+                      <td style={{ padding: '10px 16px' }}>
+                        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-2)' }}>{s.target}</span>
                       </td>
-                      <td className="px-5 py-3 text-right">
-                        {s.finding_count > 0 ? (
-                          <span className="text-xs font-mono text-amber-400">{s.finding_count}</span>
+
+                      {/* Project */}
+                      <td style={{ padding: '10px 16px', fontSize: 11, color: 'var(--fg-3)' }}>{s.project}</td>
+
+                      {/* Status */}
+                      <td style={{ padding: '10px 16px' }}>
+                        {s.scan_type === 'nessus_job' && s.nessus_status && s.nessus_status !== 'completed' ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 110 }}>
+                            <span className="mono" style={{ fontSize: 10, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                              {s.nessus_status} · {s.nessus_progress ?? 0}%
+                            </span>
+                            <div style={{ height: 3, background: 'var(--rule)', borderRadius: 2, overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${s.nessus_progress ?? 0}%`, background: 'var(--accent)', transition: 'width .4s ease' }} />
+                            </div>
+                          </div>
                         ) : (
-                          <span className="text-xs text-slate-600">—</span>
+                          <span style={badgeStyle(s.status)}>{s.status}</span>
                         )}
                       </td>
-                      <td className="px-5 py-3 text-xs text-slate-500 font-mono">
-                        {s.started_at ? new Date(s.started_at).toLocaleDateString() : '—'}
+
+                      {/* Findings count */}
+                      <td style={{ padding: '10px 16px', textAlign: 'right' }}>
+                        {s.finding_count > 0 ? (
+                          <span className="mono tnum" style={{ fontSize: 11, color: 'var(--accent)' }}>{s.finding_count}</span>
+                        ) : (
+                          <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>—</span>
+                        )}
+                      </td>
+
+                      {/* Started */}
+                      <td style={{ padding: '10px 16px' }}>
+                        <span className="mono tnum" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                          {s.started_at ? new Date(s.started_at).toLocaleDateString() : '—'}
+                        </span>
                       </td>
                     </tr>
                   )
@@ -363,119 +592,170 @@ export default function AllScans() {
             </table>
           )}
         </div>
-      </div>
 
-      {/* Log drawer */}
-      {drawerScan && (
-        <div className="fixed top-0 right-0 h-full w-[480px] flex flex-col border-l border-cyan-900/30 z-30" style={{ background: '#070d17' }}>
-          {/* Drawer header */}
-          <div className="flex items-start gap-3 px-5 py-4 border-b border-cyan-900/20 shrink-0">
-            <TerminalIcon size={16} className="text-cyan-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-mono text-sm font-semibold text-cyan-300">{drawerScan.scan_type}</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${STATUS_STYLES[drawerScan.status] || STATUS_STYLES.pending}`}>
-                  {drawerScan.status}
+        {/* ── Right: scan detail / diff ── */}
+        {drawerScan && (
+          <div style={{ overflowY: 'auto', background: 'var(--bg-2)', borderLeft: rule, display: 'flex', flexDirection: 'column' }}>
+
+            {/* Detail header */}
+            <div style={{ padding: '14px 18px', borderBottom: rule, flexShrink: 0, background: 'var(--bg)' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <Icon name="terminal" size={15} color="var(--accent)" style={{ marginTop: 2, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="smcap" style={{ marginBottom: 4 }}>scan · {drawerScan.id.slice(0, 8)}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                    <span className="mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>{drawerScan.scan_type}</span>
+                    <span style={badgeStyle(drawerScan.status)}>{drawerScan.status}</span>
+                    {drawerScan.auto_probe && (
+                      <Pill tone="pass">auto-probe</Pill>
+                    )}
+                  </div>
+                  {drawerScan.started_at && (
+                    <div className="mono" style={{ fontSize: 10, color: 'var(--fg-4)' }}>
+                      {new Date(drawerScan.started_at).toLocaleString()}
+                      {drawerScan.completed_at && ` → ${new Date(drawerScan.completed_at).toLocaleString()}`}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setDrawerScan(null)}
+                  className="btn btn-ghost btn-sm"
+                  style={{ padding: '4px 6px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                >
+                  <Icon name="x" size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* KV strip */}
+            <div style={{ padding: '10px 18px', borderBottom: rule, background: 'var(--bg)', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', gap: 8, fontSize: 11 }}>
+                <span className="smcap" style={{ width: 72, flexShrink: 0 }}>Target</span>
+                <span className="mono" style={{ color: 'var(--fg-2)' }}>{drawerScan.target}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, fontSize: 11 }}>
+                <span className="smcap" style={{ width: 72, flexShrink: 0 }}>Project</span>
+                <span style={{ color: 'var(--fg-2)' }}>{drawerScan.project}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, fontSize: 11, alignItems: 'center' }}>
+                <span className="smcap" style={{ width: 72, flexShrink: 0 }}>Findings</span>
+                <span className="mono tnum" style={{ color: drawerScan.finding_count > 0 ? 'var(--accent)' : 'var(--fg-4)' }}>
+                  {drawerScan.finding_count > 0 ? drawerScan.finding_count : '—'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 mt-0.5 truncate">{drawerScan.target} · {drawerScan.project}</p>
-              {drawerScan.started_at && (
-                <p className="text-[11px] text-slate-600 mt-0.5 font-mono">
-                  {new Date(drawerScan.started_at).toLocaleString()}
-                  {drawerScan.completed_at && ` → ${new Date(drawerScan.completed_at).toLocaleString()}`}
-                </p>
-              )}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+
+            {/* Action buttons */}
+            <div style={{ padding: '10px 18px', borderBottom: rule, background: 'var(--bg)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               {drawerScan.raw_output !== null && (
                 <button
                   onClick={() => parseFindings(drawerScan.id)}
                   disabled={parseLoading}
-                  title="Re-parse output into findings"
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-cyan-600/15 text-cyan-400 border border-cyan-600/25 hover:bg-cyan-600/25 transition-colors disabled:opacity-50"
+                  className="btn btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(240,168,58,0.08)', color: 'var(--accent)', border: '1px solid rgba(240,168,58,0.25)', opacity: parseLoading ? 0.5 : 1 }}
                 >
-                  {parseLoading ? <Loader size={11} className="animate-spin" /> : <Cpu size={11} />}
+                  <Icon name={parseLoading ? 'refresh' : 'cpu'} size={11} className={parseLoading ? 'animate-spin' : undefined} />
                   {parseLoading ? 'Parsing…' : 'Parse Findings'}
                 </button>
               )}
-              {parseMsg && <span className="text-xs text-green-400">{parseMsg}</span>}
-              {(drawerScan.status === 'running' || drawerScan.status === 'pending') && (
+              {parseMsg && <span style={{ fontSize: 11, color: 'var(--ok)' }}>{parseMsg}</span>}
+
+              {/* Nessus job lifecycle controls + export */}
+              {drawerScan.scan_type === 'nessus_job' && drawerScan.nessus_scan_id && (
+                <>
+                  {drawerScan.nessus_status && !['completed', 'stopping', 'canceled', 'cancelled'].includes(drawerScan.nessus_status) && (
+                    <>
+                      <button
+                        onClick={() => nessusControl(drawerScan, drawerScan.nessus_status === 'paused' ? 'resume' : 'pause')}
+                        disabled={ctrlLoading}
+                        className="btn btn-sm"
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: ctrlLoading ? 0.5 : 1 }}
+                      >
+                        <Icon name={drawerScan.nessus_status === 'paused' ? 'play' : 'pause'} size={11} />
+                        {drawerScan.nessus_status === 'paused' ? 'Resume' : 'Pause'}
+                      </button>
+                      <button
+                        onClick={() => nessusControl(drawerScan, 'stop')}
+                        disabled={ctrlLoading}
+                        className="btn btn-sm"
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: ctrlLoading ? 0.5 : 1 }}
+                      >
+                        <Icon name="stop" size={11} />
+                        Stop
+                      </button>
+                    </>
+                  )}
+                  {(['nessus', 'pdf', 'csv'] as const).map(fmt => (
+                    <button
+                      key={fmt}
+                      onClick={() => nessusExport(drawerScan, fmt)}
+                      className="btn btn-sm"
+                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <Icon name="download" size={11} />
+                      {fmt.toUpperCase()}
+                    </button>
+                  ))}
+                </>
+              )}
+
+              {(drawerScan.status === 'running' || drawerScan.status === 'pending') && drawerScan.scan_type !== 'nessus_job' && (
                 <button
                   onClick={() => cancelScan(drawerScan.id)}
                   disabled={cancelLoading}
-                  title="Cancel this scan"
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-amber-600/15 text-amber-400 border border-amber-600/25 hover:bg-amber-600/25 transition-colors disabled:opacity-50"
+                  className="btn btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(240,168,58,0.08)', color: 'var(--accent)', border: '1px solid rgba(240,168,58,0.25)', opacity: cancelLoading ? 0.5 : 1 }}
                 >
-                  {cancelLoading ? <Loader size={11} className="animate-spin" /> : <Ban size={11} />}
+                  <Icon name={cancelLoading ? 'refresh' : 'stop'} size={11} className={cancelLoading ? 'animate-spin' : undefined} />
                   {cancelLoading ? 'Cancelling…' : 'Cancel'}
                 </button>
               )}
               <button
                 onClick={() => deleteScan(drawerScan.id)}
                 disabled={deleteLoading}
-                title="Delete this scan and all its findings"
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-red-600/15 text-red-400 border border-red-600/25 hover:bg-red-600/25 transition-colors disabled:opacity-50"
+                className="btn btn-danger btn-sm"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto', opacity: deleteLoading ? 0.5 : 1 }}
               >
-                {deleteLoading ? <Loader size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                <Icon name={deleteLoading ? 'refresh' : 'trash'} size={11} className={deleteLoading ? 'animate-spin' : undefined} />
                 {deleteLoading ? 'Deleting…' : 'Delete'}
               </button>
-              <button onClick={() => setDrawerScan(null)} className="text-slate-500 hover:text-slate-200 transition-colors">
-                <X size={16} />
-              </button>
+            </div>
+
+            {/* Raw output */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+              {drawerLoading ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg-3)', fontSize: 13 }}>
+                  <Icon name="refresh" size={14} className="animate-spin" />
+                  Loading output…
+                </div>
+              ) : drawerScan.raw_output ? (
+                <div className="term" style={{ maxHeight: 400, overflowY: 'auto' }}>
+                  <pre className="mono" style={{ fontSize: 11, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', lineHeight: 1.6, margin: 0 }}>{drawerScan.raw_output}</pre>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', gap: 12, color: 'var(--fg-4)' }}>
+                  <Icon name="terminal" size={32} />
+                  <p className="smcap">select a scan</p>
+                  <p style={{ fontSize: 12, color: 'var(--fg-4)', margin: 0 }}>No output recorded for this scan.</p>
+                </div>
+              )}
             </div>
           </div>
+        )}
 
-          {/* Output */}
-          <div className="flex-1 overflow-y-auto px-5 py-4">
-            {drawerLoading ? (
-              <div className="flex items-center gap-2 text-slate-500 text-sm">
-                <Loader size={14} className="animate-spin" />
-                Loading output…
-              </div>
-            ) : drawerScan.raw_output ? (
-              <pre className="font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">{drawerScan.raw_output}</pre>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-600">
-                <TerminalIcon size={32} />
-                <p className="text-sm">No output recorded for this scan.</p>
-              </div>
-            )}
+        {/* Empty detail state when no scan selected and detail col visible */}
+        {!drawerScan && false && (
+          <div style={{ overflowY: 'auto', background: 'var(--bg-2)', borderLeft: rule, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <p className="smcap">select a scan</p>
           </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function DiffBucket({ label, icon, color, findings }: {
-  label: string
-  icon: React.ReactNode
-  color: string
-  findings: DiffFinding[]
-}) {
-  return (
-    <div className="p-4">
-      <div className={`flex items-center gap-1.5 mb-3 ${color}`}>
-        {icon}
-        <span className="text-[11px] font-bold uppercase tracking-wider">{label}</span>
-        <span className="ml-auto text-[11px] font-mono">{findings.length}</span>
+        )}
       </div>
-      {findings.length === 0 ? (
-        <p className="text-[11px] text-slate-600 text-center py-4">None</p>
-      ) : (
-        <div className="space-y-1.5 overflow-y-auto" style={{ maxHeight: '240px' }}>
-          {findings.map(f => (
-            <div key={f.id} className="flex items-start gap-2">
-              <span
-                className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0 mt-0.5"
-                style={{ background: SEV_BG[f.severity] ?? 'rgba(100,116,139,0.15)', color: SEV_COLOR[f.severity] ?? '#94a3b8' }}
-              >
-                {f.severity}
-              </span>
-              <p className="text-[11px] text-slate-300 leading-snug">{f.title}</p>
-            </div>
-          ))}
-        </div>
+
+      {showLaunch && (
+        <NessusScanModal
+          onClose={() => setShowLaunch(false)}
+          onLaunched={() => loadScans()}
+        />
       )}
     </div>
   )

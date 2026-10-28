@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react'
-import {
-  FolderOpen,
-  Target,
-  ScanLine,
-  CheckCircle2,
-  AlertTriangle,
-  Loader,
-  RefreshCw,
-  Filter,
-} from 'lucide-react'
+import Icon from '../components/Icon'
 import { useAppStore } from '@/stores/appStore'
 import type { Project } from '@/types'
+import { getApiBase } from '@/lib/config'
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface TimelineEvent {
   id: string
@@ -22,65 +16,64 @@ interface TimelineEvent {
   ts: string
 }
 
-const SEV_COLOR: Record<string, string> = {
-  critical: '#ef4444',
-  high: '#f97316',
-  medium: '#f59e0b',
-  low: '#22c55e',
-  info: '#3b82f6',
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const rule = '1px solid var(--rule)'
+
+function PageHeader({ title, sub, right }: { title: string; sub: string; right?: React.ReactNode }) {
+  return (
+    <div style={{ borderBottom: rule, padding: '24px var(--pad) 18px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexShrink: 0 }}>
+      <div>
+        <h1 className="mono" style={{ margin: 0, fontWeight: 500, fontSize: 22, letterSpacing: '-0.01em' }}>{title}</h1>
+        <div style={{ color: 'var(--fg-3)', fontSize: 12, marginTop: 6 }}>{sub}</div>
+      </div>
+      {right && <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>{right}</div>}
+    </div>
+  )
 }
 
-const SEV_BG: Record<string, string> = {
-  critical: 'rgba(239,68,68,0.12)',
-  high: 'rgba(249,115,22,0.12)',
-  medium: 'rgba(245,158,11,0.12)',
-  low: 'rgba(34,197,94,0.12)',
-  info: 'rgba(59,130,246,0.12)',
+function SegBtns({ options, value, onChange }: { options: string[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ display: 'flex', border: rule, height: 26 }}>
+      {options.map((o, i) => (
+        <button key={o} onClick={() => onChange(o)} style={{
+          background: value === o ? 'var(--accent-2)' : 'transparent',
+          color: value === o ? 'var(--accent)' : 'var(--fg-3)',
+          border: 'none', borderLeft: i > 0 ? rule : 'none',
+          padding: '0 10px', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em',
+          cursor: 'pointer', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap',
+        }}>{o}</button>
+      ))}
+    </div>
+  )
 }
 
-const STATUS_STYLE: Record<string, string> = {
-  completed: 'bg-green-500/15 text-green-400 border-green-500/30',
-  running: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  pending: 'bg-slate-500/15 text-slate-400 border-slate-500/20',
-  failed: 'bg-red-500/15 text-red-400 border-red-500/30',
-}
-
-function kindIcon(kind: TimelineEvent['kind']) {
-  switch (kind) {
-    case 'project':   return <FolderOpen size={14} className="text-cyan-400" />
-    case 'target':    return <Target size={14} className="text-violet-400" />
-    case 'scan_start':return <ScanLine size={14} className="text-blue-400" />
-    case 'scan_end':  return <CheckCircle2 size={14} className="text-green-400" />
-    case 'finding':   return <AlertTriangle size={14} className="text-amber-400" />
+function dotStyle(sev: string | null, kind: TimelineEvent['kind']): React.CSSProperties {
+  if (sev === 'critical') {
+    return { background: 'var(--crit)', border: '2px solid var(--bg)' }
   }
-}
-
-function kindDotColor(kind: TimelineEvent['kind']) {
+  if (sev === 'high') {
+    return { background: 'var(--high)', border: '2px solid var(--bg)' }
+  }
   switch (kind) {
-    case 'project':    return '#06b6d4'
-    case 'target':     return '#8b5cf6'
-    case 'scan_start': return '#3b82f6'
-    case 'scan_end':   return '#22c55e'
-    case 'finding':    return '#f59e0b'
+    case 'scan_start':
+    case 'finding':
+      return { background: 'var(--accent)', border: '2px solid var(--bg)' }
+    case 'scan_end':
+      return { background: 'var(--ok)', border: '2px solid var(--bg)' }
+    case 'target':
+      return { background: '#8b5cf6', border: '2px solid var(--bg)' }
+    default:
+      return { background: 'var(--fg-3)', border: '2px solid var(--bg)' }
   }
 }
 
 function fmt(ts: string) {
   const d = new Date(ts)
-  return d.toLocaleString(undefined, {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-type KindFilter = TimelineEvent['kind'] | 'all'
-const KIND_FILTERS: { label: string; value: KindFilter }[] = [
-  { label: 'All', value: 'all' },
-  { label: 'Projects', value: 'project' },
-  { label: 'Targets', value: 'target' },
-  { label: 'Scans', value: 'scan_end' },
-  { label: 'Findings', value: 'finding' },
-]
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function Timeline() {
   const { selectedProject, setSelectedProject } = useAppStore()
@@ -89,22 +82,18 @@ export default function Timeline() {
   const [events, setEvents] = useState<TimelineEvent[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [kindFilter, setKindFilter] = useState<KindFilter>('all')
-  const [severityFilter, setSeverityFilter] = useState<string>('all')
+  const [timeRange, setTimeRange] = useState('7d')
 
   useEffect(() => {
-    fetch('/api/v1/projects')
+    fetch(`${getApiBase()}/projects`)
       .then(r => r.json())
       .then((data: Project[]) => {
         setProjects(data)
-        if (!localProjectId && data.length > 0) {
-          setLocalProjectId(data[0].id)
-        }
+        if (!localProjectId && data.length > 0) setLocalProjectId(data[0].id)
       })
       .catch(() => {})
   }, [])
 
-  // Keep local picker in sync if global store changes
   useEffect(() => {
     if (selectedProject?.id && selectedProject.id !== localProjectId) {
       setLocalProjectId(selectedProject.id)
@@ -118,22 +107,17 @@ export default function Timeline() {
   }
 
   const activeProjectId = localProjectId || selectedProject?.id || ''
-  const activeProjectName = projects.find(p => p.id === activeProjectId)?.name ?? selectedProject?.name ?? ''
 
   async function load(projectId: string) {
-    setLoading(true)
-    setError('')
+    setLoading(true); setError('')
     try {
-      const res = await fetch(`/api/v1/projects/${projectId}/timeline`)
+      const res = await fetch(`${getApiBase()}/projects/${projectId}/timeline`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: TimelineEvent[] = await res.json()
-      // Reverse so newest is first
       setEvents([...data].reverse())
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load timeline')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   useEffect(() => {
@@ -141,192 +125,136 @@ export default function Timeline() {
     else setEvents([])
   }, [activeProjectId])
 
-  const filtered = events.filter(e => {
-    const kindOk = kindFilter === 'all'
-      || e.kind === kindFilter
-      || (kindFilter === 'scan_end' && (e.kind === 'scan_start' || e.kind === 'scan_end'))
-    const sevOk = severityFilter === 'all' || e.severity === severityFilter
-    return kindOk && sevOk
-  })
+  function exportJsonl() {
+    const lines = filteredEvents.map(e => JSON.stringify(e)).join('\n')
+    const blob = new Blob([lines], { type: 'application/jsonl' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = 'timeline.jsonl'; a.click()
+    URL.revokeObjectURL(url)
+  }
 
-  const findingCount = events.filter(e => e.kind === 'finding').length
-  const scanCount = events.filter(e => e.kind === 'scan_end').length
-  const targetCount = events.filter(e => e.kind === 'target').length
-  const criticalCount = events.filter(e => e.severity === 'critical').length
+  // Apply the time-range filter (Today / 7d / 30d / Engagement).
+  function inRange(ts: string): boolean {
+    if (timeRange === 'Engagement') return true
+    const t = new Date(ts).getTime()
+    if (timeRange === 'Today') { const d = new Date(); d.setHours(0, 0, 0, 0); return t >= d.getTime() }
+    if (timeRange === '7d') return Date.now() - t <= 7 * 86_400_000
+    if (timeRange === '30d') return Date.now() - t <= 30 * 86_400_000
+    return true
+  }
+  const filteredEvents = events.filter(e => inRange(e.ts))
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Engagement Timeline</h1>
-          <p className="text-sm text-slate-400 mt-0.5">
-            {activeProjectName || 'Select a project'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={localProjectId}
-            onChange={e => handleProjectChange(e.target.value)}
-            className="rounded px-3 py-1.5 text-sm text-slate-200 border border-cyan-900/30 focus:border-cyan-500/50 focus:outline-none"
-            style={{ background: '#090d14' }}
-          >
-            {projects.length === 0 && <option value="">No projects</option>}
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          {activeProjectId && (
-            <button
-              onClick={() => load(activeProjectId)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-slate-300 hover:text-white border border-slate-700 hover:border-slate-500 transition-colors"
-            >
-              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
-              Refresh
+    <div className="page-enter" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)', color: 'var(--fg)' }}>
+
+      <PageHeader
+        title="Timeline"
+        sub="Reconstructed engagement timeline — events from scans, findings, and target additions."
+        right={
+          <>
+            {/* project selector */}
+            {projects.length > 1 && (
+              <select
+                value={localProjectId}
+                onChange={e => handleProjectChange(e.target.value)}
+                style={{ background: 'var(--bg)', border: rule, borderRadius: 3, padding: '4px 10px', fontSize: 11, color: 'var(--fg)', fontFamily: 'var(--font-sans)', outline: 'none', height: 26 }}
+              >
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            )}
+            <SegBtns options={['Today', '7d', '30d', 'Engagement']} value={timeRange} onChange={setTimeRange} />
+            <button className="btn" onClick={exportJsonl} disabled={filteredEvents.length === 0} style={{ opacity: filteredEvents.length === 0 ? 0.4 : 1 }}>
+              <Icon name="download" size={12} color="currentColor" /> Export JSONL
             </button>
-          )}
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      {/* Summary cards */}
-      {activeProjectId && events.length > 0 && (
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: 'Targets', value: targetCount, color: '#8b5cf6' },
-            { label: 'Scans run', value: scanCount, color: '#3b82f6' },
-            { label: 'Findings', value: findingCount, color: '#f59e0b' },
-            { label: 'Critical', value: criticalCount, color: '#ef4444' },
-          ].map(({ label, value, color }) => (
-            <div
-              key={label}
-              className="rounded-lg border border-slate-800 p-3 text-center"
-              style={{ background: '#0b1120' }}
-            >
-              <div className="text-2xl font-bold" style={{ color }}>{value}</div>
-              <div className="text-xs text-slate-500 mt-0.5">{label}</div>
-            </div>
-          ))}
-        </div>
-      )}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px var(--pad)' }}>
 
-      {/* Filters */}
-      {events.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Filter size={14} className="text-slate-500" />
-          <div className="flex gap-1">
-            {KIND_FILTERS.map(f => (
-              <button
-                key={f.value}
-                onClick={() => setKindFilter(f.value)}
-                className={`px-2.5 py-1 rounded text-xs border transition-colors ${
-                  kindFilter === f.value
-                    ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40'
-                    : 'text-slate-400 border-slate-700 hover:border-slate-500'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
+        {!activeProjectId && (
+          <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--fg-3)', fontSize: 13 }}>
+            Select a project to view its timeline.
           </div>
-          <div className="flex gap-1 ml-2">
-            {['all', 'critical', 'high', 'medium', 'low'].map(sev => (
-              <button
-                key={sev}
-                onClick={() => setSeverityFilter(sev)}
-                className={`px-2.5 py-1 rounded text-xs border transition-colors ${
-                  severityFilter === sev
-                    ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40'
-                    : 'text-slate-400 border-slate-700 hover:border-slate-500'
-                }`}
-                style={sev !== 'all' && severityFilter === sev ? { color: SEV_COLOR[sev] } : undefined}
-              >
-                {sev === 'all' ? 'All sev.' : sev}
-              </button>
-            ))}
+        )}
+
+        {loading && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
+            <Icon name="refresh" size={24} color="var(--accent)" />
           </div>
-        </div>
-      )}
+        )}
 
-      {/* States */}
-      {!activeProjectId && (
-        <div className="text-center py-20 text-slate-500">Select a project above to view its timeline.</div>
-      )}
-      {loading && (
-        <div className="flex justify-center py-20">
-          <Loader size={24} className="animate-spin text-cyan-500" />
-        </div>
-      )}
-      {error && (
-        <div className="rounded border border-red-500/30 bg-red-500/10 text-red-400 px-4 py-3 text-sm">{error}</div>
-      )}
+        {error && (
+          <div style={{ background: 'rgba(232,64,64,0.08)', border: '1px solid rgba(232,64,64,0.3)', borderRadius: 3, color: 'var(--crit)', padding: '10px 14px', fontSize: 13 }}>
+            {error}
+          </div>
+        )}
 
-      {/* Timeline */}
-      {!loading && filtered.length === 0 && activeProjectId && !error && (
-        <div className="text-center py-20 text-slate-500">No events match the current filters.</div>
-      )}
+        {!loading && !error && activeProjectId && filteredEvents.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--fg-3)', fontSize: 13 }}>
+            {events.length === 0 ? 'No events in this project yet.' : `No events in the “${timeRange}” range.`}
+          </div>
+        )}
 
-      {!loading && filtered.length > 0 && (
-        <div className="relative">
-          {/* Vertical line */}
-          <div
-            className="absolute left-5 top-0 bottom-0 w-px"
-            style={{ background: 'linear-gradient(to bottom, #1e293b, #0f172a)' }}
-          />
+        {!loading && filteredEvents.length > 0 && (
+          <div style={{ position: 'relative', paddingLeft: 80 }}>
+            {/* Vertical line */}
+            <div style={{ position: 'absolute', left: 76, top: 0, bottom: 0, width: 1, background: 'var(--rule-strong)' }} />
 
-          <div className="space-y-0">
-            {filtered.map((event) => (
-              <div key={event.id} className="relative flex gap-4 group">
-                {/* Dot */}
-                <div className="relative z-10 flex-shrink-0 w-10 h-10 flex items-center justify-center">
-                  <div
-                    className="w-3 h-3 rounded-full border-2 transition-transform group-hover:scale-125"
-                    style={{
-                      background: kindDotColor(event.kind),
-                      borderColor: '#0f172a',
-                      boxShadow: `0 0 8px ${kindDotColor(event.kind)}60`,
-                    }}
-                  />
+            {filteredEvents.map(event => (
+              <div key={event.id} style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 16, marginBottom: 18 }}>
+                {/* Time */}
+                <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', textAlign: 'right', paddingTop: 2 }}>
+                  {fmt(event.ts)}
                 </div>
 
-                {/* Card */}
-                <div
-                  className="flex-1 mb-3 rounded-lg border border-slate-800/80 px-4 py-3 transition-colors group-hover:border-slate-700"
-                  style={{ background: '#080e1a' }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {kindIcon(event.kind)}
-                      <span className="text-sm text-slate-200 truncate">{event.title}</span>
-                    </div>
-                    <span className="text-xs text-slate-500 flex-shrink-0">{fmt(event.ts)}</span>
+                {/* Content */}
+                <div style={{ position: 'relative', paddingLeft: 22 }}>
+                  {/* Dot */}
+                  <div style={{
+                    position: 'absolute',
+                    left: -5,
+                    top: 4,
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    ...dotStyle(event.severity, event.kind),
+                  }} />
+
+                  {/* Kind badge */}
+                  <span className="badge badge-info" style={{ textTransform: 'uppercase' }}>
+                    {event.kind.replace('_', ' ')}
+                  </span>
+
+                  {/* Title */}
+                  <div style={{ fontSize: 13, color: 'var(--fg)', marginTop: 6, lineHeight: 1.5 }}>
+                    {event.title}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2 mt-2">
-                    {event.target && (
-                      <span className="text-xs text-slate-500 font-mono">{event.target}</span>
-                    )}
-                    {event.severity && (
-                      <span
-                        className="text-xs px-1.5 py-0.5 rounded border"
-                        style={{
-                          color: SEV_COLOR[event.severity] ?? '#94a3b8',
-                          background: SEV_BG[event.severity] ?? 'rgba(148,163,184,0.1)',
-                          borderColor: `${SEV_COLOR[event.severity] ?? '#94a3b8'}40`,
-                        }}
-                      >
-                        {event.severity}
-                      </span>
-                    )}
-                    {event.status && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[event.status] ?? 'text-slate-400 border-slate-600'}`}>
-                        {event.status}
-                      </span>
-                    )}
-                  </div>
+                  {/* Meta */}
+                  {(event.target || event.severity || event.status) && (
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                      {event.target && (
+                        <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>{event.target}</span>
+                      )}
+                      {event.severity && (
+                        <span className="mono" style={{
+                          fontSize: 10,
+                          color: event.severity === 'critical' ? 'var(--crit)'
+                            : event.severity === 'high' ? 'var(--high)'
+                            : event.severity === 'medium' ? 'var(--accent)'
+                            : 'var(--ok)',
+                        }}>{event.severity}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
