@@ -255,26 +255,41 @@ async def _run_c2_session_sync() -> None:
 
         for ls in live_msf:
             sid = str(ls["msf_session_id"])
-            existing = db.query(C2Session).filter(C2Session.msf_session_id == sid).first()
+            remote_host = ls.get("remote_host", "")
+
+            # Resolve the project this session belongs to the same way
+            # routers/c2.py's manual sync does — by matching remote_host
+            # against a target, scoped to projects we actually know about
+            # — and dedupe on the same (msf_session_id, project_id)
+            # composite it uses, instead of msf_session_id alone. Without
+            # this, the same live session could get created under one
+            # project here and another via a manual sync call.
+            target = None
+            resolved_project_id = None
+            if remote_host and project_ids:
+                target = db.query(Target).filter(
+                    Target.project_id.in_(project_ids),
+                    Target.hostname_or_ip == remote_host,
+                ).first()
+                if target:
+                    resolved_project_id = target.project_id
+            if not resolved_project_id:
+                resolved_project_id = project_ids[0] if project_ids else None
+            if not resolved_project_id:
+                continue
+
+            existing = db.query(C2Session).filter(
+                C2Session.msf_session_id == sid,
+                C2Session.project_id == resolved_project_id,
+            ).first()
             if existing:
                 # Refresh last_seen and status
                 existing.status = "active"
                 existing.last_seen = datetime.utcnow()
             else:
-                # Create in first project if we have one
-                project_id = project_ids[0] if project_ids else None
-                if not project_id:
-                    continue
-                remote_host = ls.get("remote_host", "")
-                target = None
-                if remote_host:
-                    target = db.query(Target).filter(
-                        Target.project_id == project_id,
-                        Target.hostname_or_ip == remote_host,
-                    ).first()
                 session = C2Session(
                     id=str(_uuid.uuid4()),
-                    project_id=project_id,
+                    project_id=resolved_project_id,
                     target_id=target.id if target else None,
                     msf_session_id=sid,
                     session_type=ls.get("session_type", "shell"),
@@ -312,24 +327,33 @@ async def _run_c2_session_sync() -> None:
 
         for ls in live_sliver:
             sid = str(ls["sliver_id"])
-            existing = db.query(C2Session).filter(C2Session.msf_session_id == sid).first()
+            remote_host = ls.get("remote_host", "")
+
+            target = None
+            resolved_project_id = None
+            if remote_host and project_ids:
+                target = db.query(Target).filter(
+                    Target.project_id.in_(project_ids),
+                    Target.hostname_or_ip == remote_host,
+                ).first()
+                if target:
+                    resolved_project_id = target.project_id
+            if not resolved_project_id:
+                resolved_project_id = project_ids[0] if project_ids else None
+            if not resolved_project_id:
+                continue
+
+            existing = db.query(C2Session).filter(
+                C2Session.msf_session_id == sid,
+                C2Session.project_id == resolved_project_id,
+            ).first()
             if existing:
                 existing.status = "active"
                 existing.last_seen = datetime.utcnow()
             else:
-                project_id = project_ids[0] if project_ids else None
-                if not project_id:
-                    continue
-                remote_host = ls.get("remote_host", "")
-                target = None
-                if remote_host:
-                    target = db.query(Target).filter(
-                        Target.project_id == project_id,
-                        Target.hostname_or_ip == remote_host,
-                    ).first()
                 session = C2Session(
                     id=str(_uuid.uuid4()),
-                    project_id=project_id,
+                    project_id=resolved_project_id,
                     target_id=target.id if target else None,
                     msf_session_id=sid,
                     session_type=ls["session_type"],

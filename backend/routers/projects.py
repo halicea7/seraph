@@ -474,6 +474,13 @@ async def create_target(
     if not in_scope:
         raise HTTPException(status_code=400, detail=f"Target out of scope: {reason}")
 
+    existing = db.query(Target).filter(
+        Target.project_id == project_id,
+        Target.hostname_or_ip == payload.hostname_or_ip,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="A target with this hostname/IP already exists in this project")
+
     target = Target(
         id=str(uuid.uuid4()),
         project_id=project_id,

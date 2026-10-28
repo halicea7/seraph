@@ -69,7 +69,7 @@ class Target(Base):
     __tablename__ = "targets"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False, index=True)
     hostname_or_ip = Column(String, nullable=False)
     target_type = Column(
         Enum(
@@ -99,7 +99,7 @@ class Scan(Base):
     __tablename__ = "scans"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    target_id = Column(String, ForeignKey("targets.id"), nullable=False)
+    target_id = Column(String, ForeignKey("targets.id"), nullable=False, index=True)
     scan_type = Column(String, nullable=False)
     module = Column(
         Enum("audit", "pentest", name="module_enum"),
@@ -109,12 +109,13 @@ class Scan(Base):
         Enum("pending", "running", "completed", "failed", name="status_enum"),
         nullable=False,
         default="pending",
+        index=True,
     )
     config_json = Column(Text, nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     raw_output = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     # Nessus lifecycle tracking (populated for scan_type "nessus_job")
     nessus_scan_id = Column(Integer, nullable=True)      # the Nessus-side scan id
@@ -132,7 +133,7 @@ class Finding(Base):
     __tablename__ = "findings"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    scan_id = Column(String, ForeignKey("scans.id"), nullable=False)
+    scan_id = Column(String, ForeignKey("scans.id"), nullable=False, index=True)
     severity = Column(
         Enum(
             "critical",
@@ -150,11 +151,11 @@ class Finding(Base):
     framework = Column(String, nullable=True)
     remediation = Column(Text, nullable=True)
     evidence = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     cve_id = Column(String, nullable=True)
     cvss_score = Column(String, nullable=True)
-    status = Column(String, default="open")   # open | in-review | remediated | accepted | false_positive
+    status = Column(String, default="open", index=True)   # open | in-review | remediated | accepted | false_positive
     fp_reason = Column(Text, nullable=True)   # reason for false positive suppression
     tags = Column(String, default="")         # comma-separated
     exploit_chain_json = Column(Text, nullable=True)   # JSON: [{session_id, technique, timestamp, notes}]
@@ -182,9 +183,9 @@ class ScanProfile(Base):
 class C2Session(Base):
     __tablename__ = "c2_sessions"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    target_id = Column(String, ForeignKey("targets.id", ondelete="CASCADE"), nullable=True)
-    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    msf_session_id = Column(String, nullable=True)   # MSF's session ID (e.g. "1")
+    target_id = Column(String, ForeignKey("targets.id", ondelete="CASCADE"), nullable=True, index=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    msf_session_id = Column(String, nullable=True, index=True)   # MSF's session ID (e.g. "1")
     session_type = Column(String, default="meterpreter")  # meterpreter, shell, ssh
     platform = Column(String, default="")             # linux, windows, etc.
     arch = Column(String, default="")
@@ -193,7 +194,7 @@ class C2Session(Base):
     tunnel_peer = Column(String, default="")
     via_exploit = Column(String, default="")
     via_payload = Column(String, default="")
-    status = Column(String, default="active")         # active, inactive, lost
+    status = Column(String, default="active", index=True)         # active, inactive, lost
     notes = Column(String, default="")
     established_at = Column(DateTime, default=datetime.utcnow)
     last_seen = Column(DateTime, default=datetime.utcnow)
@@ -693,3 +694,26 @@ def _migrate():
                 conn.commit()
             except Exception:
                 conn.rollback()  # Column already exists — skip
+
+    # Indexes on the model columns above only apply to brand-new tables via
+    # create_all(); existing databases need them created explicitly.
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS ix_targets_project_id ON targets (project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_scans_target_id ON scans (target_id)",
+        "CREATE INDEX IF NOT EXISTS ix_scans_status ON scans (status)",
+        "CREATE INDEX IF NOT EXISTS ix_scans_created_at ON scans (created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_findings_scan_id ON findings (scan_id)",
+        "CREATE INDEX IF NOT EXISTS ix_findings_status ON findings (status)",
+        "CREATE INDEX IF NOT EXISTS ix_findings_created_at ON findings (created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_c2_sessions_target_id ON c2_sessions (target_id)",
+        "CREATE INDEX IF NOT EXISTS ix_c2_sessions_project_id ON c2_sessions (project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_c2_sessions_msf_session_id ON c2_sessions (msf_session_id)",
+        "CREATE INDEX IF NOT EXISTS ix_c2_sessions_status ON c2_sessions (status)",
+    ]
+    with engine.connect() as conn:
+        for sql in indexes:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                conn.rollback()

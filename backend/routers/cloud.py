@@ -294,6 +294,6 @@ def terminate_instance(instance_db_id: str, db: Session = Depends(get_db)):
         except Exception as e:
             raise HTTPException(502, f"Failed to terminate instance: {e}")
 
-    inst.status = "terminated"
+    db.delete(inst)
     db.commit()
     return {"ok": True}

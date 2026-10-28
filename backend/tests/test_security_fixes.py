@@ -177,7 +177,7 @@ def test_upsert_findings_dedupes_across_scans_for_same_target(client, auth, pid)
     same tool would pile up duplicate findings indefinitely."""
     r = client.post(
         f"/api/v1/projects/{pid}/targets",
-        json={"hostname_or_ip": "10.0.0.30", "target_type": "linux_host"},
+        json={"hostname_or_ip": "10.0.0.31", "target_type": "linux_host"},
         headers=auth,
     )
     target_id = r.json()["id"]
@@ -324,3 +324,66 @@ def test_webhook_rejects_private_url(client, auth):
         headers=auth,
     )
     assert r.status_code == 400, r.text
+
+
+# ── Data integrity — duplicate hostname rejected within a project ───────────
+# Uses its own project rather than the shared `pid` fixture: the preceding
+# test in this file deletes the `pid` project, and this one runs after it.
+
+def test_create_target_rejects_duplicate_hostname_in_project(client, auth):
+    r = client.post("/api/v1/projects", json={"name": "dup-hostname-test-project-1"}, headers=auth)
+    assert r.status_code == 201, r.text
+    project_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/v1/projects/{project_id}/targets",
+        json={"hostname_or_ip": "10.0.0.50", "target_type": "linux_host"},
+        headers=auth,
+    )
+    assert r.status_code == 201, r.text
+
+    r = client.post(
+        f"/api/v1/projects/{project_id}/targets",
+        json={"hostname_or_ip": "10.0.0.50", "target_type": "linux_host"},
+        headers=auth,
+    )
+    assert r.status_code == 400, r.text
+
+    # A second project may still use the same hostname.
+    r = client.post("/api/v1/projects", json={"name": "dup-hostname-test-project-2"}, headers=auth)
+    assert r.status_code == 201, r.text
+    other_pid = r.json()["id"]
+    r = client.post(
+        f"/api/v1/projects/{other_pid}/targets",
+        json={"hostname_or_ip": "10.0.0.50", "target_type": "linux_host"},
+        headers=auth,
+    )
+    assert r.status_code == 201, r.text
+
+
+# ── Data integrity — terminating a cloud C2 instance deletes the row ────────
+
+def test_terminate_cloud_instance_deletes_row(client, auth):
+    """terminate_instance used to only set status='terminated' and never
+    delete the row -- a "delete" that didn't delete. instance_id is left
+    unset here so the AWS termination call is skipped entirely (the
+    `if inst.instance_id:` guard in the route), isolating the DB-row fix."""
+    from database import CloudC2Instance
+
+    db = database.SessionLocal()
+    try:
+        inst = CloudC2Instance(name="t1", region="us-east-1")
+        db.add(inst)
+        db.commit()
+        inst_id = inst.id
+    finally:
+        db.close()
+
+    r = client.delete(f"/api/v1/cloud/instances/{inst_id}", headers=auth)
+    assert r.status_code == 200, r.text
+
+    db = database.SessionLocal()
+    try:
+        assert db.query(CloudC2Instance).filter(CloudC2Instance.id == inst_id).first() is None
+    finally:
+        db.close()
