@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime
 
 from database import AppSetting, Finding, Notification, Scan, SessionLocal
+from services.recon_common import extract_open_ports as _extract_open_ports, create_pending_scan
 
 # ── Cancellation registry ──────────────────────────────────────────────────
 # Maps target_id → running asyncio.Task so cancel_probe() can stop it.
@@ -109,7 +110,6 @@ def _ferox_wordlist() -> str:
             f.write("\n".join(common))
     return fallback
 
-_OPEN_PORT_RE = re.compile(r"(\d+)/tcp\s+open")
 _SERVICE_VERSION_RE = re.compile(r"^\s*\d+/tcp\s+open\s+\S+\s+([A-Za-z][^\n]+)", re.MULTILINE)
 # Rustscan outputs lines like "Open 192.168.1.1:22" or just port lists
 _RUSTSCAN_PORT_RE = re.compile(r"Open\s+[\d.]+:(\d+)|^(\d+)$", re.MULTILINE)
@@ -254,10 +254,6 @@ def _get_service_routes(nmap_output: str, target_host: str,
                 steps.append((scan_type, cmd, tool))
 
     return steps
-
-
-def _extract_open_ports(nmap_output: str) -> set[int]:
-    return {int(m.group(1)) for m in _OPEN_PORT_RE.finditer(nmap_output)}
 
 
 def _extract_service_terms(nmap_output: str) -> list[str]:
@@ -579,22 +575,9 @@ def _mark_failed(scan_id: str, reason: str):
 
 
 def _create_scan(target_id: str, scan_type: str, tool_name: str) -> str:
-    db = SessionLocal()
-    try:
-        scan = Scan(
-            id=str(uuid.uuid4()),
-            target_id=target_id,
-            scan_type=scan_type,
-            module="pentest",
-            status="pending",
-            config_json=json.dumps({"auto_probe": True, "tool": tool_name}),
-        )
-        db.add(scan)
-        db.commit()
-        _scan_to_target[scan.id] = target_id
-        return scan.id
-    finally:
-        db.close()
+    scan_id = create_pending_scan(target_id, scan_type, {"auto_probe": True, "tool": tool_name})
+    _scan_to_target[scan_id] = target_id
+    return scan_id
 
 
 def cancel_probe(scan_id: str) -> bool:

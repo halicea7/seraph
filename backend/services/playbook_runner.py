@@ -11,17 +11,14 @@ Execution model:
 """
 import asyncio
 import json
-import re
 import shutil
-import uuid
 from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
 from database import Finding, PlaybookRun, Scan, SessionLocal
+from services.recon_common import extract_open_ports as _extract_open_ports, create_pending_scan
 
 SendFn = Callable[[dict], Awaitable[None]]
-
-_OPEN_PORT_RE = re.compile(r"(\d+)/tcp\s+open")
 
 # Per-run events for step-through "continue" signalling
 _continue_events: dict[str, asyncio.Event] = {}
@@ -307,26 +304,8 @@ async def _send_ai_insight(step: int, tool: str, target_host: str, step_desc: st
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
-def _extract_open_ports(output: str) -> set[int]:
-    return {int(m.group(1)) for m in _OPEN_PORT_RE.finditer(output)}
-
-
 def _create_scan(target_id: str, scan_type: str, run_id: str, step_name: str) -> str:
-    db = SessionLocal()
-    try:
-        scan = Scan(
-            id=str(uuid.uuid4()),
-            target_id=target_id,
-            scan_type=scan_type,
-            module="pentest",
-            status="pending",
-            config_json=json.dumps({"playbook_run_id": run_id, "step": step_name}),
-        )
-        db.add(scan)
-        db.commit()
-        return scan.id
-    finally:
-        db.close()
+    return create_pending_scan(target_id, scan_type, {"playbook_run_id": run_id, "step": step_name})
 
 
 def _update_run(run_id: str, **kwargs):
