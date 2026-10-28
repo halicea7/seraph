@@ -362,7 +362,10 @@ async def _run_searchsploit(
         scan.started_at = datetime.utcnow()
         scan.completed_at = datetime.utcnow()
 
-        findings_added = 0
+        from services.output_parser import ParsedFinding
+        from services.scan_lifecycle import upsert_findings
+
+        parsed = []
         for term, exploits in by_term.items():
             remote = [e for e in exploits if "remote" in e.get("Type", "").lower()]
             severity = "high" if remote else "medium"
@@ -370,24 +373,24 @@ async def _run_searchsploit(
                 f"[EDB-{e.get('EDB-ID','')}] {e.get('Title','')} ({e.get('Type','')})"
                 for e in exploits[:20]
             ]
-            db.add(Finding(
-                id=str(uuid.uuid4()),
-                scan_id=scan_id,
-                severity=severity,
+            parsed.append(ParsedFinding(
                 title=f"{len(exploits)} exploit(s) found for {term}",
                 description=(
                     f"searchsploit matched {len(exploits)} public exploit(s) for '{term}'. "
                     f"{len(remote)} remote exploit(s) available."
                 ),
+                severity=severity,
                 evidence="\n".join(evidence_lines),
                 remediation=(
                     "Review each exploit on https://exploit-db.com and apply vendor patches "
                     "or mitigating controls for the affected service."
                 ),
             ))
-            findings_added += 1
 
-        db.commit()
+        # Every searchsploit run creates a brand-new Scan row, so dedup
+        # must span every scan for this target or re-running it piles up
+        # duplicate "N exploit(s) found for X" findings.
+        _, findings_added = upsert_findings(db, scan, parsed, dedupe_by_target=True)
 
         if findings_added:
             highs = sum(
@@ -528,43 +531,29 @@ async def _run_step(scan_id: str, cmd: str, scan_type: str, timeout: int, env: d
             scan.completed_at = datetime.utcnow()
             db.commit()
 
-            # Auto-parse findings — deduplicate by title within the same target
-            from services.output_parser import auto_parse_scan_output
-            parsed = auto_parse_scan_output(scan_type, output)
-            if parsed:
-                existing_titles: set[str] = {
-                    row[0] for row in
-                    db.query(Finding.title)
-                    .join(Scan, Finding.scan_id == Scan.id)
-                    .filter(Scan.target_id == scan.target_id)
-                    .all()
-                }
-                new_findings = [pf for pf in parsed if pf.title not in existing_titles]
-            else:
-                new_findings = []
-            for pf in new_findings:
-                db.add(Finding(
-                    id=str(uuid.uuid4()),
-                    scan_id=scan_id,
-                    severity=pf.severity,
-                    title=pf.title,
-                    description=pf.description,
-                    control_id=pf.control_id,
-                    framework=pf.framework,
-                    remediation=pf.remediation,
-                    evidence=pf.evidence,
-                ))
-            if new_findings:
-                highs = sum(1 for p in new_findings if p.severity in ("critical", "high"))
+            # Auto-parse findings. Every auto-probe tool run creates a
+            # brand-new Scan row, so dedup must span every scan for this
+            # target or re-running the same tool piles up duplicates.
+            from services.scan_lifecycle import save_parsed_findings
+            pre_existing_ids = {
+                row[0] for row in db.query(Finding.id)
+                .join(Scan, Finding.scan_id == Scan.id)
+                .filter(Scan.target_id == scan.target_id)
+                .all()
+            }
+            all_current, new_count = save_parsed_findings(db, scan, output, dedupe_by_target=True)
+            if new_count:
+                created = [f for f in all_current if f.id not in pre_existing_ids]
+                highs = sum(1 for f in created if f.severity in ("critical", "high"))
                 db.add(Notification(
-                    title=f"Auto-probe complete — {len(new_findings)} finding(s)",
-                    body=f"{scan_type}: {len(new_findings)} finding(s)" + (f", {highs} critical/high" if highs else ""),
+                    title=f"Auto-probe complete — {new_count} finding(s)",
+                    body=f"{scan_type}: {new_count} finding(s)" + (f", {highs} critical/high" if highs else ""),
                     type="critical" if highs > 0 else "info",
                     scan_id=scan_id,
                 ))
             db.commit()
             status = scan.status
-            finding_count = len(new_findings)
+            finding_count = new_count
     finally:
         db.close()
 

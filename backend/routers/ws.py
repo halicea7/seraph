@@ -78,12 +78,12 @@ async def websocket_events(websocket: WebSocket):
 def _save_and_parse(db, scan, full_output: list[str], exit_code: int) -> None:
     """Persist scan output and auto-generate findings from parsed results.
 
-    Upserts by fingerprint (services.output_parser.save_parsed_findings)
+    Upserts by fingerprint (services.scan_lifecycle.save_parsed_findings)
     rather than delete-then-recreate, so re-running the same scan_id (e.g.
     clicking "Run on Server" again) never wipes an analyst's triage on a
     finding that's still present.
     """
-    from services.output_parser import save_parsed_findings
+    from services.scan_lifecycle import save_parsed_findings
 
     scan.status = "completed" if exit_code == 0 else "failed"
     scan.completed_at = datetime.utcnow()
@@ -686,32 +686,20 @@ async def websocket_osint(websocket: WebSocket, scan_id: str):
 
                 if domain:
                     from services.osint_parser import parse_osint_output
-                    from database import Finding  # Target is already module-level
+                    from services.output_parser import ParsedFinding
+                    from services.scan_lifecycle import upsert_findings
 
                     results = parse_osint_output(raw, domain)
 
-                    for email in results.emails:
-                        db.add(Finding(
-                            scan_id=scan_id, severity="info",
-                            title=f"Email: {email}",
-                            description="Email address discovered via OSINT.",
-                            framework="osint",
-                        ))
-                    for subdomain in results.subdomains:
-                        db.add(Finding(
-                            scan_id=scan_id, severity="info",
-                            title=f"Subdomain: {subdomain}",
-                            description="Subdomain discovered via OSINT.",
-                            framework="osint",
-                        ))
-                    for ip in results.ips:
-                        db.add(Finding(
-                            scan_id=scan_id, severity="info",
-                            title=f"IP Address: {ip}",
-                            description="IP address discovered via OSINT.",
-                            framework="osint",
-                        ))
-                    db.commit()
+                    parsed = (
+                        [ParsedFinding(title=f"Email: {email}", description="Email address discovered via OSINT.", severity="info", framework="osint") for email in results.emails]
+                        + [ParsedFinding(title=f"Subdomain: {subdomain}", description="Subdomain discovered via OSINT.", severity="info", framework="osint") for subdomain in results.subdomains]
+                        + [ParsedFinding(title=f"IP Address: {ip}", description="IP address discovered via OSINT.", severity="info", framework="osint") for ip in results.ips]
+                    )
+                    # Scan-scoped dedup: re-running OSINT against the same
+                    # scan_id (e.g. "Run on Server" again) upserts instead
+                    # of duplicating every email/subdomain/IP finding.
+                    upsert_findings(db, scan, parsed)
 
                     # Auto-create targets for newly discovered subdomains
                     new_targets = 0

@@ -124,7 +124,7 @@ def agent_poll(
 @router.post("/result/{token}/{job_id}")
 def agent_result(token: str, job_id: str, body: JobResult, db: Session = Depends(get_db)):
     """Agent posts job output."""
-    from services.output_parser import auto_parse_scan_output
+    from services.scan_lifecycle import save_parsed_findings
 
     agent = db.query(Agent).filter(Agent.token == token).first()
     if not agent:
@@ -155,27 +155,19 @@ def agent_result(token: str, job_id: str, body: JobResult, db: Session = Depends
                 scan.started_at = job.started_at or now
             db.flush()
 
-            # Auto-parse findings
+            # Auto-parse findings — upserts by fingerprint so a retried
+            # agent post (same scan_id) doesn't duplicate findings.
             if body.exit_code == 0 and scan.raw_output:
-                parsed = auto_parse_scan_output(scan.scan_type, scan.raw_output)
-                for pf in parsed:
-                    db.add(Finding(
-                        id=str(uuid.uuid4()),
-                        scan_id=scan.id,
-                        severity=pf.severity,
-                        title=pf.title,
-                        description=pf.description or "",
-                        control_id=pf.control_id,
-                        framework=pf.framework,
-                        remediation=pf.remediation,
-                        evidence=pf.evidence,
-                        status="open",
-                    ))
-                if parsed:
-                    highs = sum(1 for p in parsed if p.severity in ("critical", "high"))
+                pre_existing_ids = {
+                    f.id for f in db.query(Finding).filter(Finding.scan_id == scan.id).all()
+                }
+                all_current, new_count = save_parsed_findings(db, scan, scan.raw_output)
+                if new_count:
+                    created = [f for f in all_current if f.id not in pre_existing_ids]
+                    highs = sum(1 for f in created if f.severity in ("critical", "high"))
                     db.add(Notification(
-                        title=f"Agent job complete — {len(parsed)} finding(s)",
-                        body=f"Agent '{agent.name}': {len(parsed)} finding(s) parsed" + (f", {highs} critical/high" if highs else ""),
+                        title=f"Agent job complete — {new_count} finding(s)",
+                        body=f"Agent '{agent.name}': {new_count} new finding(s) parsed" + (f", {highs} critical/high" if highs else ""),
                         type="critical" if highs > 0 else "info",
                         scan_id=job.scan_id,
                     ))

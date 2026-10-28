@@ -23,7 +23,7 @@ def _next_fire(cron_expr: str) -> Optional[datetime]:
 async def _run_headless(scan_id: str, script: str) -> None:
     """Write script to temp file, execute, save output, auto-parse findings."""
     from database import SessionLocal, Scan
-    from services.output_parser import save_parsed_findings
+    from services.scan_lifecycle import save_parsed_findings
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False, prefix="seraph_sched_") as f:
         f.write(script)

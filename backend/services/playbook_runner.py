@@ -342,7 +342,7 @@ def _update_run(run_id: str, **kwargs):
 
 
 def _finalize_scan(scan_id: str, scan_type: str, output: str) -> int:
-    from services.output_parser import auto_parse_scan_output
+    from services.scan_lifecycle import save_parsed_findings
     db = SessionLocal()
     try:
         scan = db.query(Scan).filter(Scan.id == scan_id).first()
@@ -352,21 +352,11 @@ def _finalize_scan(scan_id: str, scan_type: str, output: str) -> int:
         scan.raw_output = output
         scan.completed_at = datetime.utcnow()
         db.commit()
-        parsed = auto_parse_scan_output(scan_type, output)
-        for pf in parsed:
-            db.add(Finding(
-                id=str(uuid.uuid4()),
-                scan_id=scan_id,
-                severity=pf.severity,
-                title=pf.title,
-                description=pf.description,
-                control_id=pf.control_id,
-                framework=pf.framework,
-                remediation=pf.remediation,
-                evidence=pf.evidence,
-            ))
-        db.commit()
-        return len(parsed)
+        # Every playbook step creates a brand-new Scan row, so dedup must
+        # span every scan for this target or re-running the playbook piles
+        # up duplicate findings.
+        _, new_count = save_parsed_findings(db, scan, output, dedupe_by_target=True)
+        return new_count
     finally:
         db.close()
 

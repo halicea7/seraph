@@ -81,7 +81,7 @@ def test_retest_rejects_missing_and_foreign_scan(client, auth, pid):
     try:
         db.add(scan)
         db.commit()
-        from services.output_parser import save_parsed_findings
+        from services.scan_lifecycle import save_parsed_findings
         all_current, _ = save_parsed_findings(db, scan, scan.raw_output)
         assert all_current
         finding_id = all_current[0].id
@@ -140,7 +140,7 @@ def test_rescan_preserves_triage_on_same_finding(client, auth, pid):
         db.add(scan)
         db.commit()
         scan_id = scan.id
-        from services.output_parser import save_parsed_findings
+        from services.scan_lifecycle import save_parsed_findings
         all_current, new_count = save_parsed_findings(db, scan, raw)
         assert len(all_current) == 1 and new_count == 1
         fid = all_current[0].id
@@ -157,13 +157,53 @@ def test_rescan_preserves_triage_on_same_finding(client, auth, pid):
     db = database.SessionLocal()
     try:
         scan = db.query(Scan).filter(Scan.id == scan_id).first()
-        from services.output_parser import save_parsed_findings
+        from services.scan_lifecycle import save_parsed_findings
         all_current, new_count = save_parsed_findings(db, scan, raw)
         assert len(all_current) == 1, "must not duplicate the finding"
         assert new_count == 0, "must not count the existing finding as new"
         assert all_current[0].id == fid
         assert all_current[0].status == "accepted", "status must survive a rescan"
         assert all_current[0].tags == "reviewed", "tags must survive a rescan"
+    finally:
+        db.close()
+
+
+# ── scan_lifecycle — target-scoped dedup (auto-probe/playbook/CIS-CAT) ───────
+
+def test_upsert_findings_dedupes_across_scans_for_same_target(client, auth, pid):
+    """Auto-probe, playbooks, and CIS-CAT import each create a brand-new Scan
+    row per run — upsert_findings(dedupe_by_target=True) must dedupe against
+    every scan for the target, not just the current one, or re-running the
+    same tool would pile up duplicate findings indefinitely."""
+    r = client.post(
+        f"/api/v1/projects/{pid}/targets",
+        json={"hostname_or_ip": "10.0.0.30", "target_type": "linux_host"},
+        headers=auth,
+    )
+    target_id = r.json()["id"]
+
+    from services.output_parser import ParsedFinding
+    from services.scan_lifecycle import upsert_findings
+
+    pf = ParsedFinding(title="Open port 22/tcp (ssh)", description="d", severity="info")
+
+    db = database.SessionLocal()
+    try:
+        scan1 = Scan(target_id=target_id, scan_type="network_discovery", module="audit", status="completed")
+        db.add(scan1)
+        db.commit()
+        all_current, new_count = upsert_findings(db, scan1, [pf], dedupe_by_target=True)
+        assert new_count == 1
+        fid = all_current[0].id
+
+        # A second, brand-new Scan row for the same target — same tool re-run.
+        scan2 = Scan(target_id=target_id, scan_type="network_discovery", module="audit", status="completed")
+        db.add(scan2)
+        db.commit()
+        all_current, new_count = upsert_findings(db, scan2, [pf], dedupe_by_target=True)
+        assert new_count == 0, "must not duplicate across scans for the same target"
+        assert all_current[0].id == fid
+        assert all_current[0].scan_id == scan1.id, "existing row must not be reassigned to the new scan"
     finally:
         db.close()
 

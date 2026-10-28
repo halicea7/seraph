@@ -155,12 +155,12 @@ def get_scan(scan_id: str, db: Session = Depends(get_db)):
 def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
     """Parse raw scan output and upsert Finding records.
 
-    Upserts by fingerprint (services.output_parser.save_parsed_findings)
+    Upserts by fingerprint (services.scan_lifecycle.save_parsed_findings)
     instead of delete-then-recreate, so clicking "Parse" again on the same
     scan never wipes triage (status/fp_reason/tags) an analyst already set
     on a finding that's still present.
     """
-    from services.output_parser import save_parsed_findings, fingerprint_for
+    from services.scan_lifecycle import save_parsed_findings, fingerprint_for
 
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -559,6 +559,9 @@ async def import_ciscat_report(
     db: Session = Depends(get_db),
 ):
     """Import a CIS-CAT benchmark report (XCCDF XML, JSON, or CSV) as Findings."""
+    from services.output_parser import ParsedFinding
+    from services.scan_lifecycle import upsert_findings
+
     target = db.query(Target).filter(Target.id == target_id).first()
     if not target:
         raise HTTPException(404, "Target not found")
@@ -601,39 +604,43 @@ async def import_ciscat_report(
     db.flush()
 
     counts = {"pass": 0, "fail": 0, "notapplicable": 0, "other": 0}
-    findings_created = []
+    parsed: list = []
     for rr in rule_results:
         status = rr["status"]
         if status in ("pass", "passed"):
             counts["pass"] += 1
             sev = "info"
+            fstatus = "accepted"
         elif status in ("fail", "failed", "error"):
             counts["fail"] += 1
             sev = _ciscat_severity(rr.get("severity", "medium"))
+            fstatus = "open"
         elif status in ("notapplicable", "not applicable", "na", "n/a", "informational"):
             counts["notapplicable"] += 1
             sev = "info"
+            fstatus = "accepted"
         else:
             counts["other"] += 1
             sev = "info"
+            fstatus = "accepted"
 
         enrich_desc, enrich_rem = _enrich_from_cis(rr["rule_id"])
-        f = Finding(
-            id=str(uuid.uuid4()),
-            scan_id=scan.id,
-            severity=sev,
+        parsed.append(ParsedFinding(
             title=rr["title"] or rr["rule_id"],
-            description=enrich_desc or None,
+            description=enrich_desc or "",
+            severity=sev,
             control_id=rr["rule_id"],
             framework="CIS-CAT",
             remediation=enrich_rem or None,
-            status="open" if status in ("fail", "failed", "error") else "accepted",
-            tags=f"ciscat,{status}",
-        )
-        db.add(f)
-        findings_created.append(f)
+            status=fstatus,
+            extra_tags=["ciscat", status],
+        ))
 
-    db.commit()
+    # Re-importing the same (or an updated) report for this target should
+    # update existing rows rather than pile up duplicates — each import
+    # creates a brand-new Scan row, so dedup must span every scan for the
+    # target, not just this one.
+    upsert_findings(db, scan, parsed, dedupe_by_target=True)
 
     total = len(rule_results)
     return {
