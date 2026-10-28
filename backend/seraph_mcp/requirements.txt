@@ -1,0 +1,15 @@
+# Seraph MCP connector — install in its OWN virtualenv, separate from the
+# backend's own requirements.txt. `mcp`'s own dependencies (sse-starlette)
+# pull in a starlette version newer than FastAPI 0.111.0 (the backend's
+# pin) supports -- installing both in the same environment breaks the
+# backend app. This connector never imports the backend app at all (see
+# client.py); it only talks to it over HTTP, so there's no reason to share
+# an environment in the first place.
+#
+# Setup:
+#   cd backend/seraph_mcp
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#   SERAPH_MCP_TOKEN=srph_... python -m seraph_mcp   (run from backend/, with .venv active)
+mcp>=2.0
+httpx>=0.27.0
