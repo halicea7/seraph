@@ -42,8 +42,8 @@ services:
   # ── Seraph frontend ───────────────────────────────────────────────────────
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile.frontend
+      context: .
+      dockerfile: frontend/Dockerfile.frontend
     ports:
       - "5173:80"
     depends_on:

@@ -1,9 +1,12 @@
 # Seraph — all-in-one API. One container serves the backend API on a single port,
 # backed by SQLite. Just run:  ./setup.sh   (or: docker compose up -d --build)
 #
-# The frontend is the SeraphElectron desktop app: point its Connect screen at
-# http://<host>:8000 (CORS already allows the desktop app; the port binds all
-# interfaces). API docs at http://localhost:8000/docs.
+# This is API-only — no browser frontend container here. Connect either client
+# to it: the Electron desktop app's Connect screen, pointed at http://<host>:8000
+# (CORS already allows it; the port binds all interfaces), or run the browser
+# frontend separately (npm run dev in frontend/, or docker-compose.prod.yml /
+# docker-compose.demo.yml, which build and serve it behind nginx). API docs at
+# http://localhost:8000/docs.
 # HTTPS: run ./setup-https.sh first and the container starts on https:// instead.
 # For the Postgres + nginx production stack, use docker-compose.prod.yml instead.
 

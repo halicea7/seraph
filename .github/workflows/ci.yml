@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel an in-progress run for the same branch/PR when a new push arrives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Fast feedback: backend test suite ────────────────────────────────────────
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt -r backend/requirements-dev.txt
+
+      - name: pytest
+        run: cd backend && pytest tests -q
+        env:
+          SERAPH_SECRET_KEY: ci-only-throwaway-key-not-used-in-production
+
+  # ── Fast feedback: frontend + electron typecheck/build ───────────────────────
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Browser frontend — typecheck + build
+        run: npm run build --workspace=frontend
+
+      - name: Electron shell — typecheck
+        run: npm run typecheck --workspace=electron
+
+  # ── Docker images actually build, and the backend image actually boots ──────
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: false
+          load: true
+          tags: seraph-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Smoke-test the backend image
+        run: |
+          docker run -d --name seraph-ci -p 8000:8000 \
+            -e SERAPH_SECRET_KEY=ci-only-throwaway-key-not-used-in-production \
+            -e SERAPH_DATABASE_URL=sqlite:////tmp/seraph_ci.db \
+            seraph-backend:ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/api/v1/auth/setup-required >/dev/null; then
+              echo "Backend responded after ${i}0s"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Backend never responded — dumping logs:"
+          docker logs seraph-ci
+          exit 1
+
+      - name: Container logs (always, for debugging)
+        if: always()
+        run: docker logs seraph-ci || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f seraph-ci || true
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile.frontend
+          push: false
+          load: true
+          tags: seraph-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Smoke-test the frontend image
+        run: |
+          docker run -d --name seraph-frontend-ci -p 8080:80 seraph-frontend:ci
+          for i in $(seq 1 10); do
+            if curl -sf http://localhost:8080/ >/dev/null; then
+              echo "Frontend responded after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs seraph-frontend-ci
+          exit 1
+
+      - name: Stop frontend container
+        if: always()
+        run: docker rm -f seraph-frontend-ci || true

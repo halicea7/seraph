@@ -14,9 +14,11 @@
 # Build args:
 #   PRODUCTION=1   → 4-worker uvicorn; PRODUCTION=0 (default) → --reload
 
-# API-only image. The canonical frontend is the SeraphElectron desktop app, which
-# connects over the network — so this image does NOT build/bundle the leftover web
-# SPA. backend/main.py simply skips serving /frontend/dist when it's absent.
+# API-only image. Both clients — the Electron desktop app and the browser
+# frontend — connect to this over the network; this image doesn't bundle
+# either one. For the browser frontend baked in behind nginx, use
+# docker-compose.prod.yml or docker-compose.demo.yml instead.
+# backend/main.py simply skips serving /frontend/dist when it's absent.
 FROM python:3.11-slim
 
 ARG PRODUCTION=0

@@ -66,8 +66,8 @@ services:
   # ── Nginx reverse proxy + frontend ──────────────────────────────────────────
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile.frontend
+      context: .
+      dockerfile: frontend/Dockerfile.frontend
     restart: unless-stopped
     depends_on:
       backend:
