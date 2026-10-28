@@ -126,6 +126,21 @@ app.add_middleware(
     allow_headers=["Accept", "Accept-Language", "Authorization", "Content-Language", "Content-Type", "X-Requested-With"],
 )
 
+
+# ── Error envelope ────────────────────────────────────────────────────────────
+#
+# HTTPException (and FastAPI's 422 validation errors) already respond with
+# {"detail": ...}. An uncaught exception anywhere else previously fell
+# through to Starlette's default handler, which has no JSON body in
+# production ASGI — a shape every other error path doesn't share, and a
+# stack trace callers shouldn't see. Give every unhandled exception the
+# same envelope; the real exception is still logged server-side.
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    import logging
+    logging.getLogger(__name__).exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 # ── Rate limiting middleware ──────────────────────────────────────────────────
 
 # Simple sliding-window rate limiter.
@@ -389,7 +404,8 @@ app.include_router(playbooks_router, prefix=API_PREFIX)
 app.include_router(vulns_router, prefix=API_PREFIX)
 app.include_router(logs_router, prefix=API_PREFIX)
 app.include_router(hardening_router, prefix=API_PREFIX)
-app.include_router(demo_router, prefix=API_PREFIX)
+if settings.demo_enabled:
+    app.include_router(demo_router, prefix=API_PREFIX)
 app.include_router(notifications_router, prefix=API_PREFIX)
 app.include_router(listeners_router, prefix=API_PREFIX)
 app.include_router(agents_router, prefix=API_PREFIX)

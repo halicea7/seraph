@@ -9,8 +9,8 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from database import ADCollection, C2Session, Credential, Finding, FPSuppressionRule, HttpRequestItem, Project, Scan, Screenshot, Target, VulnerabilityRecord, get_db
-from services.authz import require_role
-from services.scope_service import check_scope, scope_summary
+from services.deps import require_role, require_in_scope, require_project
+from services.scope_service import scope_summary
 from services.validators import (
     VALID_TARGET_TYPES,
     validate_free_text,
@@ -464,15 +464,12 @@ def list_targets(project_id: str, db: Session = Depends(get_db)):
     status_code=status.HTTP_201_CREATED,
 )
 async def create_target(
-    project_id: str, payload: TargetCreate, db: Session = Depends(get_db)
+    project_id: str,
+    payload: TargetCreate,
+    db: Session = Depends(get_db),
+    project: Project = Depends(require_project),
 ):
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    in_scope, reason = check_scope(payload.hostname_or_ip, getattr(project, "scope_json", None))
-    if not in_scope:
-        raise HTTPException(status_code=400, detail=f"Target out of scope: {reason}")
+    require_in_scope(payload.hostname_or_ip, project)
 
     existing = db.query(Target).filter(
         Target.project_id == project_id,
@@ -733,16 +730,28 @@ def get_posture_history(project_id: str, days: int = 90, db: Session = Depends(g
 def list_findings(
     severity: Optional[str] = None,
     project_id: Optional[str] = None,
+    limit: int = 500,
+    offset: int = 0,
     db: Session = Depends(get_db),
 ):
     """All findings with project/target context, optionally filtered."""
     from sqlalchemy import func as _func
 
-    # Build filtered query at the DB level
+    # Build filtered query at the DB level — project_id now filters via the
+    # same join used to preload target/project context below, instead of
+    # fetching every row and discarding mismatches in Python, which made
+    # limit/offset meaningless (a page could come back short, or empty,
+    # even with matching rows further in the unfiltered result).
     query = db.query(Finding).order_by(Finding.created_at.desc())
     if severity:
         query = query.filter(Finding.severity == severity)
-    findings = query.all()
+    if project_id:
+        query = (
+            query.join(Scan, Finding.scan_id == Scan.id)
+            .join(Target, Scan.target_id == Target.id)
+            .filter(Target.project_id == project_id)
+        )
+    findings = query.offset(offset).limit(limit).all()
 
     # Preload related rows to avoid N+1
     scan_ids = {f.scan_id for f in findings}
@@ -757,8 +766,6 @@ def list_findings(
         scan = scans_map.get(f.scan_id)
         target = targets_map.get(scan.target_id) if scan else None
         project = projects_map.get(target.project_id) if target else None
-        if project_id and (not project or project.id != project_id):
-            continue
         result.append({
             "id": f.id,
             "severity": f.severity,
@@ -1136,13 +1143,16 @@ def list_scans(
     target_id: Optional[str] = None,
     module: Optional[str] = None,
     limit: int = 200,
+    offset: int = 0,
     db: Session = Depends(get_db),
 ):
     """All scans with project/target context, optionally filtered."""
     import json as _json
     from sqlalchemy import func as _func
 
-    # Build filtered query at the DB level
+    # Build filtered query at the DB level — project_id filters via a join
+    # instead of fetching every row and discarding mismatches in Python,
+    # which made limit/offset meaningless when this filter was in play.
     query = db.query(Scan).order_by(Scan.created_at.desc())
     if status:
         query = query.filter(Scan.status == status)
@@ -1150,7 +1160,9 @@ def list_scans(
         query = query.filter(Scan.target_id == target_id)
     if module:
         query = query.filter(Scan.module == module)
-    query = query.limit(limit)
+    if project_id:
+        query = query.join(Target, Scan.target_id == Target.id).filter(Target.project_id == project_id)
+    query = query.offset(offset).limit(limit)
     scans = query.all()
 
     # Preload related rows to avoid N+1
@@ -1173,8 +1185,6 @@ def list_scans(
     for s in scans:
         target = targets_map.get(s.target_id)
         project = projects_map.get(target.project_id) if target else None
-        if project_id and (not project or project.id != project_id):
-            continue
         try:
             cfg = _json.loads(s.config_json or "{}")
         except Exception:

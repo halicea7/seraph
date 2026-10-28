@@ -42,7 +42,11 @@ def check_scope(target: str, scope_json: Optional[str]) -> tuple[bool, str]:
     try:
         scope = json.loads(scope_json)
     except Exception:
-        return True, ""
+        # A NULL/empty scope_json means "no scope configured" and stays
+        # fail-open (handled above) — but existing, unparseable scope_json
+        # is a corrupted configuration, not an absent one. Fail closed
+        # rather than silently treating every target as in-scope.
+        return False, "Scope configuration is invalid (failed to parse) — rejecting as a precaution"
 
     include = scope.get("include", [])
     exclude = scope.get("exclude", [])

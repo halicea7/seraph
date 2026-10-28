@@ -387,3 +387,99 @@ def test_terminate_cloud_instance_deletes_row(client, auth):
         assert db.query(CloudC2Instance).filter(CloudC2Instance.id == inst_id).first() is None
     finally:
         db.close()
+
+
+# ── check_scope fails closed on a corrupted scope_json, open on absent/empty ─
+
+def test_check_scope_fails_closed_on_parse_error_only():
+    from services.scope_service import check_scope
+
+    # Absent or empty-include scope stays open -- "no scope configured".
+    assert check_scope("10.0.0.5", None) == (True, "")
+    assert check_scope("10.0.0.5", "") == (True, "")
+    assert check_scope("10.0.0.5", '{"include": []}') == (True, "")
+
+    # Corrupted JSON on an *existing* scope_json fails closed instead of
+    # silently treating every target as in-scope.
+    in_scope, reason = check_scope("10.0.0.5", "{not valid json")
+    assert in_scope is False
+    assert reason
+
+
+# ── routers/demo.py is off by default ────────────────────────────────────────
+
+def test_demo_router_not_registered_by_default(client, auth):
+    r = client.get("/api/v1/demo/status", headers=auth)
+    assert r.status_code == 404
+
+
+# ── Unhandled exceptions get the same {"detail": ...} envelope as the rest ──
+
+def test_unhandled_exception_returns_consistent_envelope(client, auth):
+    """A route that raises an unguarded exception must still come back as
+    {"detail": ...} with a 500, not a bare/HTML Starlette default error --
+    every other error path (HTTPException, 422 validation) already has
+    this shape; this is the global exception_handler that gives unhandled
+    ones the same one."""
+    import main
+    from fastapi.testclient import TestClient
+
+    @main.app.get("/api/v1/__test_unhandled_exception__")
+    def _boom():
+        raise RuntimeError("deliberate test failure")
+
+    # The app also registers a catch-all GET /{full_path:path} (SPA fallback)
+    # at import time, which matches first since Starlette tries routes in
+    # registration order -- put the new route ahead of it so this actually
+    # exercises routing to a real endpoint instead of the SPA 404 path.
+    new_route = main.app.router.routes.pop()
+    main.app.router.routes.insert(0, new_route)
+
+    # ServerErrorMiddleware sends our handler's response *and then re-raises*
+    # the original exception (so real ASGI servers/loggers still see it) --
+    # the shared `client` fixture's TestClient re-raises that into the test
+    # itself by default. A local client with raise_server_exceptions=False
+    # inspects the response actually sent to the caller instead.
+    local_client = TestClient(main.app, raise_server_exceptions=False)
+    r = local_client.get("/api/v1/__test_unhandled_exception__", headers=auth)
+    assert r.status_code == 500
+    assert r.json() == {"detail": "Internal server error"}
+
+
+# ── /stats/findings and /stats/scans: project_id filters at the DB level ────
+# (so limit/offset pagination doesn't return a short/empty page when other
+# projects' rows are interleaved with this project's in sort order)
+
+def test_findings_and_scans_project_filter_works_with_pagination(client, auth):
+    r = client.post("/api/v1/projects", json={"name": "pagination-test-project"}, headers=auth)
+    assert r.status_code == 201, r.text
+    project_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/v1/projects/{project_id}/targets",
+        json={"hostname_or_ip": "10.0.0.60", "target_type": "linux_host"},
+        headers=auth,
+    )
+    target_id = r.json()["id"]
+
+    scan = Scan(target_id=target_id, scan_type="network_discovery", module="audit", status="completed",
+                raw_output="Nmap scan report for 10.0.0.60\n80/tcp open http\n")
+    db = database.SessionLocal()
+    try:
+        db.add(scan)
+        db.commit()
+        scan_id = scan.id
+        from services.scan_lifecycle import save_parsed_findings
+        save_parsed_findings(db, scan, scan.raw_output)
+    finally:
+        db.close()
+
+    r = client.get(f"/api/v1/scans?project_id={project_id}&limit=50&offset=0", headers=auth)
+    assert r.status_code == 200, r.text
+    scan_ids = [s["id"] for s in r.json()]
+    assert scan_id in scan_ids
+
+    r = client.get(f"/api/v1/findings?project_id={project_id}&limit=50&offset=0", headers=auth)
+    assert r.status_code == 200, r.text
+    assert len(r.json()) >= 1
+    assert all(f["project_id"] == project_id for f in r.json())

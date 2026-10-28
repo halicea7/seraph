@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db, Project, HttpRequestItem
-from services.scope_service import check_scope
+from services.deps import require_in_scope
 from services.http_workbench import send_request, create_fuzz_job
 
 router = APIRouter(prefix="/http", tags=["http-workbench"])
@@ -29,9 +29,7 @@ def _enforce_scope(db: Session, project_id: str, url: str) -> None:
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
-    ok, reason = check_scope(_host(url), project.scope_json)
-    if not ok:
-        raise HTTPException(403, f"Target out of scope: {reason}")
+    require_in_scope(_host(url), project)
 
 
 # ── Send ──────────────────────────────────────────────────────────────────────

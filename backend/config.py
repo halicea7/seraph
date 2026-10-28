@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Extra CORS origins beyond rp_origins — comma-separated.
     # Add "null" here to allow Electron/Chronos requests (Origin: null).
     extra_cors_origins: str = ""
+    # routers/demo.py seeds/clears demo project data. Off by default — most
+    # deployments are a real engagement, not a sales demo.
+    demo_enabled: bool = False
     # NOTE: the tool list lives in services/tool_registry.py (TOOL_META) — the
     # single source of truth for detection, install hints, and tiers.
 

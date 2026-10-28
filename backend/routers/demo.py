@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import uuid
 
 from database import get_db, AppSetting, Project, Target, Scan, Finding, VulnerabilityRecord, Credential
-from services.authz import require_role
+from services.deps import require_role
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
