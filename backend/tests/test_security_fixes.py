@@ -4,6 +4,8 @@ Each test targets one specific fix called out in the audit/review docs and
 the approved plan. Run alongside the smoke suite:  cd backend && pytest tests -q
 """
 
+import json
+
 import pytest
 
 import database
@@ -483,3 +485,80 @@ def test_findings_and_scans_project_filter_works_with_pagination(client, auth):
     assert r.status_code == 200, r.text
     assert len(r.json()) >= 1
     assert all(f["project_id"] == project_id for f in r.json())
+
+
+# ── Worker process: auto-probe is enqueued, not spawned in-process ──────────
+
+def test_create_target_enqueues_auto_probe_job_when_enabled(client, auth):
+    """create_target used to asyncio.create_task(run_auto_probe(...)) directly
+    -- a task that dies with the API process. It must now hand off through
+    the durable Job queue (database.Job) instead, so worker.py's poller
+    picks it up independently of the API process's lifetime."""
+    from database import AppSetting, Job
+
+    db = database.SessionLocal()
+    try:
+        db.merge(AppSetting(key="auto_probe_enabled", value="true"))
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        r = client.post("/api/v1/projects", json={"name": "worker-test-project"}, headers=auth)
+        assert r.status_code == 201, r.text
+        project_id = r.json()["id"]
+
+        r = client.post(
+            f"/api/v1/projects/{project_id}/targets",
+            json={"hostname_or_ip": "10.0.0.70", "target_type": "linux_host"},
+            headers=auth,
+        )
+        assert r.status_code == 201, r.text
+        target_id = r.json()["id"]
+
+        db = database.SessionLocal()
+        try:
+            jobs = db.query(Job).filter(Job.job_type == "auto_probe").all()
+            matching = [j for j in jobs if json.loads(j.payload_json)["target_id"] == target_id]
+            assert len(matching) == 1, "exactly one auto_probe job must be enqueued for this target"
+            assert matching[0].status == "pending"
+        finally:
+            db.close()
+    finally:
+        db = database.SessionLocal()
+        try:
+            db.merge(AppSetting(key="auto_probe_enabled", value="false"))
+            db.commit()
+        finally:
+            db.close()
+
+
+def test_job_runner_picks_up_and_completes_pending_jobs(client, auth):
+    """Simulates what worker.py's poller does -- a pending Job transitions
+    through running to a terminal state even when the handler itself fails
+    (e.g. the real auto-probe tools aren't installed in this test env),
+    rather than getting stuck."""
+    import asyncio as _asyncio
+    from database import Job
+    from services.job_runner import poll_pending_jobs
+
+    db = database.SessionLocal()
+    try:
+        job = Job(job_type="auto_probe", payload_json=json.dumps({
+            "target_id": "nonexistent", "target_host": "10.0.0.99", "tools": [], "intensity": "quick",
+        }))
+        db.add(job)
+        db.commit()
+        job_id = job.id
+    finally:
+        db.close()
+
+    _asyncio.run(poll_pending_jobs())
+
+    db = database.SessionLocal()
+    try:
+        row = db.query(Job).filter(Job.id == job_id).first()
+        assert row.status in ("running", "completed", "failed"), "must leave pending immediately"
+        assert row.started_at is not None
+    finally:
+        db.close()

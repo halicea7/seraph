@@ -148,6 +148,37 @@ def unregister_profile(profile_id: str) -> None:
         scheduler.remove_job(job_id)
 
 
+def sync_profiles() -> None:
+    """Reconcile APScheduler's registered profile jobs against the DB.
+
+    register_profile/unregister_profile mutate *this process's* `scheduler`
+    instance directly — harmless but inert when called from the API
+    process, since the worker process (see worker.py) runs the actual
+    scheduler the API process only imports. Call this periodically from the
+    worker so a schedule created/edited/cleared via the API converges
+    within one sync interval instead of requiring the worker to restart.
+    """
+    from database import SessionLocal, ScanProfile
+
+    db = SessionLocal()
+    try:
+        scheduled = {
+            p.id: p.schedule for p in db.query(ScanProfile).all() if getattr(p, "schedule", None)
+        }
+    finally:
+        db.close()
+
+    for profile_id, cron_expr in scheduled.items():
+        try:
+            register_profile(profile_id, cron_expr)
+        except Exception:
+            pass
+
+    for job in scheduler.get_jobs():
+        if job.id.startswith("profile_") and job.id[len("profile_"):] not in scheduled:
+            scheduler.remove_job(job.id)
+
+
 def initialize_scheduler() -> None:
     from database import SessionLocal, ScanProfile
 
@@ -186,6 +217,16 @@ def initialize_scheduler() -> None:
         _run_nessus_poll,
         IntervalTrigger(seconds=20),
         id="nessus_poll",
+        replace_existing=True,
+    )
+
+    # Re-reconcile scheduled profiles against the DB every 30s — register_profile/
+    # unregister_profile calls from the API process (routers/profiles.py) mutate a
+    # different process's `scheduler` instance and have no effect on this one.
+    scheduler.add_job(
+        sync_profiles,
+        IntervalTrigger(seconds=30),
+        id="profile_sync",
         replace_existing=True,
     )
 

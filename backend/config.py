@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     # routers/demo.py seeds/clears demo project data. Off by default — most
     # deployments are a real engagement, not a sales demo.
     demo_enabled: bool = False
+    # Whether the API process itself runs the scheduler/listener-manager/
+    # job-queue poller (see services/background.py). Default on, so
+    # ./dev.sh and the single-container docker-compose.yml/.demo.yml keep
+    # working exactly as before worker.py existed. Set to false only when a
+    # separate worker.py process is deployed alongside this one (see
+    # docker-compose.prod.yml) -- otherwise every cron job fires twice.
+    scheduler_in_process: bool = True
     # NOTE: the tool list lives in services/tool_registry.py (TOOL_META) — the
     # single source of truth for detection, install hints, and tiers.
 

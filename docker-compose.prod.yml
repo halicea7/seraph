@@ -49,6 +49,9 @@ services:
       MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-}
       SLIVER_CONFIG: ${SLIVER_CONFIG:-}
       PYTHONUNBUFFERED: "1"
+      # The `worker` service below runs the scheduler/listeners/job queue
+      # instead — leaving this on here too would fire every cron job twice.
+      SERAPH_SCHEDULER_IN_PROCESS: "false"
     volumes:
       - seraph_results:/seraph_results
       - seraph_reports:/app/reports
@@ -62,6 +65,35 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  # ── Background worker — scheduler, listeners, durable job queue ─────────────
+  # Runs the same cron/listener/auto-probe work the backend container would
+  # otherwise run in-process (see services/background.py) — moved here so a
+  # backend restart/deploy no longer interrupts a scheduled scan, listener,
+  # or in-flight auto-probe. SERAPH_SCHEDULER_IN_PROCESS=false on the backend
+  # service below turns that in-process path off so jobs don't fire twice.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        PRODUCTION: "1"
+    command: ["python", "worker.py"]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      SERAPH_DATABASE_URL: postgresql+psycopg2://seraph:${POSTGRES_PASSWORD}@db:5432/seraph
+      SERAPH_SECRET_KEY: ${SERAPH_SECRET_KEY:?SERAPH_SECRET_KEY is required}
+      MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-}
+      SLIVER_CONFIG: ${SLIVER_CONFIG:-}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - seraph_results:/seraph_results
+      - seraph_reports:/app/reports
+    networks:
+      - internal
 
   # ── Nginx reverse proxy + frontend ──────────────────────────────────────────
   frontend:

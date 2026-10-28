@@ -1,4 +1,3 @@
-import asyncio
 import re
 import uuid
 from datetime import datetime
@@ -491,13 +490,20 @@ async def create_target(
     db.commit()
     db.refresh(target)
 
-    # Fire auto-probe in the background — safe because this is an async endpoint
-    from services.auto_probe import run_auto_probe, get_probe_config
+    # Hand auto-probe to the worker process via the durable job queue instead
+    # of asyncio.create_task(...) in-process — a task spawned here dies with
+    # this process; a Job row survives an API-process restart and is picked
+    # up by worker.py's poller on its next tick.
+    from services.auto_probe import get_probe_config
+    from services.job_queue import enqueue
     config = get_probe_config()
     if config["enabled"]:
-        asyncio.create_task(
-            run_auto_probe(target.id, target.hostname_or_ip, config["tools"], config["intensity"])
-        )
+        enqueue("auto_probe", {
+            "target_id": target.id,
+            "target_host": target.hostname_or_ip,
+            "tools": config["tools"],
+            "intensity": config["intensity"],
+        })
 
     return target
 

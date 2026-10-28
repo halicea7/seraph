@@ -340,3 +340,43 @@ def initialize_listeners() -> None:
                 log.error(f"Failed to register listener {listener.id}: {e}")
     finally:
         db.close()
+
+    # See sync_listeners' docstring — register/unregister calls from the API
+    # process have no effect on this process's scheduler instance.
+    scheduler.add_job(
+        sync_listeners,
+        IntervalTrigger(seconds=30),
+        id="listener_sync",
+        replace_existing=True,
+    )
+
+
+def sync_listeners() -> None:
+    """Reconcile APScheduler's registered listener jobs against the DB.
+
+    register_listener/unregister_listener mutate *this process's*
+    `scheduler` instance directly — harmless but inert when called from the
+    API process, since the worker process (see worker.py) runs the actual
+    scheduler the API process only imports. Call this periodically from
+    the worker so starting/stopping a listener via the API converges
+    within one sync interval instead of requiring the worker to restart.
+    """
+    from database import SessionLocal, Listener
+
+    db = SessionLocal()
+    try:
+        running = db.query(Listener).filter(Listener.status == "running").all()
+        running_ids = {l.id for l in running}
+        configs = [(l.id, l.type, json.loads(l.config_json or "{}")) for l in running]
+    finally:
+        db.close()
+
+    for listener_id, listener_type, config in configs:
+        try:
+            register_listener(listener_id, listener_type, config)
+        except Exception as e:
+            log.error(f"Failed to sync listener {listener_id}: {e}")
+
+    for job in scheduler.get_jobs():
+        if job.id.startswith(_PREFIX) and job.id[len(_PREFIX):] not in running_ids:
+            scheduler.remove_job(job.id)

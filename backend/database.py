@@ -615,6 +615,22 @@ class AuditLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Job(Base):
+    """Durable background job queue — lets work triggered by an HTTP
+    request (e.g. auto-probe on target creation) survive an API-process
+    restart, by handing it to the worker process (worker.py) via a row
+    here instead of an in-process asyncio.create_task."""
+    __tablename__ = "jobs"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_type = Column(String, nullable=False)
+    payload_json = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="pending", index=True)  # pending|running|completed|failed
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
 def get_db():
     db = SessionLocal()
     try:

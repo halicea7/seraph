@@ -50,9 +50,7 @@ from routers.ad import router as ad_router
 from routers.screenshots import router as screenshots_router
 from routers.http_wb import router as http_wb_router
 from services.tool_registry import detect_tools, initialize_registry
-from services.scheduler import initialize_scheduler
 from services.playbook_runner import seed_builtin_playbooks
-from services.listener_manager import initialize_listeners
 from services.attack_index import ensure_fts_table, sync_if_empty
 from services.ptes_index import ensure_fts_table as ptes_ensure, sync_if_empty as ptes_sync_if_empty
 
@@ -89,8 +87,9 @@ async def lifespan(app: FastAPI):
             "tool_chains.json references tools missing from TOOL_META: %s",
             ", ".join(_uncovered),
         )
-    initialize_scheduler()
-    initialize_listeners()
+    if settings.scheduler_in_process:
+        from services.background import start_background_jobs
+        start_background_jobs()
     seed_builtin_playbooks()
     ensure_fts_table()
     sync_if_empty()
