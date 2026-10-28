@@ -221,7 +221,7 @@ async def _run_c2_session_sync() -> None:
     try:
         # ── MSF sync ─────────────────────────────────────────────────
         try:
-            live_msf = msf.list_sessions()  # returns [] if not connected
+            live_msf = await asyncio.to_thread(msf.list_sessions)  # returns [] if not connected
         except Exception:
             live_msf = []
 
@@ -309,7 +309,7 @@ async def _run_c2_session_sync() -> None:
 
         # ── Sliver sync ───────────────────────────────────────────────
         try:
-            live_sliver = sliver.list_sessions() if sliver.is_available() else []
+            live_sliver = await asyncio.to_thread(sliver.list_sessions) if sliver.is_available() else []
         except Exception:
             live_sliver = []
 
@@ -405,13 +405,13 @@ async def _run_nessus_poll() -> None:
 
         try:
             client = load_client(db)
-            client.authenticate()
+            await asyncio.to_thread(client.authenticate)
         except Exception:
             return  # not configured / unreachable — try again next tick
 
         for job in active:
             try:
-                data = client.get(f"/scans/{job.nessus_scan_id}")
+                data = await asyncio.to_thread(client.get, f"/scans/{job.nessus_scan_id}")
                 info = data.get("info", {})
                 status = (info.get("status") or "").lower()
                 progress = int(info.get("progress", job.nessus_progress or 0) or 0)
@@ -431,7 +431,7 @@ async def _run_nessus_poll() -> None:
                     imported = 0
                     if project_id:
                         try:
-                            res = import_scan_results(db, client, job.nessus_scan_id, project_id)
+                            res = await asyncio.to_thread(import_scan_results, db, client, job.nessus_scan_id, project_id)
                             imported = res.get("findings_created", 0)
                         except Exception:
                             db.rollback()
@@ -453,9 +453,11 @@ async def _run_nessus_poll() -> None:
                         export = None
                     if export and export.get("state") == "pending" and export.get("file_id"):
                         try:
-                            est = client.get(
-                                f"/scans/{job.nessus_scan_id}/export/{export['file_id']}/status"
-                            ).get("status", "")
+                            est_resp = await asyncio.to_thread(
+                                client.get,
+                                f"/scans/{job.nessus_scan_id}/export/{export['file_id']}/status",
+                            )
+                            est = est_resp.get("status", "")
                         except Exception:
                             est = ""
                         if est == "ready":

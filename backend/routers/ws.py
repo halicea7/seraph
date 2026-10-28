@@ -551,7 +551,8 @@ rm -rf $WORKDIR
                 elif tool == "john":
                     import subprocess
                     try:
-                        result = subprocess.run(
+                        result = await asyncio.to_thread(
+                            subprocess.run,
                             ["john", "--show", hash_file],
                             capture_output=True, text=True, timeout=15,
                         )
@@ -1300,7 +1301,7 @@ async def websocket_cloud_provision(websocket: WebSocket, instance_db_id: str):
         for attempt in range(60):  # up to 5 min (5s × 60)
             await asyncio.sleep(5)
             try:
-                resp = ec2.describe_instances(InstanceIds=[inst.instance_id])
+                resp = await asyncio.to_thread(ec2.describe_instances, InstanceIds=[inst.instance_id])
                 state = resp["Reservations"][0]["Instances"][0]["State"]["Name"]
                 pub_ip = resp["Reservations"][0]["Instances"][0].get("PublicIpAddress", "")
             except Exception as e:
@@ -1331,7 +1332,7 @@ async def websocket_cloud_provision(websocket: WebSocket, instance_db_id: str):
         for _ in range(36):  # up to 3 min
             await asyncio.sleep(5)
             try:
-                s = _socket.create_connection((inst.public_ip, 22), timeout=5)
+                s = await asyncio.to_thread(_socket.create_connection, (inst.public_ip, 22), timeout=5)
                 s.close()
                 ssh_ready = True
                 break

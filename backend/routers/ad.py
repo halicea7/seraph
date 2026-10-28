@@ -7,6 +7,7 @@ operator to run. Nothing here executes against a target — commands are returne
 as text for the Pentest Workbench / AI Operator flow.
 """
 
+import asyncio
 import json
 from datetime import datetime
 
@@ -49,7 +50,7 @@ async def import_collection(
         raise HTTPException(413, "Collection exceeds 50 MB limit")
 
     try:
-        parsed = parse_collection(raw, file.filename or "collection.json")
+        parsed = await asyncio.to_thread(parse_collection, raw, file.filename or "collection.json")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 

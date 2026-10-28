@@ -233,26 +233,30 @@ async def audit_log_middleware(request: Request, call_next):
         return response
 
     try:
-        from database import SessionLocal, AuditLog as _AuditLog
         user_id = _extract_user_id_from_request(request)
         ip = _get_client_ip(request)
         rtype, rid = _derive_resource(path)
-        db = SessionLocal()
-        try:
-            db.add(_AuditLog(
-                action=f"{method} {path}",
-                user_id=user_id,
-                resource_type=rtype,
-                resource_id=rid,
-                ip_address=ip,
-            ))
-            db.commit()
-        finally:
-            db.close()
+        await asyncio.to_thread(_write_audit_log, method, path, user_id, rtype, rid, ip)
     except Exception:
         pass  # audit failures never block requests
 
     return response
+
+
+def _write_audit_log(method: str, path: str, user_id, rtype, rid, ip) -> None:
+    from database import SessionLocal, AuditLog as _AuditLog
+    db = SessionLocal()
+    try:
+        db.add(_AuditLog(
+            action=f"{method} {path}",
+            user_id=user_id,
+            resource_type=rtype,
+            resource_id=rid,
+            ip_address=ip,
+        ))
+        db.commit()
+    finally:
+        db.close()
 
 
 # ── Auth middleware (full lockdown) ───────────────────────────────────────────
@@ -327,7 +331,7 @@ async def auth_middleware(request: Request, call_next):
         token = request.query_params.get("token", "")
     else:
         token = ""
-    if not token or not _valid_bearer(token):
+    if not token or not await asyncio.to_thread(_valid_bearer, token):
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
     return await call_next(request)
 
