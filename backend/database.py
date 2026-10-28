@@ -122,6 +122,12 @@ class Scan(Base):
     nessus_progress = Column(Integer, nullable=True)     # 0–100 progress for the UI
     nessus_export_json = Column(Text, nullable=True)     # in-flight export {format, file_id, state, report_id}
 
+    # Provenance: what exactly ran, who ran it, and under what scope — see
+    # routers/ws.py:websocket_execute. {"operator": username|null,
+    # "scope_snapshot": project.scope_json at run time (parsed) | null,
+    # "category_ids": [...], "script_sha256": hex}
+    provenance_json = Column(Text, nullable=True)
+
     target = relationship("Target", back_populates="scans")
     findings = relationship(
         "Finding", back_populates="scan", cascade="all, delete-orphan"

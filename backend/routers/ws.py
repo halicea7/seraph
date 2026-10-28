@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import secrets
@@ -40,6 +41,40 @@ def _log_command(scan_id: str, raw_script: str) -> None:
         has_sudo,
         raw_script[:300].replace('\n', ' '),
     )
+
+
+def _build_provenance(websocket: WebSocket, category_ids: list, script_content: str, project) -> dict:
+    """Capture what ran, who ran it, and under what scope at the moment a
+    scan transitions to running — see Scan.provenance_json."""
+    operator = None
+    token = websocket.query_params.get("token")
+    if token:
+        from services.auth_service import decode_token
+        payload = decode_token(token)
+        user_id = payload.get("sub") if payload else None
+        if user_id:
+            db = SessionLocal()
+            try:
+                from database import User
+                user = db.query(User).filter(User.id == user_id).first()
+                operator = user.username if user else None
+            finally:
+                db.close()
+
+    scope_snapshot = None
+    if project and project.scope_json:
+        try:
+            scope_snapshot = json.loads(project.scope_json)
+        except Exception:
+            scope_snapshot = project.scope_json  # keep the raw string rather than drop it
+
+    return {
+        "operator": operator,
+        "scope_snapshot": scope_snapshot,
+        "category_ids": category_ids,
+        "script_sha256": hashlib.sha256(script_content.encode()).hexdigest(),
+    }
+
 
 @router.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket):
@@ -135,11 +170,15 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
         # from the client. It is always regenerated server-side from the scan's
         # own config_json (the same inputs routers/audit.py:download_script uses),
         # so nothing sent over this socket can change what actually executes.
+        # `dry_run: true` is the one client-supplied flag honored here — it
+        # reports what would run without touching the target or the scan's
+        # own status, letting an operator confirm scope/argv first.
         data = await websocket.receive_json()
         if data.get("action") != "run":
             await websocket.send_json({"type": "error", "data": "Expected action: run"})
             await websocket.close()
             return
+        dry_run = bool(data.get("dry_run"))
 
         scan_categories = config.get("categories")
         if not scan_categories:
@@ -168,12 +207,22 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
         category_ids = [c.get("category_id", "") for c in scan_categories]
         needs_ssh = credential_id and any(c in REMOTE_CATEGORIES for c in category_ids)
 
-        scan.status = "running"
-        scan.started_at = datetime.utcnow()
-        db.commit()
+        if not dry_run:
+            scan.status = "running"
+            scan.started_at = datetime.utcnow()
+            scan.provenance_json = json.dumps(_build_provenance(websocket, category_ids, script_content, _proj))
+            db.commit()
 
         full_output = []
         client_connected = True
+
+        if needs_ssh and dry_run:
+            await websocket.send_json({
+                "type": "error",
+                "data": "dry_run is not supported for SSH remote-execution categories",
+            })
+            await websocket.close()
+            return
 
         if needs_ssh:
             # Look up the credential and the target host
@@ -219,10 +268,10 @@ async def websocket_execute(websocket: WebSocket, scan_id: str):
             os.chmod(tmpfile, stat.S_IRWXU)
 
             try:
-                async for message in run_command_streaming(f"bash {tmpfile}"):
+                async for message in run_command_streaming(f"bash {tmpfile}", dry_run=dry_run):
                     if message["type"] in ("stdout", "stderr"):
                         full_output.append(message["data"])
-                    elif message["type"] == "exit":
+                    elif message["type"] == "exit" and not dry_run:
                         _save_and_parse(db, scan, full_output, message["code"])
                     if client_connected:
                         try:

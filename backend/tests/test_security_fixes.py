@@ -562,3 +562,135 @@ def test_job_runner_picks_up_and_completes_pending_jobs(client, auth):
         assert row.started_at is not None
     finally:
         db.close()
+
+
+# ── Dry-run mode: report what would execute without touching the target ─────
+
+def test_executor_dry_run_never_spawns_a_subprocess():
+    import asyncio as _asyncio
+    from services.executor import run_command_streaming, run_argv_streaming
+
+    async def _collect(gen):
+        return [msg async for msg in gen]
+
+    msgs = _asyncio.run(_collect(run_command_streaming("touch /tmp/should-not-exist-from-dry-run", dry_run=True)))
+    assert msgs[-1] == {"type": "exit", "code": 0}
+    assert any("dry-run" in m.get("data", "") for m in msgs if m["type"] == "stdout")
+
+    msgs = _asyncio.run(_collect(run_argv_streaming("echo hello; rm -rf /tmp/should-not-exist", dry_run=True)))
+    assert msgs[-1] == {"type": "exit", "code": 0}
+    # shlex-split argv is reported literally -- the ";" stays an inert
+    # literal argument to `echo`, never a shell separator, dry-run or not.
+    dry_run_report = next(m["data"] for m in msgs if m["type"] == "stdout")
+    assert "'rm'" in dry_run_report and "'-rf'" in dry_run_report
+    # The ";" is glued onto "hello" as one literal argv token (shlex, not a
+    # shell, gives it no special meaning) rather than appearing as its own
+    # separator token.
+    assert "'hello;'" in dry_run_report
+
+
+def test_ws_execute_dry_run_does_not_change_scan_status(client, auth):
+    # Uses its own project rather than the shared `pid` fixture: an earlier
+    # test in this file deletes the `pid` project, and this one runs after it.
+    r = client.post("/api/v1/projects", json={"name": "dry-run-test-project"}, headers=auth)
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+
+    r = client.post(
+        f"/api/v1/projects/{pid}/targets",
+        json={"hostname_or_ip": "10.0.0.32", "target_type": "linux_host"},
+        headers=auth,
+    )
+    target_id = r.json()["id"]
+    r = client.post(
+        "/api/v1/audit/generate",
+        json={
+            "project_id": pid,
+            "target_id": target_id,
+            "scan_categories": [{"category_id": "network_discovery", "config": {}}],
+        },
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    scan_id = r.json()["scan_id"]
+
+    token = auth["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect(f"/ws/execute/{scan_id}?token={token}") as ws:
+        ws.send_json({"action": "run", "dry_run": True})
+        saw_dry_run_marker = False
+        msg = ws.receive_json()
+        for _ in range(20):
+            if msg.get("type") == "exit":
+                assert msg.get("code") == 0
+                break
+            if "dry-run" in msg.get("data", ""):
+                saw_dry_run_marker = True
+            msg = ws.receive_json()
+        assert saw_dry_run_marker
+
+    db = database.SessionLocal()
+    try:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        # A dry run must never flip status toward running/completed, or
+        # write raw_output as if a real execution happened.
+        assert scan.status == "pending"
+        assert scan.started_at is None
+        assert scan.raw_output is None
+    finally:
+        db.close()
+
+
+# ── Per-scan provenance: operator, scope snapshot, script hash ──────────────
+
+def test_ws_execute_records_provenance_on_real_run(client, auth):
+    import hashlib
+
+    r = client.post("/api/v1/projects", json={
+        "name": "provenance-test-project",
+    }, headers=auth)
+    assert r.status_code == 201, r.text
+    project_id = r.json()["id"]
+
+    scope = {"include": ["10.0.0.0/24"], "exclude": []}
+    r = client.put(f"/api/v1/projects/{project_id}/scope", json=scope, headers=auth)
+    assert r.status_code == 200, r.text
+
+    r = client.post(
+        f"/api/v1/projects/{project_id}/targets",
+        json={"hostname_or_ip": "10.0.0.33", "target_type": "linux_host"},
+        headers=auth,
+    )
+    target_id = r.json()["id"]
+
+    r = client.post(
+        "/api/v1/audit/generate",
+        json={
+            "project_id": project_id,
+            "target_id": target_id,
+            "scan_categories": [{"category_id": "network_discovery", "config": {}}],
+        },
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    scan_id = r.json()["scan_id"]
+    server_script = r.json()["script"]
+
+    token = auth["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect(f"/ws/execute/{scan_id}?token={token}") as ws:
+        ws.send_json({"action": "run"})
+        msg = ws.receive_json()
+        for _ in range(20):
+            if msg.get("type") == "exit":
+                break
+            msg = ws.receive_json()
+
+    db = database.SessionLocal()
+    try:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        prov = json.loads(scan.provenance_json)
+        assert prov["operator"] == "smoke"  # the auth fixture's admin username
+        assert prov["scope_snapshot"] == scope
+        assert prov["category_ids"] == ["network_discovery"]
+        assert prov["script_sha256"] == hashlib.sha256(server_script.encode()).hexdigest()
+    finally:
+        db.close()

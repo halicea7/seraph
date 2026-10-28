@@ -47,7 +47,7 @@ async def _stream_proc(proc: "asyncio.subprocess.Process") -> AsyncGenerator[dic
             await proc.wait()
 
 
-async def run_command_streaming(command: str) -> AsyncGenerator[dict, None]:
+async def run_command_streaming(command: str, dry_run: bool = False) -> AsyncGenerator[dict, None]:
     """Run a shell command and stream stdout/stderr as JSON messages.
 
     Only for commands that genuinely need shell features (multi-line scripts,
@@ -55,10 +55,19 @@ async def run_command_streaming(command: str) -> AsyncGenerator[dict, None]:
     install commands). For a single tool invocation built from
     caller-influenced arguments, prefer `run_argv_streaming` below, which
     never involves a shell.
+
+    `dry_run=True` reports the exact command that would run (useful to
+    confirm scope/argv before actually touching a target) without spawning
+    a subprocess at all.
     """
     # stdbuf forces line-buffered output so tools like nmap don't hold
     # all output in their stdio buffer until exit
     wrapped = f"stdbuf -oL -eL bash -c {repr(command)}"
+
+    if dry_run:
+        yield {"type": "stdout", "data": f"[dry-run] would execute via shell: {command}\n"}
+        yield {"type": "exit", "code": 0}
+        return
 
     proc = await asyncio.create_subprocess_shell(
         wrapped,
@@ -70,7 +79,7 @@ async def run_command_streaming(command: str) -> AsyncGenerator[dict, None]:
         yield msg
 
 
-async def run_argv_streaming(command: str) -> AsyncGenerator[dict, None]:
+async def run_argv_streaming(command: str, dry_run: bool = False) -> AsyncGenerator[dict, None]:
     """Run a single tool invocation with no shell involved.
 
     `command` is split with `shlex.split` into argv and exec'd directly via
@@ -79,6 +88,10 @@ async def run_argv_streaming(command: str) -> AsyncGenerator[dict, None]:
     are passed to the tool as literal argv bytes, never interpreted. This is
     the execution path for commands assembled from template substitution or
     other caller-influenced input (pentest/osint tool runs, cracking jobs).
+
+    `dry_run=True` resolves and reports argv (still validating it parses,
+    and still subject to the same shlex-split rules that keep shell
+    metacharacters inert) without spawning a subprocess at all.
     """
     try:
         argv = shlex.split(command)
@@ -89,6 +102,11 @@ async def run_argv_streaming(command: str) -> AsyncGenerator[dict, None]:
     if not argv:
         yield {"type": "stderr", "data": "Empty command\n"}
         yield {"type": "exit", "code": 1}
+        return
+
+    if dry_run:
+        yield {"type": "stdout", "data": f"[dry-run] would execute (argv, no shell): {argv!r}\n"}
+        yield {"type": "exit", "code": 0}
         return
 
     try:
