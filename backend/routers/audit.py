@@ -207,7 +207,7 @@ def parse_scan_findings(scan_id: str, db: Session = Depends(get_db)):
 
     # Push a notification so the dashboard dot lights up
     if created:
-        from routers.notifications import push_notification
+        from services.notification_service import push_notification
         highs = sum(1 for f in created if f.severity in ("critical", "high"))
         target_label = target.hostname_or_ip if target else "unknown"
         push_notification(

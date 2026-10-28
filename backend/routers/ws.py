@@ -15,6 +15,7 @@ from database import SessionLocal, Scan, Credential, Notification, Target, Proje
 from services.executor import run_command_streaming, run_argv_streaming
 from services.ssh_executor import run_script_over_ssh, REMOTE_CATEGORIES
 from services.scope_service import check_scope
+from services.event_bus import _event_clients, broadcast_event
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
@@ -39,22 +40,6 @@ def _log_command(scan_id: str, raw_script: str) -> None:
         has_sudo,
         raw_script[:300].replace('\n', ' '),
     )
-
-# ── Global event broadcast ────────────────────────────────────────────────────
-
-_event_clients: set[asyncio.Queue] = set()
-
-
-async def broadcast_event(event: dict) -> None:
-    """Push an event to all connected /ws/events clients."""
-    dead = set()
-    for q in _event_clients:
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            dead.add(q)
-    _event_clients.difference_update(dead)
-
 
 @router.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket):

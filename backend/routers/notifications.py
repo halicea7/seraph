@@ -1,6 +1,3 @@
-import asyncio
-import uuid
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -8,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import Notification, get_db
+from services.notification_service import push_notification
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -22,27 +20,6 @@ class NotificationCreate(BaseModel):
 def create_notification(payload: NotificationCreate, db: Session = Depends(get_db)):
     n = push_notification(db, payload.title, payload.body, payload.type)
     return {"id": n.id}
-
-
-def push_notification(db: Session, title: str, body: str = "", type: str = "info") -> Notification:
-    """Create a notification and fire matching webhooks."""
-    n = Notification(
-        id=str(uuid.uuid4()),
-        title=title,
-        body=body,
-        type=type,
-        created_at=datetime.utcnow(),
-    )
-    db.add(n)
-    db.commit()
-    # Fire webhooks if we're inside an async context
-    try:
-        loop = asyncio.get_running_loop()
-        from services.webhook_service import fire_webhooks
-        loop.create_task(fire_webhooks(type, title, body))
-    except RuntimeError:
-        pass  # no running loop — skip (e.g. during tests or sync callers)
-    return n
 
 
 @router.get("")

@@ -59,7 +59,7 @@ async def _run_headless(scan_id: str, script: str) -> None:
             if exit_code == 0 and raw_output:
                 _, new_findings = save_parsed_findings(db, scan, raw_output)
             # Push notification
-            from routers.notifications import push_notification
+            from services.notification_service import push_notification
             if exit_code == 0:
                 push_notification(
                     db,
@@ -215,7 +215,7 @@ async def _run_c2_session_sync() -> None:
     import services.sliver_client as sliver
     import uuid as _uuid
     import json as _json
-    from routers.c2 import _DEFAULT_CHECKLIST
+    from services.c2_checklist import DEFAULT_CHECKLIST as _DEFAULT_CHECKLIST
 
     db = SessionLocal()
     try:
@@ -391,7 +391,7 @@ async def _run_nessus_poll() -> None:
     """
     from database import SessionLocal, Scan, Target
     from services.nessus import load_client, import_scan_results
-    from routers.ws import broadcast_event
+    from services.event_bus import broadcast_event
 
     db = SessionLocal()
     try:

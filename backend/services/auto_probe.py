@@ -408,7 +408,7 @@ async def _run_searchsploit(
             ))
             db.commit()
 
-        from routers.ws import broadcast_event as _broadcast
+        from services.event_bus import broadcast_event as _broadcast
         asyncio.create_task(_broadcast({
             "type": "scan_update", "scan_id": scan_id, "status": "completed",
             "findings": findings_added,
@@ -471,7 +471,7 @@ async def _run_step(scan_id: str, cmd: str, scan_type: str, timeout: int, env: d
     finally:
         db.close()
 
-    from routers.ws import broadcast_event as _broadcast
+    from services.event_bus import broadcast_event as _broadcast
     asyncio.create_task(_broadcast({"type": "scan_update", "scan_id": scan_id, "status": "running"}))
 
     # Build augmented PATH if caller didn't supply one.

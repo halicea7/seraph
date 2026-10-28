@@ -101,7 +101,7 @@ async def _fire_scheduled(listener_id: str) -> None:
 
 async def _fire_threshold(listener_id: str) -> None:
     from database import SessionLocal, Listener, Finding, Target, Scan
-    from routers.notifications import push_notification
+    from services.notification_service import push_notification
 
     db = SessionLocal()
     try:
@@ -159,7 +159,7 @@ async def _fire_threshold(listener_id: str) -> None:
 
 async def _fire_healthcheck(listener_id: str) -> None:
     from database import SessionLocal, Listener, Target
-    from routers.notifications import push_notification
+    from services.notification_service import push_notification
 
     db = SessionLocal()
     try:
