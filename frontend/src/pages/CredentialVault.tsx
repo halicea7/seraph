@@ -109,11 +109,15 @@ export default function CredentialVault() {
   }, [projectId])
 
   async function loadCredentials() {
-    const url = projectId
-      ? `${getApiBase()}/credentials?project_id=${projectId}`
-      : `${getApiBase()}/credentials`
-    const res = await fetch(url)
-    setCredentials(await res.json())
+    // GET /credentials requires project_id -- with none selected yet (the
+    // default on mount), the old code dropped the query param entirely,
+    // which the backend 422s with a {detail: [...]} object, not a list.
+    // setCredentials() then held that object and every .filter() below
+    // threw "a.filter is not a function", blanking the whole route.
+    if (!projectId) { setCredentials([]); return }
+    const res = await fetch(`${getApiBase()}/credentials?project_id=${projectId}`)
+    const data = await res.json()
+    setCredentials(Array.isArray(data) ? data : [])
   }
 
   async function handleSave() {

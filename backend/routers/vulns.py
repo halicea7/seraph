@@ -22,7 +22,7 @@ class CreateVulnRequest(BaseModel):
     cve_id: Optional[str] = None
     affected_asset: str = ""
     remediation_notes: str = ""
-    tags: str = ""
+    tags: list[str] = []
     finding_id: Optional[str] = None
 
 
@@ -35,7 +35,7 @@ class UpdateVulnRequest(BaseModel):
     cve_id: Optional[str] = None
     affected_asset: Optional[str] = None
     remediation_notes: Optional[str] = None
-    tags: Optional[str] = None
+    tags: Optional[list[str]] = None
 
 
 class ImportFindingsRequest(BaseModel):
@@ -57,10 +57,16 @@ def _row(v: VulnerabilityRecord) -> dict:
         "remediation_notes": v.remediation_notes,
         "ai_remediation": v.ai_remediation,
         "finding_id": v.finding_id,
-        "tags": v.tags,
+        # Stored as a comma-separated string (same convention as Finding.tags);
+        # the frontend's Vuln.tags is string[] and calls .map/.join on it directly.
+        "tags": [t.strip() for t in (v.tags or "").split(",") if t.strip()],
         "created_at": v.created_at.isoformat() if v.created_at else None,
         "updated_at": v.updated_at.isoformat() if v.updated_at else None,
     }
+
+
+def _join_tags(tags: list[str]) -> str:
+    return ",".join(t.strip() for t in tags if t.strip())
 
 
 def _get_setting(db: Session, key: str, default: str = "") -> str:
@@ -108,7 +114,7 @@ def create_vuln(req: CreateVulnRequest, db: Session = Depends(get_db)):
         cve_id=req.cve_id,
         affected_asset=req.affected_asset,
         remediation_notes=req.remediation_notes,
-        tags=req.tags,
+        tags=_join_tags(req.tags),
         finding_id=req.finding_id,
     )
     db.add(vuln)
@@ -147,7 +153,7 @@ def update_vuln(vuln_id: str, req: UpdateVulnRequest, db: Session = Depends(get_
     if req.remediation_notes is not None:
         vuln.remediation_notes = req.remediation_notes
     if req.tags is not None:
-        vuln.tags = req.tags
+        vuln.tags = _join_tags(req.tags)
     vuln.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(vuln)
