@@ -49,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // perfectly valid 24h session to /login any time the server had
           // a transient blip, with no backend restart needed to reproduce.
           setUnreachable(true)
+          return
         })
         .catch(() => {
           // Network-level failure (DNS, connection reset, timeout/abort) --
