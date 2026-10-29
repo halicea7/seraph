@@ -4,6 +4,7 @@ Connects to msfrpcd via pymetasploit3.
 All methods return None / empty gracefully if MSF is not available.
 """
 
+import json
 import logging
 from typing import Optional
 import re
@@ -13,13 +14,85 @@ logger = logging.getLogger(__name__)
 _client = None
 _connected = False
 
+# docker-compose.prod.yml runs 4 uvicorn workers. _client/_connected above are
+# plain process globals, so POST /c2/connect only ever "connects" the one
+# worker that received the request -- the other three keep returning
+# "Not connected" forever. The actual fix: persist the connect params (not
+# just a success flag) in AppSetting, shared by every worker via Postgres,
+# and have get_client() reconnect this process on demand the first time it's
+# asked for a client it doesn't have yet. The RPC password is encrypted at
+# rest with the same vault used for Credential.secret.
+_SETTING_KEY = "msf_rpc_connection"
+
+
+def _save_connection_params(host: str, port: int, password: str, ssl: bool) -> None:
+    from database import AppSetting, SessionLocal
+    from services.vault import encrypt
+    db = SessionLocal()
+    try:
+        value = json.dumps({"host": host, "port": port, "password": encrypt(password), "ssl": ssl})
+        row = db.query(AppSetting).filter(AppSetting.key == _SETTING_KEY).first()
+        if row:
+            row.value = value
+        else:
+            db.add(AppSetting(key=_SETTING_KEY, value=value))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _load_connection_params() -> Optional[dict]:
+    from database import AppSetting, SessionLocal
+    from services.vault import decrypt
+    db = SessionLocal()
+    try:
+        row = db.query(AppSetting).filter(AppSetting.key == _SETTING_KEY).first()
+        if not row or not row.value:
+            return None
+        params = json.loads(row.value)
+        params["password"] = decrypt(params.get("password", ""))
+        return params
+    finally:
+        db.close()
+
+
+def _clear_connection_params() -> None:
+    from database import AppSetting, SessionLocal
+    db = SessionLocal()
+    try:
+        db.query(AppSetting).filter(AppSetting.key == _SETTING_KEY).delete()
+        db.commit()
+    finally:
+        db.close()
+
 
 def get_client():
+    """Return a connected MsfRpcClient for THIS process, reconnecting from the
+    shared connection params on first use if this worker never received the
+    POST /c2/connect call itself."""
     global _client, _connected
-    return _client if _connected else None
+    if _connected and _client is not None:
+        return _client
+    params = _load_connection_params()
+    if not params:
+        return None
+    ok, _ = connect(
+        host=params.get("host", "127.0.0.1"),
+        port=params.get("port", 55553),
+        password=params.get("password", ""),
+        ssl=params.get("ssl", False),
+        _persist=False,
+    )
+    return _client if ok else None
 
 
-def connect(host: str = "127.0.0.1", port: int = 55553, password: str = "", ssl: bool = False) -> tuple[bool, str]:
+def connect(
+    host: str = "127.0.0.1",
+    port: int = 55553,
+    password: str = "",
+    ssl: bool = False,
+    _persist: bool = True,
+) -> tuple[bool, str]:
     import os
     password = password or os.getenv("MSF_RPC_PASSWORD", "")
     global _client, _connected
@@ -28,6 +101,8 @@ def connect(host: str = "127.0.0.1", port: int = 55553, password: str = "", ssl:
         _client = MsfRpcClient(password, server=host, port=port, ssl=ssl)
         _connected = True
         logger.info(f"Connected to Metasploit RPC at {host}:{port}")
+        if _persist:
+            _save_connection_params(host, port, password, ssl)
         return True, ""
     except Exception as e:
         logger.warning(f"Could not connect to Metasploit RPC: {e}")
@@ -40,6 +115,7 @@ def disconnect():
     global _client, _connected
     _client = None
     _connected = False
+    _clear_connection_params()
 
 
 def get_status() -> dict:

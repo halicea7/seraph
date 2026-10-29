@@ -17,6 +17,7 @@ Management (requires JWT):
 import json
 import os
 import uuid
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,7 +25,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config import settings
-from database import PasskeyCredential, User, get_db
+from database import PasskeyChallenge, PasskeyCredential, SessionLocal, User, get_db
 from routers.auth import get_current_user
 from services.auth_service import create_token
 
@@ -32,38 +33,50 @@ import webauthn
 from webauthn.helpers import (
     base64url_to_bytes,
     bytes_to_base64url,
+    parse_authentication_credential_json,
+    parse_registration_credential_json,
 )
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria,
     ResidentKeyRequirement,
     UserVerificationRequirement,
     PublicKeyCredentialDescriptor,
-    RegistrationCredential,
-    AuthenticationCredential,
 )
 
 router = APIRouter(prefix="/passkeys", tags=["passkeys"])
 
-# In-memory challenge store: { challenge_key: challenge_bytes }
-# challenge_key is a random hex token returned to the client so it can be echoed
-# back during the "complete" step.
-_challenges: dict[str, bytes] = {}
+# A ceremony's begin/complete requests can land on two different uvicorn
+# workers (docker-compose.prod.yml runs 4) -- challenges live in Postgres,
+# not a module-level dict, so every worker sees the same store. Real WebAuthn
+# ceremonies complete in seconds; 5 minutes covers a slow authenticator
+# prompt without letting stale challenges accumulate.
+_CHALLENGE_TTL = timedelta(minutes=5)
 
 
 def _store_challenge(key: str, challenge: bytes) -> None:
-    _challenges[key] = challenge
-    # Prune old entries if the dict grows large (simple defence against leak)
-    if len(_challenges) > 500:
-        # Drop oldest 250
-        for k in list(_challenges.keys())[:250]:
-            _challenges.pop(k, None)
+    db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - _CHALLENGE_TTL
+        db.query(PasskeyChallenge).filter(PasskeyChallenge.created_at < cutoff).delete(synchronize_session=False)
+        db.add(PasskeyChallenge(challenge_key=key, challenge=bytes_to_base64url(challenge)))
+        db.commit()
+    finally:
+        db.close()
 
 
 def _pop_challenge(key: str) -> bytes:
-    ch = _challenges.pop(key, None)
-    if ch is None:
-        raise HTTPException(400, "Challenge expired or not found — restart the passkey flow")
-    return ch
+    db = SessionLocal()
+    try:
+        row = db.query(PasskeyChallenge).filter(PasskeyChallenge.challenge_key == key).first()
+        if row is None:
+            raise HTTPException(400, "Challenge expired or not found — restart the passkey flow")
+        db.delete(row)
+        db.commit()
+        if datetime.utcnow() - row.created_at > _CHALLENGE_TTL:
+            raise HTTPException(400, "Challenge expired or not found — restart the passkey flow")
+        return base64url_to_bytes(row.challenge)
+    finally:
+        db.close()
 
 
 # ── Registration ──────────────────────────────────────────────────────────────
@@ -108,7 +121,7 @@ def register_complete(
 
     origins = [o.strip() for o in settings.rp_origins.split(",") if o.strip()]
     try:
-        reg_credential = RegistrationCredential.parse_raw(json.dumps(req.credential))
+        reg_credential = parse_registration_credential_json(req.credential)
         verified = webauthn.verify_registration_response(
             credential=reg_credential,
             expected_challenge=challenge,
@@ -189,7 +202,7 @@ def authenticate_complete(req: AuthCompleteRequest, db: Session = Depends(get_db
     challenge = _pop_challenge(req.challenge_key)
 
     try:
-        auth_credential = AuthenticationCredential.parse_raw(json.dumps(req.credential))
+        auth_credential = parse_authentication_credential_json(req.credential)
     except Exception as exc:
         raise HTTPException(400, f"Could not parse credential: {exc}")
 

@@ -155,6 +155,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends chromium \
     && rm -rf /var/lib/apt/lists/* \
     || echo "[build] chromium skipped (optional) -- screenshots will fail at capture time"
 
+# ── 8c. sliver-client (C2 — connects out to an operator-config'd Sliver ──────
+# server running elsewhere, same model as pymetasploit3 connecting out to
+# msfrpcd: Seraph is the *client*, not the server, so only sliver-client
+# ships here. Generate the operator config on the actual Sliver server with
+# `sliver-server operator --name seraph --lhost <ip> --save seraph.cfg`, then
+# mount it into this container and point SLIVER_CONFIG at it (or drop it at
+# ~/.sliver/configs/seraph.cfg, services/sliver_client.py's default path).
+RUN { set -e; \
+      VER=$(curl -fsSL https://api.github.com/repos/BishopFox/sliver/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4); \
+      curl -fsSL "https://github.com/BishopFox/sliver/releases/download/${VER}/sliver-client_linux-amd64" \
+           -o /usr/local/bin/sliver-client; \
+      chmod +x /usr/local/bin/sliver-client; \
+    } || echo "[build] sliver-client skipped (optional)"
+
 # ── 9. rustscan (optional; upstream ships a zipped .deb under bee-san/RustScan) ─
 # Wrapped non-fatal: an upstream asset rename must not brick the whole image —
 # Seraph detects a missing tool gracefully (Settings → Tools).

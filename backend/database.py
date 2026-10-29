@@ -500,6 +500,19 @@ class PasskeyCredential(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PasskeyChallenge(Base):
+    """Durable WebAuthn challenge, keyed by the random token handed to the
+    client. A module-level dict only lives in the worker process that
+    created it; under docker-compose.prod.yml's 4 uvicorn workers, the
+    begin/complete requests for one ceremony land on different workers
+    roughly 3 times out of 4 -- the DB is the only store every worker
+    shares."""
+    __tablename__ = "passkey_challenges"
+    challenge_key = Column(String, primary_key=True)
+    challenge = Column(String, nullable=False)   # base64url-encoded bytes
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class RevokedToken(Base):
     """Tracks invalidated JWTs so logout is enforced server-side."""
     __tablename__ = "revoked_tokens"
