@@ -10,6 +10,7 @@ Port discovery order:
 """
 import asyncio
 import json
+import logging
 import os
 import pathlib
 import re
@@ -18,6 +19,8 @@ import uuid
 from datetime import datetime
 
 from database import AppSetting, Finding, Notification, Scan, SessionLocal
+
+log = logging.getLogger(__name__)
 
 # ── Cancellation registry ──────────────────────────────────────────────────
 # Maps target_id → running asyncio.Task so cancel_probe() can stop it.
@@ -32,6 +35,19 @@ _HTTPS_PORTS = {443, 8443}
 
 def _scheme_for(port: int) -> str:
     return "https" if port in _HTTPS_PORTS else "http"
+
+
+# rustscan can under-report (a flaky scan-script hook, rate-limiting, a
+# dropped SYN) and miss a genuinely open port -- when that happens these
+# commonly-exposed ports are always worth checking regardless of what
+# rustscan found, since tier 2 (nikto/testssl/nuclei/feroxbuster) only
+# triggers off ports nmap confirms open here.
+BASELINE_PORTS = {22, 80, 443, 3000, 445, 5000, 8000, 8080, 8443, 8888, 3389}
+
+# Below this many discovered ports, rustscan's result is more likely a
+# scan failure than an accurate "this host has almost nothing open" --
+# fall back to nmap's own broad port sweep instead of trusting it.
+_RUSTSCAN_SUSPICIOUS_THRESHOLD = 5
 
 
 # Tool definitions. The "always" steps' cmd is a callable(host) -> shell
@@ -457,7 +473,13 @@ async def _run_rustscan(target_host: str, timeout: int) -> set[int]:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
+            log.warning("rustscan timed out after %ss against %s", timeout, target_host)
             return set()
+        if proc.returncode != 0:
+            log.warning(
+                "rustscan exited %s against %s; port list may be incomplete: %s",
+                proc.returncode, target_host, stdout.decode(errors="replace")[:500],
+            )
         output = stdout.decode(errors="replace")
         ports: set[int] = set()
         for m in _RUSTSCAN_PORT_RE.finditer(output):
@@ -466,6 +488,7 @@ async def _run_rustscan(target_host: str, timeout: int) -> set[int]:
                 ports.add(int(p))
         return ports
     except Exception:
+        log.warning("rustscan failed against %s", target_host, exc_info=True)
         return set()
 
 
@@ -769,10 +792,23 @@ async def run_auto_probe(target_id: str, target_host: str, enabled_tools: list[s
         nmap_output: str | None = None
         if available("nmap"):
             scan_id = _create_scan(target_id, "nmap", "nmap")
-            if rustscan_ports:
-                port_list = ",".join(str(p) for p in sorted(rustscan_ports))
+            if rustscan_ports and len(rustscan_ports) >= _RUSTSCAN_SUSPICIOUS_THRESHOLD:
+                ports = set(rustscan_ports) | BASELINE_PORTS
+                port_list = ",".join(str(p) for p in sorted(ports))
                 cmd = f"nmap -sV -T4 -p {port_list} {target_host}"
+                log.info(
+                    "nmap port list for %s: %d from rustscan + baseline -> %d total",
+                    target_host, len(rustscan_ports), len(ports),
+                )
             else:
+                # No rustscan, or rustscan returned suspiciously few ports
+                # (likely a scan failure, not an accurate "nothing's open")
+                # -- fall back to nmap's own broad sweep rather than trust it.
+                if rustscan_ports:
+                    log.warning(
+                        "rustscan found only %d port(s) for %s; falling back to --top-ports 1000",
+                        len(rustscan_ports), target_host,
+                    )
                 cmd = f"nmap -sV -T4 --top-ports 1000 {target_host}"
             nmap_output = await _run_step(scan_id, cmd, "nmap", timeout, env)
 

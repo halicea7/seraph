@@ -409,7 +409,7 @@ def parse_nuclei_output(raw_output: str) -> list[ParsedFinding]:
             continue
 
         info     = obj.get("info", {})
-        cls      = obj.get("classification") or {}
+        cls      = info.get("classification") or {}  # nuclei nests this under info, not top-level
         name     = info.get("name") or obj.get("template-id", "Unknown")
         sev_raw  = info.get("severity", "info").lower()
         severity = _sev_map.get(sev_raw, "info")
