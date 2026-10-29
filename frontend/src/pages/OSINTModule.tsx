@@ -24,14 +24,6 @@ interface ToolState {
   results: { emails: number; subdomains: number; ips: number; new_targets: number } | null
 }
 
-interface OSINTResult {
-  host: string
-  ip: string
-  resolved: boolean
-  source: string
-  in_scope: boolean
-}
-
 interface SherlockProfile {
   site: string
   url: string
@@ -82,22 +74,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function Pill({ tone, children }: { tone: 'pass' | 'fail' | 'warn' | 'info'; children: React.ReactNode }) {
-  const map = {
-    pass: { color: 'var(--ok)',   bg: 'rgba(107,138,114,0.1)' },
-    fail: { color: 'var(--crit)', bg: 'rgba(232,92,78,0.1)' },
-    warn: { color: 'var(--high)', bg: 'rgba(240,168,58,0.1)' },
-    info: { color: 'var(--fg-2)', bg: 'var(--bg-2)' },
-  }
-  const s = map[tone]
-  return (
-    <span className="mono" style={{
-      fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.12em',
-      padding: '1px 6px', color: s.color, background: s.bg, border: `1px solid ${s.color}33`,
-    }}>{children}</span>
-  )
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function OSINTModule() {
@@ -110,8 +86,6 @@ export default function OSINTModule() {
   const [tools, setTools] = useState<Record<string, OSINTTool>>({})
   const [toolStates, setToolStates] = useState<Record<string, ToolState>>({})
   const [activeTool, setActiveTool] = useState<string>(TOOLS_STATIC[0].key)
-  const [queryDomain, setQueryDomain] = useState('')
-  const [results, setResults] = useState<OSINTResult[]>([])
 
   const [username, setUsername] = useState('')
   const seedInputRef = useRef<HTMLInputElement>(null)
@@ -214,21 +188,6 @@ export default function OSINTModule() {
     ws.onerror = () => { updateTool(toolName, { status: 'failed', output: 'WebSocket error' }) }
   }
 
-  function handleQuery() {
-    if (!queryDomain.trim()) return
-    const domainVal = queryDomain.trim()
-    const activeState = toolStates[activeTool]
-    const count = activeState?.results?.subdomains ?? TOOLS_STATIC.find(t => t.key === activeTool)?.count ?? 0
-    const rows: OSINTResult[] = Array.from({ length: Math.min(count, 20) }, (_, i) => ({
-      host: `sub${i + 1}.${domainVal}`,
-      ip: `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${i + 1}`,
-      resolved: i % 3 !== 2,
-      source: activeTool,
-      in_scope: i % 4 !== 3,
-    }))
-    setResults(rows)
-  }
-
   async function handleSherlockRun() {
     if (!username.trim() || sherlockState.status === 'running') return
     setSherlockState({ status: 'running', output: '', profiles: [], jobId: null })
@@ -271,7 +230,6 @@ export default function OSINTModule() {
     const lines = (await file.text()).split(/\r?\n/).map(l => l.trim()).filter(Boolean)
     if (lines.length === 0) { toast.error('No seeds found in file'); return }
     setDomain(lines[0])
-    setQueryDomain(lines[0])
     toast.success(`Loaded ${lines.length} seed${lines.length !== 1 ? 's' : ''} — domain set to ${lines[0]}`)
   }
 
@@ -283,7 +241,7 @@ export default function OSINTModule() {
       : (activeToolMeta?.count ?? 0)
   const sectionTitle = activeTool === 'sherlock'
     ? `SHERLOCK · ${sherlockState.profiles.length} PROFILES${username ? ` · @${username}` : ''}`
-    : `${activeTool.toUpperCase()} · ${displayCount} RESULTS${queryDomain ? ` · ${queryDomain}` : ''}`
+    : `${activeTool.toUpperCase()} · ${displayCount} RESULTS${domain ? ` · ${domain}` : ''}`
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -453,57 +411,77 @@ export default function OSINTModule() {
 
         ) : (
 
-          /* Domain OSINT tools */
-          <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '12px var(--pad)', borderBottom: rule, display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-              <input
-                value={queryDomain}
-                onChange={e => setQueryDomain(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleQuery()}
-                placeholder="domain · email · cidr"
-                className="mono"
-                style={{ flex: 1, background: 'var(--bg)', border: rule, padding: '6px 10px', fontSize: 12, color: 'var(--fg)', outline: 'none' }}
-              />
-              <button
-                className="btn-primary btn-sm"
-                onClick={handleQuery}
-                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-              >
-                <Icon name="search" size={11} /> Query
-              </button>
-            </div>
+          /* Domain OSINT tools -- runs the real backend tool over WS and
+             shows its real output/counts. (Previously this pane had its own
+             "Query" box that fabricated Math.random() host/IP rows locally
+             with no backend call at all.) */
+          (() => {
+            const toolMeta = tools[activeTool]
+            const state = toolStates[activeTool]
+            // whois/searchsploit/shodan are listed in the sidebar but have no
+            // /osint/run entry at all yet (OSINT_TOOLS on the backend only
+            // covers theHarvester/amass/subfinder) -- distinct from a tool
+            // that's wired but not installed on this host.
+            const hasRunner = !!toolMeta
+            const isAvailable = hasRunner && toolMeta.available !== false
+            const isRunning = state?.status === 'running'
+            return (
+              <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '12px var(--pad)', borderBottom: rule, display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                  <input
+                    value={domain}
+                    onChange={e => setDomain(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && isAvailable && !isRunning && handleRun(activeTool, state?.renderedCommand ?? '')}
+                    placeholder="domain to recon"
+                    className="mono"
+                    style={{ flex: 1, background: 'var(--bg)', border: rule, padding: '6px 10px', fontSize: 12, color: 'var(--fg)', outline: 'none' }}
+                  />
+                  <button
+                    className="btn-primary btn-sm"
+                    onClick={() => handleRun(activeTool, state?.renderedCommand ?? '')}
+                    disabled={!domain.trim() || isRunning || !isAvailable}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: !domain.trim() || isRunning || !isAvailable ? 0.5 : 1 }}
+                  >
+                    <Icon name={isRunning ? 'refresh' : 'play'} size={11} /> {isRunning ? 'Running…' : 'Run'}
+                  </button>
+                </div>
 
-            <Section title={sectionTitle}>
-              <table className="data" style={{ width: '100%' }}>
-                <thead>
-                  <tr>
-                    <th>Host</th>
-                    <th>IP</th>
-                    <th>Resolved</th>
-                    <th>Source</th>
-                    <th>In scope</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {results.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} style={{ textAlign: 'center', color: 'var(--fg-3)', padding: '32px 0', fontSize: 12 }}>
-                        Enter a domain and click Query to run passive recon
-                      </td>
-                    </tr>
-                  ) : results.map((row, i) => (
-                    <tr key={i}>
-                      <td className="mono" style={{ fontSize: 11.5 }}>{row.host}</td>
-                      <td className="mono tnum" style={{ fontSize: 11 }}>{row.ip}</td>
-                      <td><Pill tone="info">{row.resolved ? 'yes' : 'no'}</Pill></td>
-                      <td className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{row.source}</td>
-                      <td><Pill tone={row.in_scope ? 'pass' : 'warn'}>{row.in_scope ? 'in scope' : 'out'}</Pill></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Section>
-          </div>
+                {!isAvailable && (
+                  <div style={{ padding: '10px var(--pad)', background: 'rgba(232,64,64,0.06)', borderBottom: rule, fontSize: 11, color: 'var(--crit)', fontFamily: 'var(--font-mono)' }}>
+                    {hasRunner ? <>{activeTool} not found — run: {toolMeta.install}</> : <>{activeTool} isn't wired to a live runner in this build yet.</>}
+                  </div>
+                )}
+
+                {state?.output && (
+                  <Section title="LIVE OUTPUT">
+                    <div style={{ padding: '0 var(--pad) 12px', maxHeight: 200, overflowY: 'auto' }}>
+                      <pre className="term" style={{ margin: 0, fontSize: 10, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                        {state.output}
+                      </pre>
+                    </div>
+                  </Section>
+                )}
+
+                <Section title={sectionTitle}>
+                  {state?.results ? (
+                    <div style={{ display: 'flex', gap: 24, padding: '16px var(--pad)' }}>
+                      <div><div className="mono tnum" style={{ fontSize: 20 }}>{state.results.subdomains}</div><div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase' }}>Subdomains</div></div>
+                      <div><div className="mono tnum" style={{ fontSize: 20 }}>{state.results.emails}</div><div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase' }}>Emails</div></div>
+                      <div><div className="mono tnum" style={{ fontSize: 20 }}>{state.results.ips}</div><div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase' }}>IPs</div></div>
+                      <div><div className="mono tnum" style={{ fontSize: 20 }}>{state.results.new_targets}</div><div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase' }}>New targets</div></div>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center', color: 'var(--fg-3)', padding: '32px 0', fontSize: 12 }}>
+                      {!hasRunner && `${activeTool} isn't wired to a live runner in this build yet`}
+                      {hasRunner && !isAvailable && `${activeTool} is not installed on this backend`}
+                      {isAvailable && isRunning && 'Running…'}
+                      {isAvailable && !isRunning && (state?.status === 'failed' ? 'Run failed — see output above' : 'Enter a domain and click Run')}
+                    </div>
+                  )}
+                </Section>
+              </div>
+            )
+          })()
 
         )}
       </div>

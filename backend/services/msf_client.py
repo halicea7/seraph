@@ -11,6 +11,15 @@ import re
 
 logger = logging.getLogger(__name__)
 
+
+class MsfCommandError(RuntimeError):
+    """Raised by session_run_command() on any failure (no connection, dead
+    session, RPC error) so callers can tell "the command really did fail"
+    apart from "the command's real output happens to be empty" -- a bare
+    `return "[Error] ..."` string looked exactly like truthy output to every
+    caller that only checked `if out:`."""
+
+
 _client = None
 _connected = False
 
@@ -118,8 +127,41 @@ def disconnect():
     _clear_connection_params()
 
 
-def get_status() -> dict:
+def _live_client():
+    """Return a working client for this process, detecting and healing a
+    stale RPC token before doing anything else.
+
+    msfrpcd's auth token can expire on its own; that has nothing to do with
+    whether this process successfully connect()ed at some point in the past.
+    get_client() alone only reconnects when _connected is False, so a token
+    that went stale after a successful connect kept being handed out forever
+    -- every call using it then got the bare `False` msfrpcd's RPC layer
+    returns for an unauthenticated request, and pymetasploit3 tries to
+    subscript/`.get()` that False as if it were the expected dict
+    ("'bool' object has no attribute 'get'" / "is not subscriptable").
+    A cheap read-only probe (core.version) distinguishes a live token from a
+    stale one *before* any mutating call (run_module, start_listener,
+    session_run_command) runs, so a reconnect-and-retry never risks
+    re-firing something with side effects -- the probe itself never touches
+    sessions, jobs, or modules.
+    """
+    global _connected
     client = get_client()
+    if not client:
+        return None
+    try:
+        version = client.core.version
+        if not isinstance(version, dict):
+            raise RuntimeError(f"core.version returned {version!r}, expected a dict")
+        return client
+    except Exception as e:
+        logger.info(f"MSF client token looked stale ({e}); reconnecting")
+        _connected = False
+        return get_client()
+
+
+def get_status() -> dict:
+    client = _live_client()
     if not client:
         return {"connected": False, "version": None, "sessions": 0, "jobs": 0}
     try:
@@ -138,12 +180,19 @@ def get_status() -> dict:
         return {"connected": False, "version": None, "sessions": 0, "jobs": 0}
 
 
-def list_sessions() -> list[dict]:
-    client = get_client()
+def list_sessions() -> Optional[list[dict]]:
+    """Returns None when MSF couldn't be reached (no client, RPC failure) --
+    distinct from a real empty list. Callers that mark sessions 'lost' when
+    they vanish from this list must only do so on `[]`, never on `None`, or
+    a single stale-token hiccup looks identical to every live session
+    having died (see services/scheduler.py's C2 session sync)."""
+    client = _live_client()
     if not client:
-        return []
+        return None
     try:
         sessions = client.sessions.list
+        if not isinstance(sessions, dict):
+            raise RuntimeError(f"sessions.list returned {sessions!r}, expected a dict")
         result = []
         for sid, info in sessions.items():
             result.append({
@@ -162,11 +211,11 @@ def list_sessions() -> list[dict]:
         return result
     except Exception as e:
         logger.warning(f"MSF list_sessions error: {e}")
-        return []
+        return None
 
 
 def list_jobs() -> list[dict]:
-    client = get_client()
+    client = _live_client()
     if not client:
         return []
     try:
@@ -186,7 +235,7 @@ def list_jobs() -> list[dict]:
 
 
 def stop_job(job_id: str) -> bool:
-    client = get_client()
+    client = _live_client()
     if not client:
         return False
     try:
@@ -200,7 +249,7 @@ def stop_job(job_id: str) -> bool:
 def run_module(module_path: str, options: dict, payload: str = "") -> dict:
     """Run an exploit/auxiliary/post module and return job_id + any new session."""
     import time, threading
-    client = get_client()
+    client = _live_client()
     if not client:
         return {"error": "Not connected to Metasploit"}
     try:
@@ -375,10 +424,16 @@ def run_module(module_path: str, options: dict, payload: str = "") -> dict:
 
 
 def session_run_command(msf_session_id: str, command: str, timeout: int = 30) -> str:
-    """Run a command in a shell/meterpreter session and return output."""
-    client = get_client()
+    """Run a command in a shell/meterpreter session and return output.
+
+    Raises MsfCommandError on any failure instead of returning an
+    "[Error] ..." string -- the old string-return contract was
+    indistinguishable from real output to every caller that just checked
+    `if out:`, so e.g. /sessions/{id}/exec returned 200 with the error text
+    rendered as if it were the command's result."""
+    client = _live_client()
     if not client:
-        return "[Error] Not connected to Metasploit"
+        raise MsfCommandError("Not connected to Metasploit")
 
     # Validate command — no shell injection beyond what MSF handles natively
     command = command.strip()
@@ -409,11 +464,11 @@ def session_run_command(msf_session_id: str, command: str, timeout: int = 30) ->
         return output or ""
     except Exception as e:
         logger.warning(f"MSF session_run_command error: {e}")
-        return f"[Error] {e}"
+        raise MsfCommandError(str(e)) from e
 
 
 def kill_session(msf_session_id: str) -> bool:
-    client = get_client()
+    client = _live_client()
     if not client:
         return False
     try:
@@ -426,7 +481,7 @@ def kill_session(msf_session_id: str) -> bool:
 
 def get_loot(msf_session_id: str = None) -> list[dict]:
     """Pull loot from Metasploit DB."""
-    client = get_client()
+    client = _live_client()
     if not client:
         return []
     try:
@@ -541,7 +596,7 @@ def generate_payload(
 
 def start_listener(payload: str, lhost: str, lport: int, extra_opts: dict = None) -> dict:
     """Start a multi/handler listener for the given payload."""
-    client = get_client()
+    client = _live_client()
     if not client:
         return {"error": "Not connected to Metasploit"}
 
@@ -564,6 +619,12 @@ def start_listener(payload: str, lhost: str, lport: int, extra_opts: dict = None
                 if re.match(r'^\w+$', str(k)):
                     exploit[k] = v
         result = exploit.execute(payload=payload)
+        # execute() returns the bare bool False on an RPC-level failure
+        # (stale token, malformed request) instead of the usual result dict
+        # -- result.get("job_id") then crashed with "'bool' object is not
+        # subscriptable" and the router turned that into a bare 500.
+        if not isinstance(result, dict):
+            return {"error": f"MSF rejected the handler (returned {result!r}) — check PAYLOAD/LPORT"}
         return {"result": result, "job_id": result.get("job_id")}
     except Exception as e:
         logger.warning(f"MSF start_listener error: {e}")

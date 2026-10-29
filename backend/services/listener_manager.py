@@ -325,6 +325,43 @@ def unregister_listener(listener_id: str) -> None:
         scheduler.remove_job(job_id)
 
 
+async def reconcile_listeners() -> None:
+    """Keep the owner worker's scheduler jobs in sync with Listener.status.
+
+    routers/listeners.py's start/pause/stop endpoints call
+    register_listener()/unregister_listener() directly, in whichever worker
+    process received the HTTP request -- but only the scheduler-owning
+    worker's AsyncIOScheduler is actually started (see
+    services/scheduler_lock.py). If that request landed on a different
+    worker, the call is a no-op there: the job never gets added to (or
+    removed from) the scheduler that's actually running. This periodic
+    reconcile on the owner's own scheduler catches up within one tick
+    (30s) regardless of which worker handled the API call.
+    """
+    from database import SessionLocal, Listener
+
+    db = SessionLocal()
+    try:
+        listeners = db.query(Listener).all()
+        live_ids = {l.id for l in listeners}
+        for listener in listeners:
+            has_job = scheduler.get_job(_job_id(listener.id)) is not None
+            if listener.status == "running" and not has_job:
+                config = json.loads(listener.config_json or "{}")
+                try:
+                    register_listener(listener.id, listener.type, config)
+                except Exception as e:
+                    log.error(f"Reconcile: failed to register listener {listener.id}: {e}")
+            elif listener.status != "running" and has_job:
+                unregister_listener(listener.id)
+        # Drop jobs for listeners that were deleted outright.
+        for job in scheduler.get_jobs():
+            if job.id.startswith(_PREFIX) and job.id[len(_PREFIX):] not in live_ids:
+                scheduler.remove_job(job.id)
+    finally:
+        db.close()
+
+
 def initialize_listeners() -> None:
     """Re-register all running listeners on startup."""
     from database import SessionLocal, Listener

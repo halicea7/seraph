@@ -192,6 +192,17 @@ def initialize_scheduler() -> None:
         replace_existing=True,
     )
 
+    # Catches up this (scheduler-owning) worker's job set with any
+    # Listener.status change made by a start/pause/stop request that landed
+    # on a different, non-owning worker.
+    from services.listener_manager import reconcile_listeners
+    scheduler.add_job(
+        reconcile_listeners,
+        IntervalTrigger(seconds=30),
+        id="listener_reconcile",
+        replace_existing=True,
+    )
+
     scheduler.start()
 
 
@@ -223,10 +234,17 @@ async def _run_c2_session_sync() -> None:
     db = SessionLocal()
     try:
         # ── MSF sync ─────────────────────────────────────────────────
+        # list_sessions() returns None when the RPC call itself failed (dead
+        # client, stale token, msfrpcd unreachable) -- distinct from a real
+        # empty session list. Treating None the same as [] used to mean a
+        # single failed poll (e.g. during a stale-token window) marked every
+        # genuinely-live session "lost" on this tick alone.
         try:
-            live_msf = msf.list_sessions()  # returns [] if not connected
+            live_msf = msf.list_sessions()
         except Exception:
-            live_msf = []
+            live_msf = None
+        msf_reachable = live_msf is not None
+        live_msf = live_msf or []
 
         live_msf_ids = {str(s["msf_session_id"]) for s in live_msf}
 
@@ -241,14 +259,15 @@ async def _run_c2_session_sync() -> None:
             if p:
                 project_ids = [p.id]
 
-        for project_id in project_ids:
-            # Mark sessions that disappeared as 'lost'
-            db.query(C2Session).filter(
-                C2Session.project_id == project_id,
-                C2Session.status == "active",
-                C2Session.msf_session_id.notin_(live_msf_ids),
-                C2Session.session_type.notlike("sliver_%"),  # don't touch sliver sessions here
-            ).update({"status": "lost"}, synchronize_session=False)
+        if msf_reachable:
+            for project_id in project_ids:
+                # Mark sessions that disappeared as 'lost'
+                db.query(C2Session).filter(
+                    C2Session.project_id == project_id,
+                    C2Session.status == "active",
+                    C2Session.msf_session_id.notin_(live_msf_ids),
+                    C2Session.session_type.notlike("sliver_%"),  # don't touch sliver sessions here
+                ).update({"status": "lost"}, synchronize_session=False)
 
         for ls in live_msf:
             sid = str(ls["msf_session_id"])
