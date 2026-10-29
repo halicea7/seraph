@@ -98,7 +98,7 @@ function CmdBlock({ cmd, label }: { cmd: string; label: string }) {
 
 // ── New Agent Modal ───────────────────────────────────────────────────────────
 
-function NewAgentModal({ targets, onClose, onCreated }: { targets: Target[]; onClose: () => void; onCreated: (a: AgentRecord) => void }) {
+function NewAgentModal({ targets, projectNames, onClose, onCreated }: { targets: Target[]; projectNames: Record<string, string>; onClose: () => void; onCreated: (a: AgentRecord) => void }) {
   const [name, setName] = useState('')
   const [targetId, setTargetId] = useState('')
   const [saving, setSaving] = useState(false)
@@ -141,7 +141,11 @@ function NewAgentModal({ targets, onClose, onCreated }: { targets: Target[]; onC
             <label style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginBottom: 5, fontFamily: 'var(--font-sans)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Target (optional)</label>
             <select value={targetId} onChange={e => setTargetId(e.target.value)} style={inputStyle}>
               <option value="">— no target —</option>
-              {targets.map(t => <option key={t.id} value={t.id}>{t.hostname_or_ip}</option>)}
+              {targets.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.hostname_or_ip} · {projectNames[t.project_id] ?? 'unknown project'}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -410,6 +414,7 @@ function AgentCard({ agent, categories, onDelete, onJobQueued }: { agent: AgentR
 export default function Agents() {
   const [agents, setAgents] = useState<AgentRecord[]>([])
   const [targets, setTargets] = useState<Target[]>([])
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({})
   const [categories, setCategories] = useState<ScanCategory[]>([])
   const [loading, setLoading] = useState(true)
   const [showNewModal, setShowNewModal] = useState(false)
@@ -424,10 +429,20 @@ export default function Agents() {
       fetch(`${getApiBase()}/agents`).then(r => r.json()),
       fetch(`${getApiBase()}/targets`).then(r => r.json()),
       fetch(`${getApiBase()}/audit/categories`).then(r => r.json()),
-    ]).then(([agts, ts, cats]) => {
+      fetch(`${getApiBase()}/projects`).then(r => r.json()).catch(() => []),
+    ]).then(([agts, ts, cats, projs]) => {
       setAgents(agts); setTargets(ts)
       const catList = Array.isArray(cats) ? cats : Object.values(cats as Record<string, { id: string; name: string }>).map(c => ({ id: c.id, label: c.name }))
       setCategories(catList)
+      // Agents are a cross-project registry (one physical host can be a
+      // target in several engagements), so the target picker legitimately
+      // lists the same hostname more than once -- labeling each option with
+      // its project is what actually prevents silently attaching an agent
+      // to the wrong engagement; collapsing them by hostname would hide a
+      // real distinction, not fix a bug.
+      if (Array.isArray(projs)) {
+        setProjectNames(Object.fromEntries(projs.map((p: { id: string; name: string }) => [p.id, p.name])))
+      }
     }).finally(() => setLoading(false))
 
     intervalRef.current = setInterval(loadAgents, 30000)
@@ -506,6 +521,7 @@ export default function Agents() {
       {showNewModal && (
         <NewAgentModal
           targets={targets}
+          projectNames={projectNames}
           onClose={() => setShowNewModal(false)}
           onCreated={agent => setAgents(prev => [agent, ...prev])}
         />

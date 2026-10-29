@@ -40,6 +40,11 @@ async def send_request(
         "status": resp.status_code,
         "reason": resp.reason_phrase,
         "headers": dict(resp.headers),
+        # dict(resp.headers) above collapses repeated header names (a
+        # response setting a session cookie AND a CSRF cookie sends two
+        # Set-Cookie lines) down to the last one -- get_list() keeps all of
+        # them, which the cookie jar needs to not silently drop a cookie.
+        "set_cookie": resp.headers.get_list("set-cookie"),
         "body": resp.text[:MAX_BODY_CHARS],
         "size": len(resp.content),
         "elapsed_ms": round(elapsed, 1),

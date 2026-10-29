@@ -581,6 +581,25 @@ class HttpRequestItem(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class HttpCookie(Base):
+    """A cookie in the Request Workbench's per-project jar.
+
+    Seeded automatically from a response's Set-Cookie headers (so logging in
+    once keeps every subsequent repeater/fuzz request authenticated without
+    hand-copying a Cookie header) and editable manually. Upserted by
+    (project_id, domain, name) in application code rather than a DB
+    constraint, matching HttpRequestItem's no-cascade convention.
+    """
+    __tablename__ = "http_cookies"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    domain = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    value = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Screenshot(Base):
     """A captured web screenshot (gowitness/eyewitness) pinned to a project/target.
 

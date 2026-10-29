@@ -345,6 +345,7 @@ export default function C2Console() {
   const [activeSession, setActiveSession] = useState<C2Session | null>(null)
   const [loot, setLoot] = useState<LootEntry[]>([])
   const [payloads, setPayloads] = useState<PayloadDef[]>([])
+  const [msfvenomAvailable, setMsfvenomAvailable] = useState(true)
   const [listeners, setListeners] = useState<Listener[]>([])
   const [postModules, setPostModules] = useState<PostModule[]>([])
   const [postHistory, setPostHistory] = useState<Array<{id: string; label: string; ts: Date; output: string | null; error: string | null; running: boolean}>>([])
@@ -536,6 +537,8 @@ export default function C2Console() {
   async function loadPayloads() {
     const res = await fetch(`${getApiBase()}/c2/payloads`)
     if (res.ok) setPayloads(await res.json())
+    const statusRes = await fetch(`${getApiBase()}/c2/payloads/status`)
+    if (statusRes.ok) setMsfvenomAvailable((await statusRes.json()).available)
   }
 
   async function loadLotl() {
@@ -1491,7 +1494,12 @@ export default function C2Console() {
               <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Icon name="layers" size={14} style={{ color: 'var(--accent)' }} /> Generate Payload (msfvenom)
               </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              {!msfvenomAvailable && (
+                <div style={{ marginBottom: 16, padding: '10px 12px', background: 'rgba(232,64,64,0.08)', border: '1px solid rgba(232,64,64,0.3)', borderRadius: 4, fontSize: 12, color: 'var(--crit)' }}>
+                  msfvenom isn't installed on this backend, so payloads can't be generated here. Use the <b>Listeners</b> tab to start a handler for a payload built elsewhere, or install the Metasploit Framework on this host.
+                </div>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, opacity: msfvenomAvailable ? 1 : 0.5, pointerEvents: msfvenomAvailable ? 'auto' : 'none' }}>
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 4, display: 'block' }}>Payload</label>
                   <select style={{ ...inputClass, background: 'var(--bg)' }} value={selPayload} onChange={e => {

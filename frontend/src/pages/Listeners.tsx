@@ -740,8 +740,11 @@ export default function Listeners() {
     stopped: listeners.filter(l => l.status === 'stopped').length,
   }
 
+  // This tab lists every listener regardless of status (not just running
+  // ones) -- label it "All", not "Active", so it doesn't contradict the
+  // RUNNING/PAUSED/STOPPED counts shown right above it.
   const TABS: { id: Tab; label: string }[] = [
-    { id: 'active',  label: `Active (${listeners.length})` },
+    { id: 'active',  label: `All (${listeners.length})` },
     { id: 'create',  label: 'Create' },
     { id: 'history', label: 'History' },
   ]

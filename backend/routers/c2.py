@@ -144,10 +144,35 @@ class ConnectRequest(BaseModel):
 
 
 @router.post("/connect")
-def connect_msf(req: ConnectRequest):
+def connect_msf(req: ConnectRequest, db: DBSession = Depends(get_db)):
     ok, err = msf.connect(host=req.host, port=req.port, password=req.password, ssl=req.ssl)
     if not ok:
         raise HTTPException(503, f"Could not connect to Metasploit RPC: {err}")
+
+    # This is the quick-connect path (Payloads/Sessions tabs' inline form),
+    # distinct from Infrastructure's "connect an existing registered node"
+    # flow -- it never touched C2Node at all, so a live connection never
+    # showed up there ("No C2 nodes registered" with a connection active).
+    # Upsert by (host, port) so reconnecting to the same target doesn't
+    # pile up duplicate nodes.
+    node = db.query(C2Node).filter(
+        C2Node.c2_type == "msf", C2Node.host == req.host, C2Node.port == req.port,
+    ).first()
+    if node:
+        node.password = req.password
+        node.ssl = req.ssl
+    else:
+        node = C2Node(
+            name=req.host, c2_type="msf", host=req.host, port=req.port,
+            password=req.password, ssl=req.ssl, source="manual",
+        )
+        db.add(node)
+    node.status = "connected"
+    node.last_checked = datetime.utcnow()
+    db.commit()
+    _set_setting(db, "c2_active_node_id", node.id)
+    db.commit()
+
     return msf.get_status()
 
 
@@ -629,6 +654,15 @@ COMMON_PAYLOADS = [
 @router.get("/payloads")
 def list_payloads():
     return COMMON_PAYLOADS
+
+
+@router.get("/payloads/status")
+def payload_generator_status():
+    """So the UI can disable the Payloads form up front instead of letting
+    the user fill it out and only discovering msfvenom is missing at
+    submit time (503)."""
+    import shutil
+    return {"available": shutil.which("msfvenom") is not None}
 
 
 class GeneratePayloadRequest(BaseModel):
@@ -1791,25 +1825,32 @@ def connect_c2_node(node_id: str, db: DBSession = Depends(get_db)):
     password = node.password or ""
 
     if node.c2_type == "msf":
-        result = msf.connect(
+        # msf.connect() returns (bool, error_str), not a dict -- the old
+        # `"error" in result` check against that tuple was never True in
+        # either case, so this endpoint reported every node "connected"
+        # regardless of whether msfrpcd was actually reachable.
+        ok, err = msf.connect(
             host=node.host,
             port=node.port,
             password=password,
             ssl=node.ssl,
         )
-        if "error" in result:
+        if not ok:
             node.status = "unreachable"
             node.last_checked = datetime.utcnow()
             db.commit()
-            return {"ok": False, "status": "unreachable", "error": result["error"]}
+            return {"ok": False, "status": "unreachable", "error": err}
     elif node.c2_type == "sliver":
+        # services.sliver_client has no connect() -- it's a stateless CLI
+        # wrapper (sliver-client --rc), not a persistent-session client like
+        # MsfRpcClient, so "connect" here can only mean "is a usable client
+        # + operator config present", which is_available() already checks.
         import services.sliver_client as sliver_svc
-        result = sliver_svc.connect()
-        if "error" in result:
+        if not sliver_svc.is_available():
             node.status = "unreachable"
             node.last_checked = datetime.utcnow()
             db.commit()
-            return {"ok": False, "status": "unreachable", "error": result["error"]}
+            return {"ok": False, "status": "unreachable", "error": "sliver-client not installed or no operator config found"}
     else:
         raise HTTPException(400, f"Unknown c2_type: {node.c2_type}")
 
@@ -1833,8 +1874,10 @@ def check_c2_node(node_id: str, db: DBSession = Depends(get_db)):
     t0 = time.time()
     try:
         if node.c2_type == "msf":
-            result = msf.connect(host=node.host, port=node.port, password=password, ssl=node.ssl)
-            ok = "error" not in result
+            # Same tuple-vs-dict mismatch as connect_c2_node(): msf.connect()
+            # returns (bool, error_str); `"error" not in result` against that
+            # tuple was always True, so every node always checked "connected".
+            ok, _ = msf.connect(host=node.host, port=node.port, password=password, ssl=node.ssl)
         else:
             ok = True  # Sliver: assume reachable if configured
     except Exception:

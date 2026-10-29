@@ -16,6 +16,15 @@ interface SavedRequest {
   body: string
 }
 
+interface CookieEntry {
+  id: string
+  project_id: string
+  domain: string
+  name: string
+  value: string
+  updated_at: string | null
+}
+
 interface SendResponse {
   status: number
   reason: string
@@ -81,8 +90,17 @@ export default function RequestWorkbench() {
   const [resp, setResp] = useState<SendResponse | null>(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
+  const [timeoutSec, setTimeoutSec] = useState('30')
 
   const [saved, setSaved] = useState<SavedRequest[]>([])
+
+  // Cookie jar -- auto-seeded server-side from Set-Cookie responses and
+  // auto-attached to outgoing requests (see routers/http_wb.py); this UI is
+  // for reviewing what's in it and editing/adding entries by hand.
+  const [cookies, setCookies] = useState<CookieEntry[]>([])
+  const [newCookieDomain, setNewCookieDomain] = useState('')
+  const [newCookieName, setNewCookieName] = useState('')
+  const [newCookieValue, setNewCookieValue] = useState('')
 
   // Fuzz state
   const [payloadsRaw, setPayloadsRaw] = useState('')
@@ -98,10 +116,41 @@ export default function RequestWorkbench() {
       .then(r => r.json()).then(setSaved).catch(() => {})
   }
 
+  function loadCookies() {
+    if (!selectedProject) return
+    fetch(`${api}/http/cookies?project_id=${selectedProject.id}`)
+      .then(r => r.json()).then(setCookies).catch(() => {})
+  }
+
   useEffect(() => {
-    setResp(null); setFuzzRows([]); loadSaved()
+    setResp(null); setFuzzRows([]); loadSaved(); loadCookies()
     return () => { wsRef.current?.close() }
   }, [selectedProject])
+
+  async function addCookie() {
+    if (!selectedProject || !newCookieDomain.trim() || !newCookieName.trim()) return
+    await fetch(`${api}/http/cookies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: selectedProject.id, domain: newCookieDomain.trim(), name: newCookieName.trim(), value: newCookieValue }),
+    })
+    setNewCookieDomain(''); setNewCookieName(''); setNewCookieValue('')
+    loadCookies()
+  }
+
+  async function updateCookieValue(c: CookieEntry, value: string) {
+    setCookies(prev => prev.map(x => x.id === c.id ? { ...x, value } : x))
+    await fetch(`${api}/http/cookies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: c.project_id, domain: c.domain, name: c.name, value }),
+    })
+  }
+
+  async function deleteCookie(id: string) {
+    await fetch(`${api}/http/cookies/${id}`, { method: 'DELETE' })
+    setCookies(prev => prev.filter(c => c.id !== id))
+  }
 
   async function send() {
     if (!selectedProject || !url.trim()) return
@@ -110,11 +159,19 @@ export default function RequestWorkbench() {
       const r = await fetch(`${api}/http/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: selectedProject.id, method, url, headers: parseHeaders(headersRaw), body }),
+        body: JSON.stringify({
+          project_id: selectedProject.id, method, url, headers: parseHeaders(headersRaw), body,
+          timeout: Math.max(1, Number(timeoutSec) || 30),
+        }),
       })
       const data = await r.json()
+      // 504 (timeout) vs other failures both land here with a useful
+      // detail message -- the request's own fields are left exactly as
+      // typed either way, so re-sending (e.g. after raising the timeout)
+      // is just hitting Send again.
       if (!r.ok) throw new Error(data.detail || 'Request failed')
       setResp(data)
+      loadCookies()  // a login response may have just seeded new jar entries
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Request failed')
     } finally {
@@ -217,6 +274,43 @@ export default function RequestWorkbench() {
             </button>
           </div>
         ))}
+
+        {/* Cookie jar -- auto-filled from Set-Cookie, auto-attached to
+            outgoing requests for a matching domain unless the request sets
+            its own Cookie header. */}
+        <div className="smcap" style={{ fontSize: 10, color: 'var(--fg-3)', margin: '18px 0 8px' }}>Cookie jar ({cookies.length})</div>
+        {cookies.length === 0 ? (
+          <div style={{ fontSize: 11, color: 'var(--fg-4)', marginBottom: 8 }}>
+            Empty — send a login request and cookies set in the response are captured here automatically.
+          </div>
+        ) : cookies.map(c => (
+          <div key={c.id} style={{ border: '1px solid var(--rule)', borderRadius: 3, padding: '5px 7px', marginBottom: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 4 }}>
+              <div style={{ fontSize: 10, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span className="mono" style={{ color: 'var(--accent)' }}>{c.name}</span> @ {c.domain}
+              </div>
+              <button onClick={() => deleteCookie(c.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', display: 'flex', flexShrink: 0 }}>
+                <Icon name="trash" size={10} />
+              </button>
+            </div>
+            <input
+              value={c.value}
+              onChange={e => updateCookieValue(c, e.target.value)}
+              className="mono"
+              style={{ ...inputStyle, width: '100%', fontSize: 10.5, padding: '3px 6px', marginTop: 3, boxSizing: 'border-box' }}
+            />
+          </div>
+        ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 6 }}>
+          <input value={newCookieDomain} onChange={e => setNewCookieDomain(e.target.value)} placeholder="domain" style={{ ...inputStyle, fontSize: 10.5, padding: '4px 6px' }} />
+          <input value={newCookieName} onChange={e => setNewCookieName(e.target.value)} placeholder="name" style={{ ...inputStyle, fontSize: 10.5, padding: '4px 6px' }} />
+          <div style={{ display: 'flex', gap: 3 }}>
+            <input value={newCookieValue} onChange={e => setNewCookieValue(e.target.value)} placeholder="value" style={{ ...inputStyle, fontSize: 10.5, padding: '4px 6px', flex: 1 }} />
+            <button className="btn" onClick={addCookie} disabled={!newCookieDomain.trim() || !newCookieName.trim()} style={{ padding: '0 8px', fontSize: 11 }}>
+              <Icon name="plus" size={11} />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Main column */}
@@ -244,6 +338,13 @@ export default function RequestWorkbench() {
           <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://app.corp.local/api/users" style={{ ...inputStyle, flex: 1 }} />
           {tab === 'repeater' ? (
             <>
+              <input
+                value={timeoutSec}
+                onChange={e => setTimeoutSec(e.target.value)}
+                title="Timeout (seconds) — a listener that holds the connection open (e.g. a reverse shell) needs this raised, not just a longer wait with no feedback"
+                placeholder="30s"
+                style={{ ...inputStyle, width: 56, textAlign: 'right' }}
+              />
               <button className="btn btn-primary" onClick={send} disabled={sending} style={{ height: 34, padding: '0 16px', fontSize: 12 }}>
                 <Icon name={sending ? 'refresh' : 'send'} size={12} style={{ marginRight: 6 }} />{sending ? 'Sending…' : 'Send'}
               </button>

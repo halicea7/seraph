@@ -4,19 +4,27 @@ Attack Path Graph — builds a Cytoscape.js-compatible graph for a project.
 Nodes:
   - "attacker" (the operator)
   - one node per Target
+  - one node per imported AD collection (represents its domain)
 
 Edges:
   - c2: attacker → target (active C2 session)
   - finding: attacker → target (exploitable finding)
   - lateral: target → target (credential reuse — same credential seen on both hosts)
+  - ad: attacker → AD domain (a BloodHound/SharpHound quick-win: kerberoastable
+        accounts, AS-REP roastable accounts, unconstrained delegation, etc.)
+        -- quick wins are domain-wide facts, not tied to any one Target row,
+        so they get their own node rather than trying to force-fit them onto
+        whichever Target happens to be the domain controller.
 
 The response is shaped for direct consumption by Cytoscape.js on the frontend.
 """
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from database import C2Session, Credential, Finding, Scan, Target, get_db
+from database import ADCollection, C2Session, Credential, Finding, Scan, Target, get_db
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/attack-paths", tags=["attack_paths"])
@@ -24,7 +32,8 @@ router = APIRouter(prefix="/attack-paths", tags=["attack_paths"])
 
 def _build_graph(project_id: str, db: Session) -> dict:
     targets = db.query(Target).filter(Target.project_id == project_id).all()
-    if not targets:
+    collections = db.query(ADCollection).filter(ADCollection.project_id == project_id).all()
+    if not targets and not collections:
         return {"nodes": [], "edges": []}
 
     target_ids = [t.id for t in targets]
@@ -123,6 +132,12 @@ def _build_graph(project_id: str, db: Session) -> dict:
             "c2",
             session_type=s.session_type,
             status=s.status,
+            # Lets the frontend render the real re-exploit command for this
+            # session's actual platform/payload instead of a hardcoded
+            # windows/x64/meterpreter guess (wrong for e.g. a Linux
+            # php/reverse_php shell).
+            platform=s.platform,
+            via_payload=s.via_payload,
         )
 
     # Finding edges — only for critical/high findings (exploit paths worth showing)
@@ -160,6 +175,35 @@ def _build_graph(project_id: str, db: Session) -> dict:
                         username=c.username,
                     )
                     break  # one edge per pair is enough
+
+    # AD quick wins — domain-wide facts from an imported BloodHound/
+    # SharpHound collection (kerberoastable accounts, AS-REP roastable
+    # accounts, delegation issues, ...). Each becomes its own node + edge
+    # since a quick win belongs to the domain, not any single Target.
+    for coll in collections:
+        quick_wins = json.loads(coll.quick_wins_json or "[]")
+        if not quick_wins:
+            continue
+        domain_node_id = f"ad-{coll.id}"
+        nodes.append({
+            "data": {
+                "id": domain_node_id,
+                "label": coll.domain or coll.name,
+                "type": "ad_domain",
+                "compromised": False,
+            }
+        })
+        for win in quick_wins:
+            _add_edge(
+                "attacker",
+                domain_node_id,
+                win.get("title", win.get("kind", "AD quick win")),
+                "ad",
+                kind=win.get("kind", ""),
+                severity=win.get("severity", "medium"),
+                count=win.get("count", 0),
+                command=win.get("command", ""),
+            )
 
     return {"nodes": nodes, "edges": edges}
 
