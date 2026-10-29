@@ -1,4 +1,19 @@
+import logging
 import os
+
+# uvicorn only configures its OWN loggers (uvicorn / uvicorn.access /
+# uvicorn.error) -- nothing in this codebase ever called basicConfig(), so
+# the root logger had no handler and defaulted to WARNING with Python's
+# bare "handler of last resort". Every log.info() across services/*.py and
+# routers/*.py (including the reconcile_listeners heartbeat added to
+# diagnose the listener-scheduling issue) was silently swallowed; only
+# warning/error calls -- and APScheduler's own warnings, which is why
+# those alone showed up in `docker logs` -- ever got printed.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 import time
 import asyncio
 from collections import defaultdict

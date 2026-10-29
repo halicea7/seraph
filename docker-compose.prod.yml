@@ -47,6 +47,7 @@ services:
       SERAPH_INDEX_DIR: /data/indexes
       MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-}
       SLIVER_CONFIG: ${SLIVER_CONFIG:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PYTHONUNBUFFERED: "1"
     volumes:
       - seraph_data:/data

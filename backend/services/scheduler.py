@@ -240,7 +240,16 @@ async def _run_c2_session_sync() -> None:
         # single failed poll (e.g. during a stale-token window) marked every
         # genuinely-live session "lost" on this tick alone.
         try:
-            live_msf = msf.list_sessions()
+            # AsyncIOScheduler runs async def job functions directly on the
+            # event loop -- msf.list_sessions() is a plain blocking call
+            # (pymetasploit3 -> requests), and when msfrpcd is unreachable
+            # the connect attempt inside it blocks this coroutine (and
+            # therefore every other job on this scheduler, including
+            # unrelated healthcheck listeners) for however long that
+            # attempt takes, every single tick. to_thread moves it off the
+            # loop so an unreachable/down C2 backend can't starve anything
+            # else scheduled here.
+            live_msf = await asyncio.to_thread(msf.list_sessions)
         except Exception:
             live_msf = None
         msf_reachable = live_msf is not None
@@ -310,7 +319,10 @@ async def _run_c2_session_sync() -> None:
 
         # ── Sliver sync ───────────────────────────────────────────────
         try:
-            live_sliver = sliver.list_sessions() if sliver.is_available() else []
+            # Same reasoning as the MSF sync above: list_sessions() shells
+            # out to the sliver-client binary (up to a 15s subprocess
+            # timeout) -- run it off the event loop too.
+            live_sliver = await asyncio.to_thread(sliver.list_sessions) if sliver.is_available() else []
         except Exception:
             live_sliver = []
 
