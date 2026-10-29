@@ -81,7 +81,13 @@ services:
     networks:
       - internal
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      # "localhost" resolves to ::1 first inside the container, but nginx
+      # only listens on IPv4 (frontend/nginx.conf's `listen 80;`, no
+      # `listen [::]:80;`) -- wget then hit connection-refused on every
+      # check and the container reported unhealthy while actually
+      # serving traffic fine. Probe IPv4 explicitly; the container is
+      # only ever reached through Docker's port mapping anyway.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 30s
       timeout: 10s
       retries: 3

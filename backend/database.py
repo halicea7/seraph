@@ -585,6 +585,26 @@ class Screenshot(Base):
     captured_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ScreenshotJob(Base):
+    """Durable registry for an in-flight gowitness capture job.
+
+    Used to be an in-memory dict (services/screenshot.py's old _JOBS) --
+    under docker-compose.prod.yml's 4 uvicorn workers, the REST call that
+    creates a job and the WebSocket that consumes it can land on
+    different worker processes, each with its own memory, so the
+    WebSocket saw an empty registry ~3 times out of 4. Row is deleted
+    once the job finishes (services/screenshot.py:finish_job).
+    """
+    __tablename__ = "screenshot_jobs"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, nullable=False)
+    target_id = Column(String, nullable=True)
+    urls_json = Column(Text, nullable=False)
+    outdir = Column(String, nullable=False)
+    command = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class AuditLog(Base):
     """Security audit log — records all mutating API calls with user + IP context."""
     __tablename__ = "audit_log"

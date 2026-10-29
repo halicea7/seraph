@@ -500,10 +500,30 @@ async def _run_step(scan_id: str, cmd: str, scan_type: str, timeout: int, env: d
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
+            # nuclei -j emits one JSON object per line including the full
+            # request+response bodies -- the asyncio default (64 KiB) is
+            # routinely exceeded, which previously raised LimitOverrunError
+            # and discarded the entire scan's output (findings included,
+            # some of them critical) rather than just that one line.
+            limit=8 * 1024 * 1024,
         )
         chunks: list[str] = []
         try:
-            async for line in proc.stdout:  # type: ignore[union-attr]
+            while True:
+                try:
+                    line = await proc.stdout.readline()  # type: ignore[union-attr]
+                except ValueError:
+                    # A single line still exceeded even the 8 MiB limit
+                    # above. StreamReader.readline() catches the
+                    # underlying LimitOverrunError itself and re-raises a
+                    # bare ValueError, discarding the oversized,
+                    # unterminated data in the process -- there's nothing
+                    # left to recover for this one line. Stop reading
+                    # rather than losing everything captured so far to
+                    # the outer except-Exception handler below.
+                    break
+                if not line:
+                    break
                 chunks.append(line.decode(errors="replace"))
             await asyncio.wait_for(proc.wait(), timeout=timeout)
         except asyncio.TimeoutError:

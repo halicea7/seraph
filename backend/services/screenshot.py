@@ -3,19 +3,24 @@ Web screenshot capture via gowitness.
 
 Builds a gowitness command that screenshots a set of URLs into a per-job output
 directory, then indexes the produced images into Screenshot rows. Jobs are held
-in a small in-memory registry keyed by job_id and consumed by the
+in database.ScreenshotJob (keyed by job_id) and consumed by the
 /ws/screenshots/{job_id} WebSocket — mirrors how OSINT runs stream + post-process.
+
+Jobs are durable rows, not an in-memory dict, because the REST call that
+creates a job and the WebSocket that consumes it are two separate requests
+that can land on two different uvicorn worker processes (docker-compose.prod.yml
+runs 4) -- a module-level dict would only be visible to whichever process
+happened to create it.
 """
 
 import glob
+import json
 import os
 import shlex
 import shutil
 import uuid
 
-from database import engine
-
-_JOBS: dict[str, dict] = {}
+from database import SessionLocal, ScreenshotJob, engine
 
 _IMAGE_EXTS = ("*.png", "*.jpeg", "*.jpg")
 
@@ -70,7 +75,21 @@ def create_job(project_id: str, target_id: str | None, urls: list[str]) -> dict:
     if chrome_path:
         command += f" --chrome-path {shlex.quote(chrome_path)}"
 
-    job = {
+    db = SessionLocal()
+    try:
+        db.add(ScreenshotJob(
+            id=job_id,
+            project_id=project_id,
+            target_id=target_id,
+            urls_json=json.dumps(clean),
+            outdir=outdir,
+            command=command,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    return {
         "job_id": job_id,
         "project_id": project_id,
         "target_id": target_id,
@@ -78,12 +97,24 @@ def create_job(project_id: str, target_id: str | None, urls: list[str]) -> dict:
         "outdir": outdir,
         "command": command,
     }
-    _JOBS[job_id] = job
-    return job
 
 
 def get_job(job_id: str) -> dict | None:
-    return _JOBS.get(job_id)
+    db = SessionLocal()
+    try:
+        row = db.query(ScreenshotJob).filter(ScreenshotJob.id == job_id).first()
+        if not row:
+            return None
+        return {
+            "job_id": row.id,
+            "project_id": row.project_id,
+            "target_id": row.target_id,
+            "urls": json.loads(row.urls_json),
+            "outdir": row.outdir,
+            "command": row.command,
+        }
+    finally:
+        db.close()
 
 
 def _url_from_filename(fname: str) -> str:
@@ -118,4 +149,9 @@ def index_results(job: dict) -> list[dict]:
 
 
 def finish_job(job_id: str) -> None:
-    _JOBS.pop(job_id, None)
+    db = SessionLocal()
+    try:
+        db.query(ScreenshotJob).filter(ScreenshotJob.id == job_id).delete()
+        db.commit()
+    finally:
+        db.close()
