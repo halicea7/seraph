@@ -16,6 +16,9 @@ import sqlite3
 import threading
 import urllib.request
 from datetime import datetime
+from pathlib import Path
+
+from config import settings
 
 log = logging.getLogger(__name__)
 
@@ -31,8 +34,15 @@ _sync_state: dict = {"state": "idle", "error": None}
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _db_path() -> str:
-    from database import engine
-    return engine.url.database  # e.g. "/app/data/seraph.db"
+    # A dedicated SQLite FTS5 cache, not the primary DB -- FTS5 is a
+    # SQLite-only feature, and the primary DB may be Postgres (see
+    # config.py's index_dir). This used to be engine.url.database, which
+    # broke under Postgres: FTS5 syntax doesn't exist there at all, and
+    # even the *path* resolution was wrong (a Postgres URL's `.database`
+    # is a database name like "seraph", not a filesystem path).
+    path = Path(settings.index_dir) / "attack_index.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def _conn() -> sqlite3.Connection:

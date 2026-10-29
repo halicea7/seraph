@@ -36,13 +36,14 @@ PTES_PAGES = [
     ("technical",         "Technical Guidelines",    "PTES_Technical_Guidelines"),
 ]
 
-_DB_PATH = Path(settings.database_url.replace("sqlite:///", "")).parent / "ptes_index.db"
+_DB_PATH = Path(settings.index_dir) / "ptes_index.db"
 _sync_lock = threading.Lock()
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _conn() -> sqlite3.Connection:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(str(_DB_PATH))
     c.row_factory = sqlite3.Row
     return c

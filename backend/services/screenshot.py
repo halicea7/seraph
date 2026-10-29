@@ -10,6 +10,7 @@ in a small in-memory registry keyed by job_id and consumed by the
 import glob
 import os
 import shlex
+import shutil
 import uuid
 
 from database import engine
@@ -17,6 +18,20 @@ from database import engine
 _JOBS: dict[str, dict] = {}
 
 _IMAGE_EXTS = ("*.png", "*.jpeg", "*.jpg")
+
+# gowitness defaults to looking for a binary literally named "google-chrome",
+# which doesn't exist on Debian (the backend image installs `chromium`
+# instead) -- without --chrome-path every capture fails with
+# `exec: "google-chrome": executable file not found in $PATH`.
+_CHROME_CANDIDATES = ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable")
+
+
+def _chrome_path() -> str | None:
+    for name in _CHROME_CANDIDATES:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
 
 
 def _data_dir() -> str:
@@ -51,6 +66,9 @@ def create_job(project_id: str, target_id: str | None, urls: list[str]) -> dict:
         f"gowitness scan file -f {shlex.quote(urls_file)} "
         f"--screenshot-path {shlex.quote(outdir)} --write-none --timeout 15"
     )
+    chrome_path = _chrome_path()
+    if chrome_path:
+        command += f" --chrome-path {shlex.quote(chrome_path)}"
 
     job = {
         "job_id": job_id,

@@ -9,7 +9,12 @@ from services.ai_client import fetch_models, fetch_tool_capable_models, chat_com
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
-DEFAULT_ENDPOINT = "http://localhost:11434"
+# No default endpoint: "localhost" means something different depending on
+# where this process runs. Inside a container (the only place this default
+# used to matter) it's the container itself, not the host running Ollama --
+# so a guessed default is never actually reachable there, only confusing.
+# An unconfigured AI feature should read as "not configured", not "offline".
+DEFAULT_ENDPOINT = ""
 DEFAULT_MODEL = ""
 
 
@@ -92,16 +97,21 @@ def save_ai_config(req: AIConfigRequest, db: Session = Depends(get_db)):
 @router.get("/status")
 def ai_status(db: Session = Depends(get_db)):
     endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
+    if not endpoint:
+        return {"online": False, "endpoint": "", "configured": False,
+                "error": "AI endpoint not configured. Go to Settings → AI to set one."}
     try:
         models = fetch_models(endpoint)
-        return {"online": True, "endpoint": endpoint, "model_count": len(models)}
+        return {"online": True, "endpoint": endpoint, "configured": True, "model_count": len(models)}
     except Exception as exc:
-        return {"online": False, "endpoint": endpoint, "error": str(exc)}
+        return {"online": False, "endpoint": endpoint, "configured": True, "error": str(exc)}
 
 
 @router.get("/models")
 def list_models(db: Session = Depends(get_db)):
     endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
+    if not endpoint:
+        raise HTTPException(400, "AI endpoint not configured. Go to Settings → AI to set one.")
     try:
         models = fetch_models(endpoint)
         return {"models": models}
@@ -113,6 +123,8 @@ def list_models(db: Session = Depends(get_db)):
 def list_tool_capable_models(db: Session = Depends(get_db)):
     """Return only models that support tool/function calling."""
     endpoint = _get(db, "ai_endpoint", DEFAULT_ENDPOINT)
+    if not endpoint:
+        raise HTTPException(400, "AI endpoint not configured. Go to Settings → AI to set one.")
     try:
         models = fetch_tool_capable_models(endpoint)
         return {"models": models}

@@ -5,8 +5,6 @@
 #   1. Copy .env.example to .env and fill in all required values.
 #   2. Ensure SERAPH_SECRET_KEY, MSF_RPC_PASSWORD, and POSTGRES_PASSWORD are set.
 
-version: '3.9'
-
 services:
 
   # ── PostgreSQL ───────────────────────────────────────────────────────────────
@@ -46,10 +44,12 @@ services:
       SERAPH_RP_ORIGINS: ${SERAPH_RP_ORIGINS:-http://localhost:8000}
       SERAPH_RATE_LIMIT_REQUESTS: ${SERAPH_RATE_LIMIT_REQUESTS:-300}
       SERAPH_RATE_LIMIT_WINDOW: ${SERAPH_RATE_LIMIT_WINDOW:-60}
+      SERAPH_INDEX_DIR: /data/indexes
       MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-}
       SLIVER_CONFIG: ${SLIVER_CONFIG:-}
       PYTHONUNBUFFERED: "1"
     volumes:
+      - seraph_data:/data
       - seraph_results:/seraph_results
       - seraph_reports:/app/reports
     networks:
@@ -57,7 +57,11 @@ services:
     expose:
       - "8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/projects"]
+      # Deliberately public (no auth) so this proves the app is actually
+      # serving, not just that the primary DB works -- /api/v1/projects
+      # always 401s without a token, so curl -f treated this container as
+      # permanently unhealthy regardless of whether it had actually booted.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/auth/setup-required"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -88,5 +92,6 @@ networks:
 
 volumes:
   postgres_data:
+  seraph_data:
   seraph_results:
   seraph_reports:

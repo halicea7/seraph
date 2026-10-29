@@ -50,6 +50,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openscap-scanner \
     # SMB / LDAP support (required by enum4linux)
     samba-common-bin ldap-utils smbclient \
+    # nikto's CPAN deps: XML::Writer is a hard import-time dependency
+    # (missing it, nikto exits immediately with "Required module not
+    # found" before scanning anything); Net::SSLeay is nikto's default
+    # SSL engine (program/plugins/LW2.pm), needed to actually probe
+    # HTTPS targets. JSON output uses the core JSON::PP module instead
+    # of JSON, so no separate package is needed for that.
+    libxml-writer-perl libnet-ssleay-perl \
     # pipx (for theHarvester, nxc, wafw00f)
     pipx \
     # WeasyPrint PDF system libraries
@@ -140,6 +147,13 @@ RUN { set -e; \
            -o /usr/local/bin/gowitness; \
       chmod +x /usr/local/bin/gowitness; \
     } || echo "[build] gowitness skipped (optional)"
+
+# gowitness needs an actual Chrome/Chromium binary to drive -- without one it
+# fails every capture with "exec: \"google-chrome\": executable file not
+# found". services/screenshot.py passes --chrome-path pointing at this.
+RUN apt-get update && apt-get install -y --no-install-recommends chromium \
+    && rm -rf /var/lib/apt/lists/* \
+    || echo "[build] chromium skipped (optional) -- screenshots will fail at capture time"
 
 # ── 9. rustscan (optional; upstream ships a zipped .deb under bee-san/RustScan) ─
 # Wrapped non-fatal: an upstream asset rename must not brick the whole image —

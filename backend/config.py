@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     # Extra CORS origins beyond rp_origins — comma-separated.
     # Add "null" here to allow Electron/Chronos requests (Origin: null).
     extra_cors_origins: str = ""
+    # Where the attack_index/ptes_index SQLite FTS5 search caches live.
+    # These are rebuildable local indexes, not primary data, and FTS5 is a
+    # SQLite-only feature — they must NOT be derived from database_url,
+    # which may point at Postgres (see services/attack_index.py,
+    # services/ptes_index.py). docker-compose.prod.yml sets this to
+    # /data/indexes, inside the same volume SQLite mode already uses.
+    index_dir: str = "./data/indexes"
     # NOTE: the tool list lives in services/tool_registry.py (TOOL_META) — the
     # single source of truth for detection, install hints, and tiers.
 

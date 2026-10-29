@@ -25,8 +25,22 @@ from database import AppSetting, Finding, Notification, Scan, SessionLocal
 _active_probes: dict[str, "asyncio.Task"] = {}
 _scan_to_target: dict[str, str] = {}
 
-# Tool definitions — cmd is a callable(host) -> shell string
-# Rustscan is handled separately as a pre-nmap step (see run_auto_probe).
+# Ports in trigger_ports that terminate TLS -- the web-facing conditional
+# tools below build a URL from (host, port) and need to pick http/https.
+_HTTPS_PORTS = {443, 8443}
+
+
+def _scheme_for(port: int) -> str:
+    return "https" if port in _HTTPS_PORTS else "http"
+
+
+# Tool definitions. The "always" steps' cmd is a callable(host) -> shell
+# string (whois/nmap aren't port-scoped). The conditional (always=False)
+# steps' cmd is callable(host, port) -> shell string: these are triggered
+# by a specific open port, and must actually target that port -- not a
+# bare hostname, which silently defaults to port 80 regardless of which
+# port actually triggered the tool. Rustscan is handled separately as a
+# pre-nmap step (see run_auto_probe).
 PROBE_STEPS = [
     {
         "name": "whois",
@@ -45,14 +59,14 @@ PROBE_STEPS = [
     {
         "name": "wafw00f",
         "scan_type": "wafw00f",
-        "cmd": lambda h: f"wafw00f -a http://{h}",
+        "cmd": lambda h, p: f"wafw00f -a {_scheme_for(p)}://{h}:{p}",
         "always": False,
         "trigger_ports": {80, 443, 8080, 8443, 8000, 8888},
     },
     {
         "name": "nikto",
         "scan_type": "nikto",
-        "cmd": lambda h: f"nikto -h {h}",
+        "cmd": lambda h, p: f"nikto -h {_scheme_for(p)}://{h}:{p}",
         "clamp_timeout": True,   # pass -maxtime to cap runtime
         "always": False,
         "trigger_ports": {80, 443, 8080, 8443, 8000},
@@ -60,7 +74,7 @@ PROBE_STEPS = [
     {
         "name": "testssl",
         "scan_type": "testssl",
-        "cmd": lambda h: f"testssl --fast {h}",
+        "cmd": lambda h, p: f"testssl --fast {h}:{p}",
         "always": False,
         "trigger_ports": {443, 8443},
     },
@@ -68,7 +82,7 @@ PROBE_STEPS = [
         "name": "nuclei",
         "scan_type": "nuclei",
         # -json for structured output, -silent suppresses banner, -severity medium+ by default
-        "cmd": lambda h: f"nuclei -u {h} -j -silent -severity medium,high,critical",
+        "cmd": lambda h, p: f"nuclei -u {_scheme_for(p)}://{h}:{p} -j -silent -severity medium,high,critical",
         "always": False,
         "trigger_ports": {80, 443, 8080, 8443, 8000, 8888},
     },
@@ -77,7 +91,7 @@ PROBE_STEPS = [
         "scan_type": "feroxbuster",
         # -q quiet, --no-state no resume file, -d 2 max depth 2
         # wordlist resolved at runtime so we pick whatever is actually installed
-        "cmd": lambda h: f"feroxbuster -u http://{h} -q --no-state -d 2 -k -w {_ferox_wordlist()}",
+        "cmd": lambda h, p: f"feroxbuster -u {_scheme_for(p)}://{h}:{p} -q --no-state -d 2 -k -w {_ferox_wordlist()}",
         "always": False,
         "trigger_ports": {80, 8080, 8000, 8888},
     },
@@ -753,24 +767,33 @@ async def run_auto_probe(target_id: str, target_host: str, enabled_tools: list[s
             conditional_steps = [s for s in PROBE_STEPS if not s["always"]]
             sem = asyncio.Semaphore(max_concurrent)
 
-            async def _run_conditional(step: dict):
+            async def _run_conditional(step: dict) -> list[tuple[str, str | None]]:
                 name = step["name"]
                 if not available(name):
-                    return name, None
-                if not open_ports.intersection(step["trigger_ports"]):
-                    return name, None
-                sid = _create_scan(target_id, step["scan_type"], name)
-                cmd = step["cmd"](target_host)
-                if step.get("clamp_timeout"):
-                    cmd = f"{cmd} -maxtime {timeout}"
-                async with sem:
-                    output = await _run_step(sid, cmd, step["scan_type"], timeout, env)
-                return name, output
+                    return []
+                matched_ports = sorted(open_ports.intersection(step["trigger_ports"]))
+                if not matched_ports:
+                    return []
+                # One scan per matched port, not one per tool -- a bare
+                # hostname (no port) silently defaults to port 80, so a
+                # tool triggered by e.g. 8080 would scan the wrong service
+                # entirely (or nothing, if 80 isn't actually open).
+                out: list[tuple[str, str | None]] = []
+                for port in matched_ports:
+                    sid = _create_scan(target_id, step["scan_type"], name)
+                    cmd = step["cmd"](target_host, port)
+                    if step.get("clamp_timeout"):
+                        cmd = f"{cmd} -maxtime {timeout}"
+                    async with sem:
+                        output = await _run_step(sid, cmd, step["scan_type"], timeout, env)
+                    out.append((name, output))
+                return out
 
             results = await asyncio.gather(*[_run_conditional(s) for s in conditional_steps])
-            for name, output in results:
-                if name == "nikto" and output:
-                    nikto_output = output
+            for step_results in results:
+                for name, output in step_results:
+                    if name == "nikto" and output:
+                        nikto_output = output
 
         # ── Tier 2b: service-fingerprint-routed steps ─────────────────────────────
         if nmap_output:
