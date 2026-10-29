@@ -355,6 +355,7 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     full_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
 
 
 class VulnerabilityRecord(Base):
@@ -718,6 +719,11 @@ def _migrate():
         "ALTER TABLE scans ADD COLUMN nessus_progress INTEGER",
         "ALTER TABLE scans ADD COLUMN nessus_export_json TEXT",
         "ALTER TABLE screenshots ADD COLUMN finding_id VARCHAR",
+        # TIMESTAMP, not DATETIME -- DATETIME is not a real Postgres type
+        # ("type \"datetime\" does not exist"); several earlier entries
+        # above use DATETIME and silently fail on Postgres installs where
+        # the column didn't already exist from create_all() on a fresh DB.
+        "ALTER TABLE users ADD COLUMN last_login TIMESTAMP",
         # webhook_deliveries, fp_suppression_rules, api_tokens, cracking_servers, c2_nodes, cloud_c2_instances created by create_all
     ]
     with engine.connect() as conn:

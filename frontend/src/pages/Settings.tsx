@@ -276,7 +276,7 @@ export default function Settings() {
   const [profileError, setProfileError] = useState('')
 
   // User management
-  interface UserRow { id: string; username: string; role: string; is_active: boolean; full_name: string; created_at: string; last_login?: string | null }
+  interface UserRow { id: string; username: string; role: string; is_active: boolean; full_name: string; created_at: string; last_login?: string | null; passkey_count?: number }
   const [userList, setUserList] = useState<UserRow[]>([])
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -777,7 +777,7 @@ export default function Settings() {
                   <td><span className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>@{u.username}</span></td>
                   <td style={{ fontSize: 13 }}>{u.full_name || '—'}</td>
                   <td>{u.role === 'admin' ? <Pill tone="warn">{u.role}</Pill> : <Pill tone="info">{u.role}</Pill>}</td>
-                  <td className="tnum" style={{ fontSize: 12 }}>—</td>
+                  <td className="tnum" style={{ fontSize: 12 }}>{u.passkey_count ?? 0}</td>
                   <td><span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{u.last_login ? new Date(u.last_login).toLocaleDateString() : '—'}</span></td>
                   <td>
                     {u.id !== currentUser?.id && (

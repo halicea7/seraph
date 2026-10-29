@@ -232,6 +232,7 @@ def authenticate_complete(req: AuthCompleteRequest, db: Session = Depends(get_db
 
     # Update sign count to prevent replay attacks
     stored.sign_count = verified.new_sign_count
+    user.last_login = datetime.utcnow()
     db.commit()
 
     token = create_token({"sub": user.id, "role": user.role})

@@ -8,6 +8,7 @@ import { getFindings, getStats, type PlatformStats } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useAppStore } from '@/stores/appStore'
 import { useAINarrative } from '../contexts/AINarrativeContext'
+import { useToast } from '../contexts/ToastContext'
 import { getApiBase } from '@/lib/config'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -409,6 +410,7 @@ export default function Reports() {
   const { user } = useAuth()
   const { generating: generatingNarrative, progress: narrativeProgress, generate } = useAINarrative()
   const { selectedProject: sp, projects } = useAppStore()
+  const toast = useToast()
   const projectId = sp?.id ?? ''
 
   // Config sidebar state
@@ -679,9 +681,14 @@ export default function Reports() {
       if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.detail || `HTTP ${res.status}`) }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a'); a.href = url; a.download = `seraph_report_${projectId.slice(0, 8)}.pdf`; a.click()
+      const filename = `seraph_report_${projectId.slice(0, 8)}.pdf`
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
       URL.revokeObjectURL(url)
-    } catch (err: any) { alert(`PDF export failed: ${err.message}`) } finally { setGenerating(false) }
+      // A programmatic a.click() download gives no visible confirmation on
+      // its own -- in a popup-blocked or headless context it looked like
+      // nothing happened at all.
+      toast.success(`Downloaded ${filename}`)
+    } catch (err: any) { toast.error(`PDF export failed: ${err.message}`) } finally { setGenerating(false) }
   }
 
   async function handleGenerateReport(format: 'html' | 'markdown') {
@@ -703,12 +710,16 @@ export default function Reports() {
         blob = await (await fetch(`${getApiBase()}/audit/reports/download/${projectId}?${params}`)).blob()
       }
       const url = URL.createObjectURL(blob)
+      const filename = `seraph_${template}_${projectId.slice(0, 8)}.${format === 'markdown' ? 'md' : 'html'}`
       const a = document.createElement('a')
       a.href = url
-      a.download = `seraph_${template}_${projectId.slice(0, 8)}.${format === 'markdown' ? 'md' : 'html'}`
+      a.download = filename
       a.click()
       URL.revokeObjectURL(url)
-    } catch { /* ignore */ } finally { setGenerating(false) }
+      toast.success(`Downloaded ${filename}`)
+    } catch (err: any) {
+      toast.error(`Report download failed: ${err?.message || 'unknown error'}`)
+    } finally { setGenerating(false) }
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────────

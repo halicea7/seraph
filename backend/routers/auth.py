@@ -9,7 +9,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import get_db, User, RevokedToken
+from database import get_db, User, RevokedToken, PasskeyCredential
 from services.auth_service import (
     hash_password,
     verify_password,
@@ -110,6 +110,7 @@ def _user_dict(u: User) -> dict:
         "role": u.role,
         "full_name": u.full_name or "",
         "created_at": str(u.created_at),
+        "last_login": str(u.last_login) if u.last_login else None,
     }
 
 
@@ -172,6 +173,8 @@ def login(
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account disabled")
     _clear_failures(ip)
+    user.last_login = datetime.utcnow()
+    db.commit()
     token = create_token({"sub": user.id, "role": user.role})
     return {"access_token": token, "token_type": "bearer", "user": _user_dict(user)}
 
@@ -247,7 +250,14 @@ def list_users(
 ):
     if current_user.role != "admin":
         raise HTTPException(403, "Admin role required")
-    return [_user_dict(u) for u in db.query(User).all()]
+    users = db.query(User).all()
+    # The Users table's Passkeys column was hardcoded to "—" -- it never
+    # actually queried PasskeyCredential, regardless of how many passkeys
+    # a user had registered.
+    counts: dict[str, int] = {}
+    for uid, in db.query(PasskeyCredential.user_id).all():
+        counts[uid] = counts.get(uid, 0) + 1
+    return [{**_user_dict(u), "passkey_count": counts.get(u.id, 0)} for u in users]
 
 
 class UpdateProfileRequest(BaseModel):

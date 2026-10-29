@@ -36,18 +36,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: { Authorization: `Bearer ${stored}` },
         signal: controller.signal,
       })
-        .then(r => (r.ok ? r.json() : null))
-        .then(data => {
-          if (data) {
-            setToken(stored)
-            setUser(data)
-          } else {
+        .then(r => {
+          if (r.ok) return r.json().then(data => { setToken(stored); setUser(data) })
+          if (r.status === 401) {
+            // The token itself is actually invalid/expired -- the only
+            // case that should ever log the user out.
             clearToken()
+            return
           }
+          // A 5xx (backend hiccup, bad deploy mid-request) is not proof the
+          // token is bad -- clearing it here used to drop a user with a
+          // perfectly valid 24h session to /login any time the server had
+          // a transient blip, with no backend restart needed to reproduce.
+          setUnreachable(true)
         })
-        .catch(err => {
-          clearToken()
-          if (err.name === 'AbortError') setUnreachable(true)
+        .catch(() => {
+          // Network-level failure (DNS, connection reset, timeout/abort) --
+          // also transient, not evidence the token is invalid.
+          setUnreachable(true)
         })
         .finally(() => { clearTimeout(timeout); setLoading(false) })
     } else {

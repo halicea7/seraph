@@ -46,8 +46,12 @@ const KIND_ICON: Record<string, string> = {
 
 // ── Quick-win card ────────────────────────────────────────────────────────────
 
-function QuickWinCard({ win, onCopy }: { win: QuickWin; onCopy: (cmd: string) => void }) {
-  const [open, setOpen] = useState(false)
+function QuickWinCard({ win, onCopy, defaultOpen }: { win: QuickWin; onCopy: (cmd: string) => void; defaultOpen?: boolean }) {
+  // Tiles already show a chevron (open ? chev_u : chev_d below) to indicate
+  // they're expandable, but a first-time user has no reason to notice a
+  // small icon before clicking anything -- expanding the first tile by
+  // default puts one example of "this expands" directly in view.
+  const [open, setOpen] = useState(!!defaultOpen)
   const color = SEV_COLOR[win.severity] ?? 'var(--fg-3)'
   return (
     <div style={{ border: '1px solid var(--rule)', borderLeft: `3px solid ${color}`, borderRadius: 3, marginBottom: 12 }}>
@@ -240,7 +244,7 @@ export default function ADAttack() {
           {wins.length === 0 ? (
             <EmptyState icon="flag" title="No quick-wins found" hint="This collection had no kerberoastable, AS-REP, delegation, or privileged-principal hits." />
           ) : (
-            wins.map(w => <QuickWinCard key={w.kind} win={w} onCopy={copyCmd} />)
+            wins.map((w, i) => <QuickWinCard key={w.kind} win={w} onCopy={copyCmd} defaultOpen={i === 0} />)
           )}
         </>
       )}

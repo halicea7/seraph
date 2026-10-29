@@ -91,6 +91,13 @@ export default function RequestWorkbench() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [timeoutSec, setTimeoutSec] = useState('30')
+  // The response pane unmounts its <pre> while resp is null (between sends)
+  // and mounts a fresh one once the new response lands -- a brand-new DOM
+  // node has no scroll position of its own, so a long body always
+  // re-opened at the top even when re-sending the same request to compare
+  // against the same spot (e.g. an injection payload further down).
+  const responseRef = useRef<HTMLPreElement>(null)
+  const preservedScrollTop = useRef(0)
 
   const [saved, setSaved] = useState<SavedRequest[]>([])
 
@@ -127,6 +134,12 @@ export default function RequestWorkbench() {
     return () => { wsRef.current?.close() }
   }, [selectedProject])
 
+  useEffect(() => {
+    if (resp && responseRef.current) {
+      responseRef.current.scrollTop = preservedScrollTop.current
+    }
+  }, [resp])
+
   async function addCookie() {
     if (!selectedProject || !newCookieDomain.trim() || !newCookieName.trim()) return
     await fetch(`${api}/http/cookies`, {
@@ -154,6 +167,7 @@ export default function RequestWorkbench() {
 
   async function send() {
     if (!selectedProject || !url.trim()) return
+    preservedScrollTop.current = responseRef.current?.scrollTop ?? 0
     setSending(true); setError(''); setResp(null)
     try {
       const r = await fetch(`${api}/http/send`, {
@@ -399,7 +413,7 @@ export default function RequestWorkbench() {
                     <span style={{ color: 'var(--fg-3)' }}>{resp.size} B</span>
                     <span style={{ color: 'var(--fg-3)' }}>{resp.elapsed_ms} ms</span>
                   </div>
-                  <pre style={{ margin: 0, padding: 12, overflow: 'auto', flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  <pre ref={responseRef} style={{ margin: 0, padding: 12, overflow: 'auto', flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                     {Object.entries(resp.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}
                     {'\n\n'}
                     {resp.body}

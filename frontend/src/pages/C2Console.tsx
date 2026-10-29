@@ -487,6 +487,12 @@ export default function C2Console() {
   useEffect(() => {
     checkStatus()
     loadPayloads()
+    // Keep the connection status (and the Sync button's disabled state)
+    // from going stale -- it used to only ever refresh on mount, so a
+    // token that went bad mid-session (see msf_client.py's stale-token
+    // fix) left "Sync from MSF" looking permanently dead until reload.
+    const statusTimer = setInterval(checkStatus, 30_000)
+    return () => clearInterval(statusTimer)
   }, [])
 
   useEffect(() => {
@@ -1200,8 +1206,18 @@ export default function C2Console() {
         <div style={{ background: 'var(--bg-2)', border: ruleStrong, borderRadius: 4, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
           <div style={{ padding: '12px 16px', borderBottom: rule, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Sessions</span>
-            <button onClick={handleSync} disabled={loading || !msfStatus.connected} title="Sync from MSF" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 4, opacity: (loading || !msfStatus.connected) ? 0.4 : 1 }}>
+            <button
+              onClick={handleSync}
+              disabled={loading || !msfStatus.connected}
+              title={!msfStatus.connected ? 'Connect to Metasploit first (see the status card above)' : 'Pull live sessions from MSF'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--fg-3)', padding: '4px 6px', fontSize: 10.5, fontFamily: 'var(--font-sans)',
+                opacity: (loading || !msfStatus.connected) ? 0.4 : 1,
+              }}
+            >
               <Icon name="refresh" size={13} className={loading ? 'animate-spin' : ''} />
+              Sync from MSF
             </button>
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
