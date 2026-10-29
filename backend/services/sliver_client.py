@@ -27,7 +27,11 @@ _CLIENT_CONFIGS_DIR = os.path.expanduser("~/.sliver-client/configs")
 
 
 def _cfg_path() -> str:
-    return os.environ.get("SLIVER_CONFIG", _DEFAULT_CFG)
+    # .get(key, default) only falls back when the key is absent -- compose
+    # sets SLIVER_CONFIG: ${SLIVER_CONFIG:-}, which is always present (as an
+    # empty string when unset on the host), so the default path was never
+    # actually reachable through this call.
+    return os.environ.get("SLIVER_CONFIG") or _DEFAULT_CFG
 
 
 def is_available() -> bool:
@@ -54,7 +58,18 @@ def _run(args: list[str], timeout: int = 15) -> tuple[int, str, str]:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".rc", delete=False) as f:
             f.write(commands)
             rc_path = f.name
-        cmd = [_BIN, "--rc", rc_path]
+        cmd = [_BIN]
+        # Without --config, sliver-client only looks for a config already
+        # imported into ~/.sliver-client/configs -- it never reads
+        # SLIVER_CONFIG itself, so a client pointed at a real operator
+        # config via that env var still exited rc=1 ("no configs found")
+        # instead of using it. Only pass it when the path is a real file;
+        # otherwise fall through to sliver-client's own auto-discovery of
+        # imported configs, matching is_available()'s own dual check.
+        cfg = _cfg_path()
+        if os.path.isfile(cfg):
+            cmd += ["--config", cfg]
+        cmd += ["--rc", rc_path]
         proc = subprocess.run(
             cmd,
             capture_output=True,

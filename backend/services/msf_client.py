@@ -127,6 +127,18 @@ def disconnect():
     _clear_connection_params()
 
 
+def _is_rpc_error(obj) -> bool:
+    """True if `obj` is not the dict shape a live RPC call returns, OR is a
+    dict but is actually msfrpcd's error payload for a stale/invalid token:
+    `{'error': True, 'error_class': 'Msf::RPC::Exception', 'error_string': ...}`.
+    A bare `isinstance(obj, dict)` check treats that error payload as valid
+    data -- it IS a dict -- so the stale-token probe below (and every other
+    caller that only checked isinstance) passed right through it, and the
+    next real call (module.execute, etc.) got the bare `False` msfrpcd
+    returns for calls that don't even bother with an error dict."""
+    return not isinstance(obj, dict) or bool(obj.get("error"))
+
+
 def _live_client():
     """Return a working client for this process, detecting and healing a
     stale RPC token before doing anything else.
@@ -151,8 +163,8 @@ def _live_client():
         return None
     try:
         version = client.core.version
-        if not isinstance(version, dict):
-            raise RuntimeError(f"core.version returned {version!r}, expected a dict")
+        if _is_rpc_error(version):
+            raise RuntimeError(f"core.version returned {version!r} (stale/invalid token)")
         return client
     except Exception as e:
         logger.info(f"MSF client token looked stale ({e}); reconnecting")
@@ -166,14 +178,21 @@ def get_status() -> dict:
         return {"connected": False, "version": None, "sessions": 0, "jobs": 0}
     try:
         version = client.core.version
+        if _is_rpc_error(version):
+            # _live_client()'s own probe just said this token was fine, but
+            # a token can go stale between that check and this one (another
+            # worker's disconnect, msfrpcd restart mid-request) -- don't
+            # report connected:true with version:"unknown" for what's
+            # actually a failed call.
+            raise RuntimeError(f"core.version returned {version!r} (stale/invalid token)")
         sessions = client.sessions.list
         jobs = client.jobs.list
         return {
             "connected": True,
-            "version": version.get("version", "unknown") if isinstance(version, dict) else str(version),
-            "ruby_version": version.get("ruby", "unknown") if isinstance(version, dict) else "unknown",
-            "sessions": len(sessions) if isinstance(sessions, dict) else 0,
-            "jobs": len(jobs) if isinstance(jobs, dict) else 0,
+            "version": version.get("version", "unknown"),
+            "ruby_version": version.get("ruby", "unknown"),
+            "sessions": len(sessions) if not _is_rpc_error(sessions) else 0,
+            "jobs": len(jobs) if not _is_rpc_error(jobs) else 0,
         }
     except Exception as e:
         logger.warning(f"MSF status error: {e}")
@@ -191,8 +210,8 @@ def list_sessions() -> Optional[list[dict]]:
         return None
     try:
         sessions = client.sessions.list
-        if not isinstance(sessions, dict):
-            raise RuntimeError(f"sessions.list returned {sessions!r}, expected a dict")
+        if _is_rpc_error(sessions):
+            raise RuntimeError(f"sessions.list returned {sessions!r} (stale/invalid token)")
         result = []
         for sid, info in sessions.items():
             result.append({
@@ -220,6 +239,8 @@ def list_jobs() -> list[dict]:
         return []
     try:
         jobs = client.jobs.list
+        if _is_rpc_error(jobs):
+            raise RuntimeError(f"jobs.list returned {jobs!r} (stale/invalid token)")
         result = []
         for jid, info in jobs.items():
             result.append({
@@ -611,13 +632,22 @@ def start_listener(payload: str, lhost: str, lport: int, extra_opts: dict = None
 
     try:
         exploit = client.modules.use("exploit", "multi/handler")
-        exploit["PAYLOAD"] = payload
-        exploit["LHOST"] = lhost
-        exploit["LPORT"] = lport
+        # PAYLOAD/LHOST/LPORT are payload-level options -- exploit[key] = val
+        # uses a validated __setitem__ that rejects those with "Invalid
+        # option 'PAYLOAD'.", exactly the trap run_module() already works
+        # around by falling back to exploit.runoptions directly.
+        for key, val in (("PAYLOAD", payload), ("LHOST", lhost), ("LPORT", lport)):
+            try:
+                exploit[key] = val
+            except (KeyError, ValueError, TypeError):
+                exploit.runoptions[key] = val
         if extra_opts:
             for k, v in (extra_opts or {}).items():
                 if re.match(r'^\w+$', str(k)):
-                    exploit[k] = v
+                    try:
+                        exploit[k] = v
+                    except (KeyError, ValueError, TypeError):
+                        exploit.runoptions[k] = v
         result = exploit.execute(payload=payload)
         # execute() returns the bare bool False on an RPC-level failure
         # (stale token, malformed request) instead of the usual result dict

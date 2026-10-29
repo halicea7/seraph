@@ -161,10 +161,12 @@ async def _fire_healthcheck(listener_id: str) -> None:
     from database import SessionLocal, Listener, Target
     from routers.notifications import push_notification
 
+    log.info(f"_fire_healthcheck: firing for listener {listener_id}")
     db = SessionLocal()
     try:
         listener = db.query(Listener).filter(Listener.id == listener_id).first()
         if not listener or listener.status != "running":
+            log.info(f"_fire_healthcheck: listener {listener_id} not found or not running -- skipping")
             return
 
         config = json.loads(listener.config_json or "{}")
@@ -178,6 +180,7 @@ async def _fire_healthcheck(listener_id: str) -> None:
             else None
         )
         if not target:
+            log.info(f"_fire_healthcheck: listener {listener_id} has no target (target_id={listener.target_id!r})")
             _record_event(db, listener_id, "error", "No target configured")
             return
 
@@ -289,6 +292,7 @@ async def _fire_agent_audit(listener_id: str) -> None:
 
 def register_listener(listener_id: str, listener_type: str, config: dict) -> None:
     job_id = _job_id(listener_id)
+    log.info(f"register_listener: {listener_id} ({listener_type}) -> job {job_id}")
     if listener_type == "scheduled":
         cron = config.get("cron", "0 2 * * *")
         trigger = CronTrigger.from_crontab(cron, timezone="UTC")
@@ -318,11 +322,18 @@ def register_listener(listener_id: str, listener_type: str, config: dict) -> Non
     else:
         raise ValueError(f"Unknown listener type: {listener_type}")
 
+    job = scheduler.get_job(job_id)
+    log.info(
+        f"register_listener: job {job_id} registered, next_run_time={job.next_run_time if job else 'MISSING'}, "
+        f"scheduler_running={scheduler.running}"
+    )
+
 
 def unregister_listener(listener_id: str) -> None:
     job_id = _job_id(listener_id)
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
+        log.info(f"unregister_listener: removed job {job_id}")
 
 
 async def reconcile_listeners() -> None:
@@ -344,20 +355,28 @@ async def reconcile_listeners() -> None:
     try:
         listeners = db.query(Listener).all()
         live_ids = {l.id for l in listeners}
+        added, removed, skipped = 0, 0, 0
         for listener in listeners:
             has_job = scheduler.get_job(_job_id(listener.id)) is not None
             if listener.status == "running" and not has_job:
                 config = json.loads(listener.config_json or "{}")
                 try:
                     register_listener(listener.id, listener.type, config)
+                    added += 1
                 except Exception as e:
                     log.error(f"Reconcile: failed to register listener {listener.id}: {e}")
             elif listener.status != "running" and has_job:
                 unregister_listener(listener.id)
+                removed += 1
+            else:
+                skipped += 1
         # Drop jobs for listeners that were deleted outright.
         for job in scheduler.get_jobs():
             if job.id.startswith(_PREFIX) and job.id[len(_PREFIX):] not in live_ids:
                 scheduler.remove_job(job.id)
+                removed += 1
+        if added or removed:
+            log.info(f"reconcile_listeners: added={added} removed={removed} skipped={skipped} (scheduler_running={scheduler.running})")
     finally:
         db.close()
 
