@@ -101,6 +101,9 @@ def _save_and_parse(db, scan, full_output: list[str], exit_code: int) -> None:
                         framework=pf.framework,
                         remediation=pf.remediation,
                         evidence=pf.evidence,
+                        cve_id=pf.cve_id,
+                        cvss_score=pf.cvss_score,
+                        tags=",".join(t for t in (pf.extra_tags or []) if t),
                         status="open",
                     ))
                 # Notify user

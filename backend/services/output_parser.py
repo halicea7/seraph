@@ -20,6 +20,7 @@ class ParsedFinding:
     remediation: Optional[str] = None
     evidence: Optional[str] = None
     cve_id: Optional[str] = None
+    cvss_score: Optional[str] = None
     extra_tags: list = field(default_factory=list)  # e.g. ["OWASP:A05:2021", "MITRE:T1046", "PCI:11"]
 
 
@@ -408,6 +409,7 @@ def parse_nuclei_output(raw_output: str) -> list[ParsedFinding]:
             continue
 
         info     = obj.get("info", {})
+        cls      = obj.get("classification") or {}
         name     = info.get("name") or obj.get("template-id", "Unknown")
         sev_raw  = info.get("severity", "info").lower()
         severity = _sev_map.get(sev_raw, "info")
@@ -415,11 +417,26 @@ def parse_nuclei_output(raw_output: str) -> list[ParsedFinding]:
         desc     = info.get("description", "")
         ref_list = info.get("reference", [])
         refs     = ", ".join(ref_list) if isinstance(ref_list, list) else str(ref_list)
-        cve_id   = next((r for r in (ref_list if isinstance(ref_list, list) else []) if "CVE-" in r.upper()), None)
-        if cve_id:
-            import re as _re
-            m = _re.search(r"CVE-\d{4}-\d+", cve_id, _re.IGNORECASE)
-            cve_id = m.group(0).upper() if m else None
+
+        # Modern templates carry identifiers in `classification` and keep
+        # `reference` as plain vendor/advisory URLs with no "CVE-"
+        # substring at all -- check classification.cve-id first, falling
+        # back to scanning reference URLs for older/simpler templates
+        # that only ever did that.
+        cve_ids = cls.get("cve-id") or []
+        cve_id = cve_ids[0].upper() if isinstance(cve_ids, list) and cve_ids else None
+        if not cve_id:
+            cve_id = next((r for r in (ref_list if isinstance(ref_list, list) else []) if "CVE-" in r.upper()), None)
+            if cve_id:
+                import re as _re
+                m = _re.search(r"CVE-\d{4}-\d+", cve_id, _re.IGNORECASE)
+                cve_id = m.group(0).upper() if m else None
+
+        cvss_raw = cls.get("cvss-score")
+        cvss_score = str(cvss_raw) if cvss_raw is not None else None
+
+        tags_raw = info.get("tags") or []
+        extra_tags = [str(t) for t in tags_raw] if isinstance(tags_raw, list) else []
 
         key = f"{name}|{matched}"
         if key in seen:
@@ -433,6 +450,8 @@ def parse_nuclei_output(raw_output: str) -> list[ParsedFinding]:
             remediation=f"Review: {refs}" if refs else "Review the Nuclei template documentation.",
             evidence=matched,
             cve_id=cve_id,
+            cvss_score=cvss_score,
+            extra_tags=extra_tags,
         ))
 
     return findings

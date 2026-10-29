@@ -578,6 +578,9 @@ async def _run_step(scan_id: str, cmd: str, scan_type: str, timeout: int, env: d
                     framework=pf.framework,
                     remediation=pf.remediation,
                     evidence=pf.evidence,
+                    cve_id=pf.cve_id,
+                    cvss_score=pf.cvss_score,
+                    tags=",".join(t for t in (pf.extra_tags or []) if t),
                 ))
             if new_findings:
                 highs = sum(1 for p in new_findings if p.severity in ("critical", "high"))

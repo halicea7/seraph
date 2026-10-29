@@ -13,16 +13,20 @@ runs 4) -- a module-level dict would only be visible to whichever process
 happened to create it.
 """
 
-import glob
 import json
 import os
 import shlex
 import shutil
 import uuid
+from datetime import datetime, timedelta
 
 from database import SessionLocal, ScreenshotJob, engine
 
-_IMAGE_EXTS = ("*.png", "*.jpeg", "*.jpg")
+# How long an orphaned job (its WebSocket never connected -- browser tab
+# closed, client crashed) sits in the registry before create_job() sweeps
+# it. Without this, "Capture job not found or expired" was a lie: nothing
+# ever expired, and jobs accumulated forever.
+_JOB_EXPIRY = timedelta(hours=1)
 
 # gowitness defaults to looking for a binary literally named "google-chrome",
 # which doesn't exist on Debian (the backend image installs `chromium`
@@ -65,11 +69,19 @@ def create_job(project_id: str, target_id: str | None, urls: list[str]) -> dict:
     with open(urls_file, "w") as fh:
         fh.write("\n".join(clean) + "\n")
 
-    # gowitness v3 syntax: scan a file of URLs, write images to --screenshot-path,
-    # skip the results DB (--write-none). shlex.quote guards the paths.
+    # gowitness v3 syntax: scan a file of URLs, write images to
+    # --screenshot-path, and write one JSON line per result carrying the
+    # exact file_name gowitness wrote plus its url/response_code/title --
+    # index_results() reads this instead of trying to re-derive the
+    # url<->image mapping from sorted filenames (which silently mismatched
+    # rows whenever filename sort order didn't match request order).
+    # --skip-html drops the (large, unused) HTML body from each result.
+    results_file = os.path.join(outdir, "results.jsonl")
     command = (
         f"gowitness scan file -f {shlex.quote(urls_file)} "
-        f"--screenshot-path {shlex.quote(outdir)} --write-none --timeout 15"
+        f"--screenshot-path {shlex.quote(outdir)} "
+        f"--write-jsonl --write-jsonl-file {shlex.quote(results_file)} "
+        f"--skip-html --timeout 15"
     )
     chrome_path = _chrome_path()
     if chrome_path:
@@ -77,6 +89,9 @@ def create_job(project_id: str, target_id: str | None, urls: list[str]) -> dict:
 
     db = SessionLocal()
     try:
+        # Sweep jobs whose WebSocket never connected before adding this one.
+        cutoff = datetime.utcnow() - _JOB_EXPIRY
+        db.query(ScreenshotJob).filter(ScreenshotJob.created_at < cutoff).delete(synchronize_session=False)
         db.add(ScreenshotJob(
             id=job_id,
             project_id=project_id,
@@ -117,34 +132,44 @@ def get_job(job_id: str) -> dict | None:
         db.close()
 
 
-def _url_from_filename(fname: str) -> str:
-    """Best-effort reverse of gowitness' filename sanitization for display."""
-    base = os.path.splitext(os.path.basename(fname))[0]
-    return base.replace("---", "://").replace("-", ".")
-
-
 def index_results(job: dict) -> list[dict]:
-    """Glob the job output dir for images and return rows to persist.
+    """Read gowitness's own --write-jsonl output and return rows to persist.
 
-    Pairs images with the requested URLs by sorted order when the counts match;
-    otherwise derives a display URL from the (sanitized) filename.
+    Each JSONL row carries the exact file_name gowitness wrote for that
+    capture, plus its url/response_code/title directly -- used instead of
+    globbing the output directory and pairing images to requested URLs by
+    sorted filename order, which silently mismatched url<->image whenever
+    the sort order of gowitness's sanitized filenames didn't match the
+    order URLs were requested in.
     """
-    images: list[str] = []
-    for pattern in _IMAGE_EXTS:
-        images.extend(glob.glob(os.path.join(job["outdir"], "**", pattern), recursive=True))
-    images = sorted(set(images))
-
-    urls = job["urls"]
+    results_file = os.path.join(job["outdir"], "results.jsonl")
     rows: list[dict] = []
-    for i, path in enumerate(images):
-        url = urls[i] if len(images) == len(urls) else _url_from_filename(path)
-        rows.append({
-            "project_id": job["project_id"],
-            "target_id": job.get("target_id"),
-            "url": url,
-            "title": os.path.basename(path),
-            "image_path": os.path.abspath(path),
-        })
+    if not os.path.exists(results_file):
+        return rows
+
+    with open(results_file) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                result = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if result.get("failed") or not result.get("file_name"):
+                continue
+            image_path = os.path.join(job["outdir"], result["file_name"])
+            if not os.path.exists(image_path):
+                continue
+            response_code = result.get("response_code")
+            rows.append({
+                "project_id": job["project_id"],
+                "target_id": job.get("target_id"),
+                "url": result.get("url") or "",
+                "title": result.get("title") or "",
+                "status_code": str(response_code) if response_code is not None else None,
+                "image_path": os.path.abspath(image_path),
+            })
     return rows
 
 
