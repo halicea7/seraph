@@ -323,10 +323,14 @@ def register_listener(listener_id: str, listener_type: str, config: dict) -> Non
         raise ValueError(f"Unknown listener type: {listener_type}")
 
     job = scheduler.get_job(job_id)
-    log.info(
-        f"register_listener: job {job_id} registered, next_run_time={job.next_run_time if job else 'MISSING'}, "
-        f"scheduler_running={scheduler.running}"
-    )
+    # next_run_time only exists once the scheduler has actually computed a
+    # fire time for the job -- on a scheduler that isn't running (every
+    # non-owner worker, by design) the attribute is simply absent, not
+    # None, so accessing it directly raised AttributeError *after*
+    # add_job() had already succeeded, turning a successful registration
+    # into a 400 for the whole request.
+    next_run = getattr(job, "next_run_time", None) if job else "MISSING"
+    log.info(f"register_listener: job {job_id} registered, next_run_time={next_run}, scheduler_running={scheduler.running}")
 
 
 def unregister_listener(listener_id: str) -> None:
@@ -375,8 +379,11 @@ async def reconcile_listeners() -> None:
             if job.id.startswith(_PREFIX) and job.id[len(_PREFIX):] not in live_ids:
                 scheduler.remove_job(job.id)
                 removed += 1
-        if added or removed:
-            log.info(f"reconcile_listeners: added={added} removed={removed} skipped={skipped} (scheduler_running={scheduler.running})")
+        # Always log, not just on a change -- an added=0/removed=0 tick is
+        # itself the signal that matters: it proves this tick ran at all,
+        # which "only log on change" can never show when reconcile isn't
+        # catching something it should.
+        log.info(f"reconcile_listeners: tick -- added={added} removed={removed} skipped={skipped} listeners={len(listeners)} (scheduler_running={scheduler.running})")
     finally:
         db.close()
 
